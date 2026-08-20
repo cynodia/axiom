@@ -89,7 +89,14 @@ use it. `release:publish` additionally requires a clean git tree (`--allow-dirty
 override), `npm whoami` to be `cynodia`, and a pre-release version, and publishes the
 verified tarballs under the `alpha` dist-tag — never `latest`.
 
-Never commit npm tokens or credentials, including to `.npmrc`.
+**Two-factor authentication.** The npm account has 2FA on publish, so each `npm publish`
+needs a one-time password. The script prompts for one, or takes `--otp=<code>`. A code
+lasts about 30 seconds and five packages are published in sequence, so it can expire
+mid-release: on a failure the script asks for a fresh code and retries that package, and
+any version already on the registry is skipped, which makes
+`npm run release:publish -- --skip-prepare` safe to re-run after a partial release.
+Automation can instead authenticate with a granular access token that has "bypass 2FA"
+enabled — never commit that token, or any credential, including to `.npmrc`.
 
 ## Working agreements
 

@@ -52,6 +52,10 @@ npm run release:publish:dry-run
 npm run release:publish        # publishes under the "alpha" dist-tag
 ```
 
+Publishing needs an npm one-time password (the script prompts, or pass `--otp=<code>`).
+If a release stops part way through, re-run it with `-- --skip-prepare`: packages already
+on the registry are skipped.
+
 ## License
 
 MIT — Copyright (c) 2026 AskTech AS.

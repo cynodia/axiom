@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import { publishable, readManifest, repoRoot, tarballPath, version } from './packages.mjs';
 
 /**
@@ -10,6 +11,27 @@ const dryRun = process.argv.includes('--dry-run');
 const allowDirty = process.argv.includes('--allow-dirty');
 const skipPrepare = process.argv.includes('--skip-prepare');
 const tag = 'alpha';
+
+/**
+ * npm requires a one-time password for accounts with 2FA on publish. Pass it as
+ * `--otp=123456`, or leave it out and this prompts for one — which is usually better,
+ * since the code is only valid for about 30 seconds.
+ */
+let otp = process.argv.find((argument) => argument.startsWith('--otp='))?.slice('--otp='.length);
+const interactive = process.stdin.isTTY === true;
+
+async function askForOtp(reason) {
+  if (!interactive) {
+    return undefined;
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(`${reason}npm one-time password (blank to skip): `)).trim();
+    return answer || undefined;
+  } finally {
+    rl.close();
+  }
+}
 
 const fail = (message) => {
   console.error(`\nRefusing to publish: ${message}`);
@@ -80,19 +102,79 @@ for (const { name } of publishable) {
 }
 
 // 6. Publish the verified tarballs themselves, in dependency order.
-console.log(`\n${dryRun ? 'Dry run:' : 'Publishing:'}`);
-for (const { name } of publishable) {
-  const args = ['publish', tarballPath(name), '--tag', tag, '--access', 'public'];
-  if (dryRun) {
-    args.push('--dry-run');
+/** A version already on the registry is skipped, so a partial release can be resumed. */
+function alreadyPublished(name) {
+  try {
+    const found = execFileSync('npm', ['view', `${name}@${version}`, 'version'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return found === version;
+  } catch {
+    return false;
   }
-  console.log(`  ${name}`);
-  execFileSync('npm', args, { cwd: repoRoot, stdio: 'inherit' });
+}
+
+if (!dryRun && otp === undefined) {
+  otp = await askForOtp('');
+}
+
+console.log(`\n${dryRun ? 'Dry run:' : 'Publishing:'}`);
+const published = [];
+
+for (const [index, { name }] of publishable.entries()) {
+  if (!dryRun && alreadyPublished(name)) {
+    console.log(`  ${name} — already on the registry at ${version}, skipping`);
+    continue;
+  }
+
+  let attempt = 0;
+  for (;;) {
+    attempt += 1;
+    const args = ['publish', tarballPath(name), '--tag', tag, '--access', 'public'];
+    if (dryRun) {
+      args.push('--dry-run');
+    }
+    if (otp) {
+      args.push('--otp', otp);
+    }
+
+    try {
+      console.log(`  ${name}`);
+      execFileSync('npm', args, { cwd: repoRoot, stdio: 'inherit' });
+      published.push(name);
+      break;
+    } catch {
+      // A one-time password expires in about 30 seconds, so a long release can outlive
+      // the code it started with. Ask for a fresh one rather than abandoning the run.
+      const fresh = attempt <= 3 ? await askForOtp(`Publishing ${name} failed. `) : undefined;
+      if (fresh) {
+        otp = fresh;
+        continue;
+      }
+
+      console.error(`\n${name} could not be published.`);
+      if (published.length > 0) {
+        console.error(`Already published in this run: ${published.join(', ')}`);
+      }
+      const remaining = publishable.slice(index).map((entry) => entry.name);
+      console.error(`Still to publish: ${remaining.join(', ')}`);
+      console.error(
+        '\nRe-run "npm run release:publish -- --skip-prepare" to continue. Packages that\n' +
+          'already reached the registry are skipped, so resuming is safe.\n' +
+          '\nIf npm reported a 403 asking for two-factor authentication, either supply a\n' +
+          'one-time password when prompted (or with --otp=<code>), or authenticate with a\n' +
+          'granular access token that has "bypass 2FA" enabled. Never commit that token.',
+      );
+      process.exit(1);
+    }
+  }
 }
 
 console.log(
   dryRun
     ? '\nDry run complete. Nothing was published.'
-    : `\nPublished ${publishable.length} packages at ${version} under "${tag}".\n` +
+    : `\nPublished ${published.length} package(s) at ${version} under "${tag}".\n` +
         `Install with: npm install @cynodia/axiom@${tag}`,
 );
