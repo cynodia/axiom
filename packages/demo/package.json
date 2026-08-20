@@ -1,31 +1,43 @@
 {
-  "name": "@axiom/demo",
-  "version": "0.3.0",
+  "name": "@cynodia/axiom-demo",
+  "version": "0.3.1-alpha.1",
+  "description": "Example Axiom applications used to test domain independence.",
+  "license": "MIT",
+  "author": "AskTech AS",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cynodia/axiom.git"
+  },
+  "homepage": "https://github.com/cynodia/axiom",
+  "bugs": {
+    "url": "https://github.com/cynodia/axiom/issues"
+  },
+  "private": true,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "import": "./dist/index.js"
     },
     "./issue-tracker": {
       "types": "./dist/issue-tracker.d.ts",
-      "default": "./dist/issue-tracker.js"
+      "import": "./dist/issue-tracker.js"
     },
     "./inventory": {
       "types": "./dist/inventory.d.ts",
-      "default": "./dist/inventory.js"
+      "import": "./dist/inventory.js"
     }
   },
   "dependencies": {
-    "@axiom/compiler": "file:../compiler",
-    "@axiom/core": "file:../core",
-    "@axiom/runtime": "file:../runtime",
-    "@axiom/agent-api": "file:../agent-api"
+    "@cynodia/axiom-core": "0.3.1-alpha.1",
+    "@cynodia/axiom-runtime": "0.3.1-alpha.1",
+    "@cynodia/axiom-compiler": "0.3.1-alpha.1",
+    "@cynodia/axiom-agent-api": "0.3.1-alpha.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json && node dist/index.js",
-    "test": "node --test dist/test/**/*.test.js"
+    "test": "node --test dist-test/**/*.test.js"
   }
 }

@@ -18,7 +18,7 @@ import {
   ref,
   stateLocation,
   synchronizeEdges,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   ConstraintDef,
@@ -30,8 +30,8 @@ import type {
   RouteDef,
   StateDef,
   ViewNode,
-} from '@axiom/core';
-import { AgentAPI } from '@axiom/agent-api';
+} from '@cynodia/axiom-core';
+import { AgentAPI } from '@cynodia/axiom-agent-api';
 
 /**
  * "What can change this field, and what is affected if it does?" — answered from graph

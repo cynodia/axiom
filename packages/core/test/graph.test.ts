@@ -10,8 +10,8 @@ import {
   primitiveType,
   synchronizeEdges,
   unwrapOptional,
-} from '@axiom/core';
-import type { EntityDef, StateDef, ViewNode } from '@axiom/core';
+} from '@cynodia/axiom-core';
+import type { EntityDef, StateDef, ViewNode } from '@cynodia/axiom-core';
 
 const ENTITY = nodeId('entity_record');
 const FIELD_ID = fieldId('field_record_id');

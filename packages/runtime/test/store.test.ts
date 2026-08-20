@@ -3,7 +3,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { createStateStore } from '@axiom/runtime';
+import { createStateStore } from '@cynodia/axiom-runtime';
 
 test('the store hands out values that cannot be changed behind its back', () => {
   const store = createStateStore();
@@ -42,7 +42,7 @@ test('a snapshot restores exactly what was captured', () => {
  * that makes that true: nothing outside the mutation subsystem owns a state map, and
  * `runtime.ts` touches the store only while seeding it and inside its single write path.
  */
-const runtimeSrc = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../src');
+const runtimeSrc = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../src');
 
 /** The body of a named function, matched by braces. */
 function functionBody(source: string, signature: string): string {

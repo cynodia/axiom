@@ -55,6 +55,42 @@ action actually writes:
 
 There is no linter, formatter, or CI. Match the style of the file you are editing.
 
+## Packaging and release
+
+Five packages are published to npm under the `@cynodia` scope; `cli` and `demo` are
+marked `private` and never ship. Everything is MIT, copyright AskTech AS.
+
+- **Compiled output only.** `files` whitelists `dist/**/*.js`, `dist/**/*.d.ts`, the
+  README and the LICENSE. Tests compile to `dist-test/`, not `dist/`, so the publishable
+  directory contains no test code by construction — don't move test output back under
+  `dist/`. Declaration maps are generated but deliberately not shipped, since the sources
+  they point at are not published.
+- **No workspace protocol anywhere.** Inter-package dependencies are pinned to the exact
+  release version (`"@cynodia/axiom-core": "0.3.1-alpha.1"`). npm still links them locally
+  because the workspace version satisfies the range, so a published manifest and a local
+  checkout resolve identically. `scripts/verify-packages.mjs` fails the release if a
+  `file:`, `link:` or `workspace:` range ever reaches a tarball.
+- **Every package keeps its own LICENSE and README** — npm does not inherit them from the
+  repository root. The verifier checks the packed copies have not drifted.
+- **Version bumps touch every manifest.** The publish script refuses to run if any is out
+  of step with the root.
+
+```bash
+npm run release:prepare        # clean, build, test, pack, verify tarballs, consumer test
+npm run release:publish:dry-run
+npm run release:publish        # deliberate and manual; CI never publishes
+```
+
+`release:prepare` ends with `scripts/consumer-test.mjs`, which builds a project in a temp
+directory from the tarballs alone — no workspace links, no path aliases, no relative
+imports into the repo — and runs a Counter application written against the public API. If
+you change what a package exports, that test is what proves an outside consumer can still
+use it. `release:publish` additionally requires a clean git tree (`--allow-dirty` to
+override), `npm whoami` to be `cynodia`, and a pre-release version, and publishes the
+verified tarballs under the `alpha` dist-tag — never `latest`.
+
+Never commit npm tokens or credentials, including to `.npmrc`.
+
 ## Working agreements
 
 - **Add new files to git as you create them.** `git add` every file you introduce in the
@@ -65,18 +101,20 @@ There is no linter, formatter, or CI. Match the style of the file you are editin
 ## Layout
 
 `packages/*`, npm workspaces + TypeScript project references. Dependencies are declared
-twice and both must stay in sync: `file:../x` in `package.json`, and a `references` entry
-in the package's `tsconfig.json`. Root `tsconfig.base.json` carries `paths` for `@axiom/*`
-so editors and tests resolve to source.
+twice and both must stay in sync: an exact version in `package.json` (never `file:` or
+`workspace:` — see **Packaging** below), and a `references` entry in the package's
+`tsconfig.json`. Root `tsconfig.base.json` carries `paths` for `@cynodia/axiom*` so editors
+and tests resolve to source. Directory names stay short; npm names are scoped.
 
-| Package     | Owns |
-| ----------- | ---- |
-| `core`      | `ApplicationGraph`, node and field definitions, `TypeRef`, expressions, **locations**, edge kinds, validation, type inference, edge derivation, the IR contract. No dependencies. |
-| `agent-api` | Semantic queries, mutation impact, transactions, transformations, change sets. |
-| `compiler`  | Validation + normalization into `ApplicationIR`, and page emission. |
-| `runtime`   | State store, expression evaluation, the mutation subsystem, constraint checking, UI rendering, routing. |
-| `cli`       | Graph loading, `inspect` / `validate` / `build` / `serve`. |
-| `demo`      | Two applications: `issue-tracker.ts` and `inventory.ts`. |
+| Directory   | npm name | Owns |
+| ----------- | -------- | ---- |
+| `core`      | `@cynodia/axiom-core` | `ApplicationGraph`, node and field definitions, `TypeRef`, expressions, **locations**, edge kinds, validation, type inference, edge derivation, the IR contract. No dependencies. |
+| `agent-api` | `@cynodia/axiom-agent-api` | Semantic queries, mutation impact, transactions, transformations, change sets. |
+| `compiler`  | `@cynodia/axiom-compiler` | Validation + normalization into `ApplicationIR`, and page emission. |
+| `runtime`   | `@cynodia/axiom-runtime` | State store, expression evaluation, the mutation subsystem, constraint checking, UI rendering, routing. |
+| `axiom`     | `@cynodia/axiom` | The published facade: re-exports the four packages above. Application authors install only this. |
+| `cli`       | *(private)* | Graph loading, `inspect` / `validate` / `build` / `serve`. |
+| `demo`      | *(private)* | Two applications: `issue-tracker.ts` and `inventory.ts`. |
 
 Dependency direction is `core ← runtime ← compiler ← cli/demo`, with `agent-api` on
 `core` alone. `ApplicationIR` lives in **core** rather than the compiler because it is the
@@ -200,7 +238,7 @@ except each other. `createRuntimeModuleSource()` concatenates their compiled out
 dependency order and strips the module syntax — that is the entire "bundler". The compiler
 then inlines that source, the IR as JSON, and a two-line bootstrap into one page.
 
-**The runtime must never import a value from `@axiom/core`.** Type-only imports are fine
+**The runtime must never import a value from `@cynodia/axiom-core`.** Type-only imports are fine
 (they are erased). A value import would be stripped from the bundle and become `undefined`
 in the browser, so `source.ts` now throws `UnbundledDependencyError` at build time if it
 finds one. When the runtime needs something core computes, resolve it during compilation
@@ -223,7 +261,7 @@ package they exercise:
 - `demo` — both applications end to end, and the acceptance scenarios from spec2 §45/§46
   and spec3 §51/§52.
 
-`@axiom/runtime` exports `createMemoryHost()` and an in-memory DOM. That is deliberate
+`@cynodia/axiom-runtime` exports `createMemoryHost()` and an in-memory DOM. That is deliberate
 framework code, not test-only scaffolding: the runtime takes its whole environment through
 a `HostEnvironment`, so it can be driven headlessly without a browser or jsdom.
 

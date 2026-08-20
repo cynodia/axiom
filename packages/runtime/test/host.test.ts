@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { MemoryElement, createMemoryHost, createRuntimeModuleSource, findAll, textOf } from '@axiom/runtime';
+import { MemoryElement, createMemoryHost, createRuntimeModuleSource, findAll, textOf } from '@cynodia/axiom-runtime';
 
 test('the browser bundle is the compiled runtime with module syntax stripped', () => {
   const source = createRuntimeModuleSource();

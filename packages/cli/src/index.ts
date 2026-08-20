@@ -3,9 +3,9 @@ import { createServer } from 'node:http';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { compileToHtml, compileToIR } from '@axiom/compiler';
-import { ApplicationGraph, formatLocation, semanticContextFromGraph, validateGraph } from '@axiom/core';
-import type { AnyNode, NodeKind, Operation, SemanticContext, ValidationResult } from '@axiom/core';
+import { compileToHtml, compileToIR } from '@cynodia/axiom-compiler';
+import { ApplicationGraph, formatLocation, semanticContextFromGraph, validateGraph } from '@cynodia/axiom-core';
+import type { AnyNode, NodeKind, Operation, SemanticContext, ValidationResult } from '@cynodia/axiom-core';
 
 const GRAPH_EXPORT_CANDIDATES = ['default', 'createGraph', 'createApplicationGraph'];
 

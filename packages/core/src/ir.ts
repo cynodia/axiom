@@ -31,7 +31,7 @@ export interface CompiledRoute {
 /**
  * The normalized form a compiler hands to a runtime: the same semantics as the graph,
  * with references resolved and lookups pre-indexed. It is the shared contract between
- * `@axiom/compiler` and `@axiom/runtime`, which is why it lives in core.
+ * `@cynodia/axiom-compiler` and `@cynodia/axiom-runtime`, which is why it lives in core.
  */
 export interface ApplicationIR {
   id: string;

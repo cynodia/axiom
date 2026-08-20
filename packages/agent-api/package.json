@@ -1,20 +1,40 @@
 {
-  "name": "@axiom/agent-api",
-  "version": "0.3.0",
+  "name": "@cynodia/axiom-agent-api",
+  "version": "0.3.1-alpha.1",
+  "description": "Semantic queries and transactional graph transformations for AI agents.",
+  "license": "MIT",
+  "author": "AskTech AS",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cynodia/axiom.git"
+  },
+  "homepage": "https://github.com/cynodia/axiom",
+  "bugs": {
+    "url": "https://github.com/cynodia/axiom/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "import": "./dist/index.js"
     }
   },
   "dependencies": {
-    "@axiom/core": "file:../core"
+    "@cynodia/axiom-core": "0.3.1-alpha.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",
-    "test": "node --test dist/test/**/*.test.js"
+    "test": "node --test dist-test/**/*.test.js"
   }
 }

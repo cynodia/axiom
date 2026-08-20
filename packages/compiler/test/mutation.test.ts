@@ -18,7 +18,7 @@ import {
   ref,
   stateLocation,
   synchronizeEdges,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   ConstraintDef,
@@ -28,10 +28,10 @@ import type {
   RouteDef,
   StateDef,
   ViewNode,
-} from '@axiom/core';
-import { compileToIR } from '@axiom/compiler';
-import { createAxiomRuntime, createMemoryHost, findByNodeId } from '@axiom/runtime';
-import type { MemoryElement, MemoryHostOptions } from '@axiom/runtime';
+} from '@cynodia/axiom-core';
+import { compileToIR } from '@cynodia/axiom-compiler';
+import { createAxiomRuntime, createMemoryHost, findByNodeId } from '@cynodia/axiom-runtime';
+import type { MemoryElement, MemoryHostOptions } from '@cynodia/axiom-runtime';
 
 /**
  * The 0.3 mutation architecture, exercised end to end: a record is edited through an

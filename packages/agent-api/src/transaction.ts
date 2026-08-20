@@ -5,7 +5,7 @@ import {
   randomHex,
   synchronizeEdges,
   validateGraph,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   AnyNode,
@@ -31,7 +31,7 @@ import type {
   UINode,
   ValidationResult,
   ViewNode,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import { GraphQueries } from './queries.js';
 import type { ChangeSet, GraphChange } from './changes.js';
 

@@ -14,7 +14,7 @@ import type {
   StateDef,
   TypeRef,
   UINode,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type { DomElement, DomEvent, HostEnvironment } from './dom.js';
 import { createMutationEngine } from './mutation/mutation-engine.js';
 import type { MutationContext, MutationLogEntry, MutationResult } from './mutation/mutation-engine.js';

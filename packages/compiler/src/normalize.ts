@@ -3,7 +3,7 @@ import {
   locationRootStateId,
   semanticContextFromGraph,
   validateGraph,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   ApplicationGraph,
@@ -20,8 +20,8 @@ import type {
   UINode,
   ValidationIssue,
   ValidationResult,
-} from '@axiom/core';
-import { isUINode } from '@axiom/core';
+} from '@cynodia/axiom-core';
+import { isUINode } from '@cynodia/axiom-core';
 
 export class GraphValidationError extends Error {
   readonly problems: ValidationIssue[];

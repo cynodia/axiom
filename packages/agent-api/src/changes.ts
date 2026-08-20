@@ -1,4 +1,4 @@
-import type { AnyNode, FieldDef, FieldId, GraphEdge, NodeId } from '@axiom/core';
+import type { AnyNode, FieldDef, FieldId, GraphEdge, NodeId } from '@cynodia/axiom-core';
 
 export type GraphChange =
   | AddNodeChange

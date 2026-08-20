@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { compileToHtml } from '@axiom/compiler';
-import type { ApplicationGraph } from '@axiom/core';
+import { compileToHtml } from '@cynodia/axiom-compiler';
+import type { ApplicationGraph } from '@cynodia/axiom-core';
 import { createIssueTrackerGraph } from './issue-tracker.js';
 import { createInventoryGraph } from './inventory.js';
 

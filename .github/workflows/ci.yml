@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# Validation only. Publishing is always a deliberate, manual `npm run release:publish`.
+jobs:
+  verify:
+    name: Build, test and verify publishability
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The test runner needs Node 22's native glob expansion.
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Pack the publishable packages
+        run: npm run release:pack
+
+      - name: Verify the packed tarballs
+        run: npm run release:verify
+
+      - name: Install and run an external consumer
+        run: npm run release:consumer-test

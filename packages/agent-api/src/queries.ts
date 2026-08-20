@@ -4,7 +4,7 @@ import {
   locationRootStateId,
   locationSelectorFieldIds,
   referencedIds,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   AnyNode,
@@ -21,7 +21,7 @@ import type {
   StateDef,
   UINode,
   ViewNode,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 
 export interface SubgraphRequest {
   root: NodeId;

@@ -18,7 +18,7 @@ import {
   ref,
   stateLocation,
   synchronizeEdges,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   ButtonNode,
@@ -35,7 +35,7 @@ import type {
   StateDef,
   TextNode,
   ViewNode,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 
 // Entities
 const ENTITY_USER = nodeId('entity_user');

@@ -1,5 +1,5 @@
-import { createRuntimeModuleSource } from '@axiom/runtime';
-import type { ApplicationGraph, ApplicationIR } from '@axiom/core';
+import { createRuntimeModuleSource } from '@cynodia/axiom-runtime';
+import type { ApplicationGraph, ApplicationIR } from '@cynodia/axiom-core';
 import { compileToIR } from './normalize.js';
 import type { CompileOptions } from './normalize.js';
 

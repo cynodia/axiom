@@ -17,7 +17,7 @@ import {
   ref,
   stateLocation,
   synchronizeEdges,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   ButtonNode,
@@ -33,7 +33,7 @@ import type {
   StateDef,
   TextNode,
   ViewNode,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 
 /**
  * The second application required by the 0.2 architecture test. It shares nothing with

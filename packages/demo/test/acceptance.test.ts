@@ -10,7 +10,7 @@ import {
   optionalType,
   primitiveType,
   ref,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   EntityDef,
@@ -20,14 +20,14 @@ import type {
   InputNode,
   Location,
   NodeId,
-} from '@axiom/core';
-import { AgentAPI } from '@axiom/agent-api';
-import { compileToIR } from '@axiom/compiler';
-import { createAxiomRuntime, createMemoryHost, findByNodeId, textOf } from '@axiom/runtime';
-import type { MemoryElement, MemoryHostOptions } from '@axiom/runtime';
-import { createIssueTrackerGraph, issueTrackerIds } from '@axiom/demo/issue-tracker';
-import { createInventoryGraph, inventoryIds } from '@axiom/demo/inventory';
-import type { ApplicationGraph } from '@axiom/core';
+} from '@cynodia/axiom-core';
+import { AgentAPI } from '@cynodia/axiom-agent-api';
+import { compileToIR } from '@cynodia/axiom-compiler';
+import { createAxiomRuntime, createMemoryHost, findByNodeId, textOf } from '@cynodia/axiom-runtime';
+import type { MemoryElement, MemoryHostOptions } from '@cynodia/axiom-runtime';
+import { createIssueTrackerGraph, issueTrackerIds } from '@cynodia/axiom-demo/issue-tracker';
+import { createInventoryGraph, inventoryIds } from '@cynodia/axiom-demo/inventory';
+import type { ApplicationGraph } from '@cynodia/axiom-core';
 
 function run(graph: ApplicationGraph, options: MemoryHostOptions = {}) {
   const host = createMemoryHost({ path: '/', ...options });

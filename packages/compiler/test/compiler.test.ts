@@ -9,9 +9,9 @@ import {
   nodeId,
   primitiveType,
   ref,
-} from '@axiom/core';
-import type { EntityDef, RouteDef, StateDef, TextNode, ViewNode } from '@axiom/core';
-import { GraphValidationError, compileToHtml, compileToIR, serializeIR } from '@axiom/compiler';
+} from '@cynodia/axiom-core';
+import type { EntityDef, RouteDef, StateDef, TextNode, ViewNode } from '@cynodia/axiom-core';
+import { GraphValidationError, compileToHtml, compileToIR, serializeIR } from '@cynodia/axiom-compiler';
 
 const ENTITY = nodeId('entity_record');
 const F_ID = fieldId('field_record_id');

@@ -1,4 +1,4 @@
-import type { Expression, FieldId, Location, NodeId } from '@axiom/core';
+import type { Expression, FieldId, Location, NodeId } from '@cynodia/axiom-core';
 import { isRecord, valuesEqual } from './values.js';
 
 export interface ResolvedPathSegment {

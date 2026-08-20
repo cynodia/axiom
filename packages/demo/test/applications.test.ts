@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validateGraph } from '@axiom/core';
-import type { ApplicationGraph, NodeId } from '@axiom/core';
-import { compileToHtml, compileToIR } from '@axiom/compiler';
-import { createAxiomRuntime, createMemoryHost, findByNodeId, textOf } from '@axiom/runtime';
-import type { MemoryElement, MemoryHostOptions } from '@axiom/runtime';
-import { createIssueTrackerGraph, issueTrackerIds } from '@axiom/demo/issue-tracker';
-import { createInventoryGraph, inventoryIds } from '@axiom/demo/inventory';
-import { demoApplications } from '@axiom/demo';
+import { validateGraph } from '@cynodia/axiom-core';
+import type { ApplicationGraph, NodeId } from '@cynodia/axiom-core';
+import { compileToHtml, compileToIR } from '@cynodia/axiom-compiler';
+import { createAxiomRuntime, createMemoryHost, findByNodeId, textOf } from '@cynodia/axiom-runtime';
+import type { MemoryElement, MemoryHostOptions } from '@cynodia/axiom-runtime';
+import { createIssueTrackerGraph, issueTrackerIds } from '@cynodia/axiom-demo/issue-tracker';
+import { createInventoryGraph, inventoryIds } from '@cynodia/axiom-demo/inventory';
+import { demoApplications } from '@cynodia/axiom-demo';
 
 function run(graph: ApplicationGraph, options: MemoryHostOptions = {}) {
   const host = createMemoryHost({ path: '/', ...options });

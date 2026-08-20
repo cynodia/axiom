@@ -17,7 +17,16 @@ am I changing, and what does that affect?" from the graph alone.
 * `doc/spec3.md` — the 0.3 architecture: semantic mutation and addressing, implemented here.
 * `CLAUDE.md` — orientation for working in the codebase.
 
-## Quick start
+## Installation
+
+```bash
+npm install @cynodia/axiom@alpha
+```
+
+Axiom is experimental; its API may change between alpha releases. See
+[`packages/axiom/README.md`](packages/axiom/README.md) for a minimal application.
+
+## Working in this repository
 
 Requires Node 22 or newer.
 
@@ -34,3 +43,15 @@ node packages/cli/dist/index.js serve    packages/demo/dist/issue-tracker.js --e
 Two unrelated applications — an issue tracker and an inventory system — are built from
 graphs alone in `packages/demo`, and run on the same compiler and runtime without a line
 of application-specific framework code.
+
+## Releasing
+
+```bash
+npm run release:prepare        # build, test, pack, verify, external consumer test
+npm run release:publish:dry-run
+npm run release:publish        # publishes under the "alpha" dist-tag
+```
+
+## License
+
+MIT — Copyright (c) 2026 AskTech AS.

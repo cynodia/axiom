@@ -19,7 +19,7 @@ import {
   ref,
   stateLocation,
   validateGraph,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   ButtonNode,
@@ -29,7 +29,7 @@ import type {
   RouteDef,
   StateDef,
   ViewNode,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 
 const ENTITY = nodeId('entity_record');
 const F_ID = fieldId('field_record_id');

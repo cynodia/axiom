@@ -28,7 +28,7 @@ const FORBIDDEN_WORDS = [
  */
 const EXEMPT_IDENTIFIERS = ['ValidationIssue'];
 
-const repoRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../..');
+const repoRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../..');
 
 async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });

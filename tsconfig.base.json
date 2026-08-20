@@ -15,30 +15,34 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@axiom/core": [
+      "@cynodia/axiom": [
+        "packages/axiom/src/index.ts"
+      ],
+      "@cynodia/axiom-core": [
         "packages/core/src/index.ts"
       ],
-      "@axiom/runtime": [
+      "@cynodia/axiom-runtime": [
         "packages/runtime/src/index.ts"
       ],
-      "@axiom/compiler": [
+      "@cynodia/axiom-compiler": [
         "packages/compiler/src/index.ts"
       ],
-      "@axiom/agent-api": [
+      "@cynodia/axiom-agent-api": [
         "packages/agent-api/src/index.ts"
       ],
-      "@axiom/cli": [
+      "@cynodia/axiom-cli": [
         "packages/cli/src/index.ts"
       ],
-      "@axiom/demo": [
+      "@cynodia/axiom-demo": [
         "packages/demo/src/index.ts"
       ],
-      "@axiom/demo/issue-tracker": [
+      "@cynodia/axiom-demo/issue-tracker": [
         "packages/demo/src/issue-tracker.ts"
       ],
-      "@axiom/demo/inventory": [
+      "@cynodia/axiom-demo/inventory": [
         "packages/demo/src/inventory.ts"
       ]
-    }
+    },
+    "declarationMap": true
   }
 }

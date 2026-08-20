@@ -17,7 +17,7 @@ import {
   ref,
   stateLocation,
   synchronizeEdges,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   ButtonNode,
@@ -27,8 +27,8 @@ import type {
   RouteDef,
   StateDef,
   ViewNode,
-} from '@axiom/core';
-import { AgentAPI, TransactionError } from '@axiom/agent-api';
+} from '@cynodia/axiom-core';
+import { AgentAPI, TransactionError } from '@cynodia/axiom-agent-api';
 
 const ENTITY = nodeId('entity_record');
 const F_ID = fieldId('field_record_id');

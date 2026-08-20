@@ -1,5 +1,5 @@
-import { validateGraph } from '@axiom/core';
-import type { ApplicationGraph, ValidationResult } from '@axiom/core';
+import { validateGraph } from '@cynodia/axiom-core';
+import type { ApplicationGraph, ValidationResult } from '@cynodia/axiom-core';
 import { GraphQueries } from './queries.js';
 import { Transaction } from './transaction.js';
 import type { ChangeSet } from './changes.js';

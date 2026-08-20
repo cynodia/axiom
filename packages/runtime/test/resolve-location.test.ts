@@ -10,10 +10,10 @@ import {
   nodeId,
   ref,
   stateLocation,
-} from '@axiom/core';
-import type { Expression } from '@axiom/core';
-import { LocationResolutionError, deepFreeze, describePath, resolveLocation } from '@axiom/runtime';
-import type { LocationRuntime } from '@axiom/runtime';
+} from '@cynodia/axiom-core';
+import type { Expression } from '@cynodia/axiom-core';
+import { LocationResolutionError, deepFreeze, describePath, resolveLocation } from '@cynodia/axiom-runtime';
+import type { LocationRuntime } from '@cynodia/axiom-runtime';
 
 const STATE = nodeId('state_records');
 const STATE_SETTINGS = nodeId('state_settings');

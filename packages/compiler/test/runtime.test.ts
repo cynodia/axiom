@@ -20,7 +20,7 @@ import {
   stateLocation,
   synchronizeEdges,
   unary,
-} from '@axiom/core';
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   ButtonNode,
@@ -37,8 +37,8 @@ import type {
   StateDef,
   TextNode,
   ViewNode,
-} from '@axiom/core';
-import { compileToHtml, compileToIR } from '@axiom/compiler';
+} from '@cynodia/axiom-core';
+import { compileToHtml, compileToIR } from '@cynodia/axiom-compiler';
 import {
   createAxiomRuntime,
   createMemoryHost,
@@ -46,8 +46,8 @@ import {
   findByNodeId,
   findByTag,
   textOf,
-} from '@axiom/runtime';
-import type { MemoryElement, MemoryHostOptions } from '@axiom/runtime';
+} from '@cynodia/axiom-runtime';
+import type { MemoryElement, MemoryHostOptions } from '@cynodia/axiom-runtime';
 
 /**
  * A synthetic application that exercises the whole vocabulary. The runtime under test

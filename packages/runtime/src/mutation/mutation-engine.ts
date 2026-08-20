@@ -1,4 +1,4 @@
-import type { Expression, MutationOperation, NodeId } from '@axiom/core';
+import type { Expression, MutationOperation, NodeId } from '@cynodia/axiom-core';
 import { describePath, resolveLocation } from './resolve-location.js';
 import type { LocationRuntime, ResolvedPath } from './resolve-location.js';
 import { cloneValue, isRecord, valuesEqual } from './values.js';

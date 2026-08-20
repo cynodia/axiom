@@ -26,8 +26,8 @@ import {
   stateLocation,
   validateGraph,
   validateLocation,
-} from '@axiom/core';
-import type { ActionDef, EntityDef, InputNode, RouteDef, StateDef, ViewNode } from '@axiom/core';
+} from '@cynodia/axiom-core';
+import type { ActionDef, EntityDef, InputNode, RouteDef, StateDef, ViewNode } from '@cynodia/axiom-core';
 
 const ENTITY = nodeId('entity_record');
 const OTHER_ENTITY = nodeId('entity_other');
