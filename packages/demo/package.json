@@ -1,6 +1,6 @@
 {
   "name": "@axiom/demo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,16 +9,23 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./model": {
-      "types": "./dist/model.d.ts",
-      "default": "./dist/model.js"
+    "./issue-tracker": {
+      "types": "./dist/issue-tracker.d.ts",
+      "default": "./dist/issue-tracker.js"
+    },
+    "./inventory": {
+      "types": "./dist/inventory.d.ts",
+      "default": "./dist/inventory.js"
     }
   },
   "dependencies": {
     "@axiom/compiler": "file:../compiler",
-    "@axiom/core": "file:../core"
+    "@axiom/core": "file:../core",
+    "@axiom/runtime": "file:../runtime",
+    "@axiom/agent-api": "file:../agent-api"
   },
   "scripts": {
-    "build": "tsc -b tsconfig.json && node dist/index.js"
+    "build": "tsc -b tsconfig.json tsconfig.test.json && node dist/index.js",
+    "test": "node --test dist/test/**/*.test.js"
   }
 }

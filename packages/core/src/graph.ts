@@ -1,38 +1,34 @@
-import { randomBytes } from 'node:crypto';
-import type { AnyNode, ApplicationGraphData, GraphEdge, NodeInput, NodeType } from './types.js';
+import { createEdgeId, createNodeId } from './ids.js';
+import type { EdgeId, FieldId, NodeId } from './ids.js';
+import type { EdgeKind, EntityDef, FieldDef, GraphEdge } from './nodes.js';
+import type { AnyNode, ApplicationGraphData, NodeInput, NodeKind, NodeOfKind } from './types.js';
 
-function timestamp(): string {
-  return new Date().toISOString();
-}
-
-export function randomHex(bytes = 4): string {
-  return randomBytes(bytes).toString('hex');
-}
-
-function createNodeId(): string {
-  return [randomHex(), randomHex(), randomHex(), randomHex()].join('-');
-}
-
-function cloneNode<T>(value: T): T {
+function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+export interface FieldLocation {
+  entityId: NodeId;
+  field: FieldDef;
+}
+
+export interface EdgeQuery {
+  kinds?: readonly EdgeKind[];
+}
+
+/**
+ * The Application Graph is the canonical representation of an application. Reads return
+ * deep clones, so a node retrieved from the graph must be written back with
+ * `updateNode` for the change to take effect.
+ */
 export class ApplicationGraph {
   private data: ApplicationGraphData;
-  private outgoing = new Map<string, GraphEdge[]>();
-  private incoming = new Map<string, GraphEdge[]>();
+  private outgoing = new Map<NodeId, GraphEdge[]>();
+  private incoming = new Map<NodeId, GraphEdge[]>();
+  private fieldIndex = new Map<FieldId, FieldLocation>();
 
-  constructor(id: string, name: string, version = '0.1.0') {
-    const now = timestamp();
-    this.data = {
-      id,
-      name,
-      version,
-      nodes: {},
-      edges: [],
-      createdAt: now,
-      updatedAt: now,
-    };
+  constructor(id: string, name: string, version = '0.2.0') {
+    this.data = { id, name, version, nodes: {}, edges: {} };
   }
 
   get id(): string {
@@ -47,91 +43,124 @@ export class ApplicationGraph {
     return this.data.version;
   }
 
-  get createdAt(): string {
-    return this.data.createdAt;
-  }
-
-  get updatedAt(): string {
-    return this.data.updatedAt;
-  }
-
-  addNode<T extends AnyNode>(node: NodeInput<T>): string {
-    const id = node.id ?? createNodeId();
-    const createdAt = node.createdAt ?? timestamp();
-    const storedNode = cloneNode({ ...node, id, createdAt } as unknown as T);
-    this.data.nodes[id] = storedNode;
-    this.touch();
+  addNode<T extends AnyNode>(node: NodeInput<T>): NodeId {
+    const id = (node.id ?? createNodeId(node.kind)) as NodeId;
+    if (this.data.nodes[id]) {
+      throw new Error(`Node ${id} already exists`);
+    }
+    this.data.nodes[id] = clone({ ...node, id } as unknown as AnyNode);
+    this.indexNodeFields(this.data.nodes[id]);
     return id;
   }
 
-  removeNode(id: string): boolean {
-    if (!(id in this.data.nodes)) {
-      return false;
-    }
-    delete this.data.nodes[id];
-    this.data.edges = this.data.edges.filter((edge) => edge.from !== id && edge.to !== id);
-    this.rebuildEdgeIndexes();
-    this.touch();
-    return true;
+  getNode<T extends AnyNode = AnyNode>(id: NodeId): T | undefined {
+    const node = this.data.nodes[id];
+    return node ? (clone(node) as T) : undefined;
   }
 
-  getNode<T extends AnyNode = AnyNode>(id: string): T | undefined {
-    const node = this.data.nodes[id];
-    return node ? cloneNode(node as T) : undefined;
+  hasNode(id: NodeId): boolean {
+    return Boolean(this.data.nodes[id]);
   }
 
   updateNode(node: AnyNode): void {
     if (!this.data.nodes[node.id]) {
       throw new Error(`Node ${node.id} does not exist`);
     }
-    this.data.nodes[node.id] = cloneNode(node);
-    this.touch();
+    this.data.nodes[node.id] = clone(node);
+    this.rebuildFieldIndex();
   }
 
-  getNodesByType<T extends AnyNode = AnyNode>(type: NodeType): T[] {
+  removeNode(id: NodeId): boolean {
+    if (!this.data.nodes[id]) {
+      return false;
+    }
+    delete this.data.nodes[id];
+    for (const [edgeKey, edge] of Object.entries(this.data.edges)) {
+      if (edge.from === id || edge.to === id) {
+        delete this.data.edges[edgeKey];
+      }
+    }
+    this.rebuildIndexes();
+    return true;
+  }
+
+  getNodesByKind<K extends NodeKind>(kind: K): NodeOfKind<K>[] {
     return Object.values(this.data.nodes)
-      .filter((node): node is T => node.type === type)
-      .map((node) => cloneNode(node));
+      .filter((node): node is NodeOfKind<K> => node.kind === kind)
+      .map((node) => clone(node));
   }
 
   listNodes(): AnyNode[] {
-    return Object.values(this.data.nodes).map((node) => cloneNode(node));
+    return Object.values(this.data.nodes).map((node) => clone(node));
   }
 
-  addEdge(from: string, to: string, kind: string): void {
+  /** Resolves a field id to its owning entity. Fields are globally identifiable. */
+  getField(id: FieldId): FieldLocation | undefined {
+    const location = this.fieldIndex.get(id);
+    return location ? clone(location) : undefined;
+  }
+
+  listFields(): FieldLocation[] {
+    return [...this.fieldIndex.values()].map((location) => clone(location));
+  }
+
+  addEdge(
+    from: NodeId,
+    to: NodeId,
+    kind: EdgeKind,
+    options: { id?: EdgeId; metadata?: Record<string, unknown> } = {},
+  ): EdgeId {
     if (!this.data.nodes[from]) {
       throw new Error(`Cannot add edge from missing node ${from}`);
     }
     if (!this.data.nodes[to]) {
       throw new Error(`Cannot add edge to missing node ${to}`);
     }
-    const edge: GraphEdge = { from, to, kind };
-    const exists = this.data.edges.some(
-      (candidate) => candidate.from === from && candidate.to === to && candidate.kind === kind,
+    const existing = Object.values(this.data.edges).find(
+      (edge) => edge.from === from && edge.to === to && edge.kind === kind,
     );
-    if (!exists) {
-      this.data.edges.push(edge);
-      this.indexEdge(edge);
-      this.touch();
+    if (existing) {
+      return existing.id;
     }
+    const id = options.id ?? createEdgeId();
+    const edge: GraphEdge = { id, from, to, kind, ...(options.metadata ? { metadata: options.metadata } : {}) };
+    this.data.edges[id] = edge;
+    this.indexEdge(edge);
+    return id;
   }
 
-  getEdges(nodeId: string): GraphEdge[] {
-    const outgoing = this.outgoing.get(nodeId) ?? [];
-    const incoming = this.incoming.get(nodeId) ?? [];
-    return [...outgoing, ...incoming].map((edge) => cloneNode(edge));
+  removeEdge(id: EdgeId): boolean {
+    if (!this.data.edges[id]) {
+      return false;
+    }
+    delete this.data.edges[id];
+    this.rebuildEdgeIndexes();
+    return true;
   }
 
-  getOutgoingEdges(nodeId: string): GraphEdge[] {
-    return (this.outgoing.get(nodeId) ?? []).map((edge) => cloneNode(edge));
+  getEdge(id: EdgeId): GraphEdge | undefined {
+    const edge = this.data.edges[id];
+    return edge ? clone(edge) : undefined;
   }
 
-  getIncomingEdges(nodeId: string): GraphEdge[] {
-    return (this.incoming.get(nodeId) ?? []).map((edge) => cloneNode(edge));
+  listEdges(): GraphEdge[] {
+    return Object.values(this.data.edges).map((edge) => clone(edge));
+  }
+
+  getEdges(nodeId: NodeId, query: EdgeQuery = {}): GraphEdge[] {
+    return [...this.getOutgoingEdges(nodeId, query), ...this.getIncomingEdges(nodeId, query)];
+  }
+
+  getOutgoingEdges(nodeId: NodeId, query: EdgeQuery = {}): GraphEdge[] {
+    return filterEdges(this.outgoing.get(nodeId) ?? [], query).map((edge) => clone(edge));
+  }
+
+  getIncomingEdges(nodeId: NodeId, query: EdgeQuery = {}): GraphEdge[] {
+    return filterEdges(this.incoming.get(nodeId) ?? [], query).map((edge) => clone(edge));
   }
 
   toJSON(): ApplicationGraphData {
-    return cloneNode(this.data);
+    return clone(this.data);
   }
 
   serialize(): string {
@@ -139,20 +168,15 @@ export class ApplicationGraph {
   }
 
   restore(input: string | ApplicationGraphData): void {
-    const data = typeof input === 'string' ? (JSON.parse(input) as ApplicationGraphData) : cloneNode(input);
-    this.data = data;
-    this.rebuildEdgeIndexes();
+    this.data = typeof input === 'string' ? (JSON.parse(input) as ApplicationGraphData) : clone(input);
+    this.rebuildIndexes();
   }
 
   static deserialize(input: string | ApplicationGraphData): ApplicationGraph {
-    const data = typeof input === 'string' ? (JSON.parse(input) as ApplicationGraphData) : cloneNode(input);
+    const data = typeof input === 'string' ? (JSON.parse(input) as ApplicationGraphData) : clone(input);
     const graph = new ApplicationGraph(data.id, data.name, data.version);
     graph.restore(data);
     return graph;
-  }
-
-  private touch(): void {
-    this.data.updatedAt = timestamp();
   }
 
   private indexEdge(edge: GraphEdge): void {
@@ -165,11 +189,40 @@ export class ApplicationGraph {
     this.incoming.set(edge.to, incoming);
   }
 
+  private indexNodeFields(node: AnyNode): void {
+    if (node.kind !== 'entity') {
+      return;
+    }
+    for (const field of (node as EntityDef).fields) {
+      this.fieldIndex.set(field.id, { entityId: node.id, field });
+    }
+  }
+
+  private rebuildFieldIndex(): void {
+    this.fieldIndex.clear();
+    for (const node of Object.values(this.data.nodes)) {
+      this.indexNodeFields(node);
+    }
+  }
+
   private rebuildEdgeIndexes(): void {
     this.outgoing.clear();
     this.incoming.clear();
-    for (const edge of this.data.edges) {
+    for (const edge of Object.values(this.data.edges)) {
       this.indexEdge(edge);
     }
   }
+
+  private rebuildIndexes(): void {
+    this.rebuildEdgeIndexes();
+    this.rebuildFieldIndex();
+  }
+}
+
+function filterEdges(edges: GraphEdge[], query: EdgeQuery): GraphEdge[] {
+  if (!query.kinds) {
+    return edges;
+  }
+  const kinds = new Set(query.kinds);
+  return edges.filter((edge) => kinds.has(edge.kind));
 }

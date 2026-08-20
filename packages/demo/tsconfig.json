@@ -5,9 +5,21 @@
     "outDir": "./dist",
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts"
+  ],
   "references": [
-    { "path": "../core/tsconfig.json" },
-    { "path": "../compiler/tsconfig.json" }
+    {
+      "path": "../core/tsconfig.json"
+    },
+    {
+      "path": "../compiler/tsconfig.json"
+    },
+    {
+      "path": "../runtime/tsconfig.json"
+    },
+    {
+      "path": "../agent-api/tsconfig.json"
+    }
   ]
 }

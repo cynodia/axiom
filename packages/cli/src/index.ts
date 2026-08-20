@@ -1,115 +1,238 @@
 #!/usr/bin/env node
-        import { createServer } from 'node:http';
-        import { mkdir, writeFile } from 'node:fs/promises';
-        import path from 'node:path';
-        import { pathToFileURL } from 'node:url';
-        import { compileToHtml } from '@axiom/compiler';
-        import { ApplicationGraph } from '@axiom/core';
+import { createServer } from 'node:http';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { compileToHtml, compileToIR } from '@axiom/compiler';
+import { ApplicationGraph, validateGraph } from '@axiom/core';
+import type { AnyNode, NodeKind, ValidationResult } from '@axiom/core';
 
-        async function loadModel(modelFile: string): Promise<ApplicationGraph> {
-          const resolved = path.resolve(process.cwd(), modelFile);
-          const module = await import(pathToFileURL(resolved).href);
-          const candidate =
-            typeof module.createIssueTrackerModel === 'function'
-              ? module.createIssueTrackerModel()
-              : typeof module.default === 'function'
-                ? module.default()
-                : module.graph ?? module.default;
+const GRAPH_EXPORT_CANDIDATES = ['default', 'createGraph', 'createApplicationGraph'];
 
-          if (candidate instanceof ApplicationGraph) {
-            return candidate;
-          }
-          if (typeof candidate === 'string') {
-            return ApplicationGraph.deserialize(candidate);
-          }
-          if (candidate && typeof candidate === 'object' && 'nodes' in candidate && 'edges' in candidate) {
-            return ApplicationGraph.deserialize(candidate as Parameters<typeof ApplicationGraph.deserialize>[0]);
-          }
-          throw new Error(`Could not load an ApplicationGraph from ${modelFile}`);
-        }
+interface Options {
+  command: string;
+  modelFile: string;
+  exportName?: string;
+  port: number;
+}
 
-        function inspectGraph(graph: ApplicationGraph): string {
-          const sections: Array<[string, Parameters<ApplicationGraph['getNodesByType']>[0]]> = [
-            ['Entities', 'entity'],
-            ['State', 'state'],
-            ['Views', 'view'],
-            ['Actions', 'action'],
-            ['Constraints', 'constraint'],
-            ['Routes', 'route'],
-          ];
+function parseArguments(argv: string[]): Options | null {
+  const positional: string[] = [];
+  let exportName: string | undefined;
+  let port = 3000;
 
-          return sections
-            .map(([label, type]) => {
-              const items = graph.getNodesByType(type);
-              const lines = items.map((node) => {
-                const edges = graph
-                  .getOutgoingEdges(node.id)
-                  .map((edge) => `${edge.kind} → ${graph.getNode(edge.to)?.name ?? edge.to}`)
-                  .join(', ');
-              return `- ${node.name} (${node.id})${edges ? ` [${edges}]` : ''}`;
-            });
-              return `${label}\n${lines.length ? lines.join('\n') : '- none'}`;
-            })
-            .join('\n\n');
-        }
+  for (const argument of argv) {
+    if (argument.startsWith('--export=')) {
+      exportName = argument.slice('--export='.length);
+      continue;
+    }
+    if (argument.startsWith('--port=')) {
+      port = Number(argument.slice('--port='.length)) || port;
+      continue;
+    }
+    positional.push(argument);
+  }
 
-        async function build(modelFile: string): Promise<string> {
-          const graph = await loadModel(modelFile);
-          const html = compileToHtml(graph);
-          const outputDir = path.resolve(process.cwd(), 'dist');
-          const outputFile = path.join(outputDir, 'index.html');
-          await mkdir(outputDir, { recursive: true });
-          await writeFile(outputFile, html, 'utf8');
-          return outputFile;
-        }
+  const [command, modelFile] = positional;
+  if (!command || !modelFile) {
+    return null;
+  }
+  return { command, modelFile, exportName, port };
+}
 
-        async function serve(modelFile: string): Promise<void> {
-          const graph = await loadModel(modelFile);
-          const html = compileToHtml(graph);
-          const server = createServer((request, response) => {
-            if (!request.url || request.url === '/' || request.url.startsWith('/issues/')) {
-              response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-              response.end(html);
-              return;
-            }
-            response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-            response.end('Not found');
-          });
-          server.listen(3000, '127.0.0.1', () => {
-            console.log('Axiom demo available at http://127.0.0.1:3000');
-          });
-        }
+function toGraph(candidate: unknown): ApplicationGraph | null {
+  if (candidate instanceof ApplicationGraph) {
+    return candidate;
+  }
+  if (typeof candidate === 'string') {
+    return ApplicationGraph.deserialize(candidate);
+  }
+  if (candidate && typeof candidate === 'object' && 'nodes' in candidate && 'edges' in candidate) {
+    return ApplicationGraph.deserialize(candidate as Parameters<typeof ApplicationGraph.deserialize>[0]);
+  }
+  return null;
+}
 
-        async function main(): Promise<void> {
-          const [, , command, modelFile] = process.argv;
-          if (!command || !modelFile) {
-            console.error('Usage: axiom <build|inspect|serve> <modelFile>');
-            process.exitCode = 1;
-            return;
-          }
+/**
+ * Loads an application graph from a module. The module may export the graph directly or
+ * a function that builds it; nothing about the application itself is assumed.
+ */
+async function loadGraph(options: Options): Promise<ApplicationGraph> {
+  const resolved = path.resolve(process.cwd(), options.modelFile);
+  const module = (await import(pathToFileURL(resolved).href)) as Record<string, unknown>;
 
-          if (command === 'build') {
-            const output = await build(modelFile);
-            console.log(`Built ${output}`);
-            return;
-          }
+  const names = options.exportName
+    ? [options.exportName]
+    : GRAPH_EXPORT_CANDIDATES.filter((name) => name in module);
 
-          if (command === 'inspect') {
-            const graph = await loadModel(modelFile);
-            console.log(inspectGraph(graph));
-            return;
-          }
+  for (const name of names) {
+    const exported = module[name];
+    const value = typeof exported === 'function' ? (exported as () => unknown)() : exported;
+    const graph = toGraph(value);
+    if (graph) {
+      return graph;
+    }
+  }
 
-          if (command === 'serve') {
-            await serve(modelFile);
-            return;
-          }
+  if (!options.exportName) {
+    const builders = Object.entries(module).filter(([, value]) => typeof value === 'function');
+    if (builders.length === 1) {
+      const graph = toGraph((builders[0][1] as () => unknown)());
+      if (graph) {
+        return graph;
+      }
+    }
+    if (builders.length > 1) {
+      throw new Error(
+        `${options.modelFile} exports several candidates. Choose one with --export=<name>: ${builders
+          .map(([name]) => name)
+          .join(', ')}`,
+      );
+    }
+  }
 
-          console.error(`Unknown command: ${command}`);
-          process.exitCode = 1;
-        }
+  throw new Error(`Could not load an application graph from ${options.modelFile}`);
+}
 
-        main().catch((error) => {
-          console.error(error instanceof Error ? error.message : String(error));
-          process.exitCode = 1;
-        });
+const SECTIONS: Array<[string, NodeKind]> = [
+  ['Entities', 'entity'],
+  ['State', 'state'],
+  ['Actions', 'action'],
+  ['Constraints', 'constraint'],
+  ['Routes', 'route'],
+  ['Views', 'view'],
+];
+
+function describe(node: AnyNode): string {
+  const label = node.name ? `${node.name} (${node.id})` : node.id;
+  if (node.kind === 'entity') {
+    const fields = node.fields.map((field) => field.name ?? field.id).join(', ');
+    return `${label}${fields ? ` — fields: ${fields}` : ''}`;
+  }
+  if (node.kind === 'route') {
+    return `${label} — ${node.path}`;
+  }
+  if (node.kind === 'action') {
+    const operations = (node.operations ?? []).map((operation) => operation.kind).join(', ');
+    return `${label}${operations ? ` — operations: ${operations}` : ''}`;
+  }
+  return label;
+}
+
+function inspect(graph: ApplicationGraph): string {
+  const lines: string[] = [`${graph.name} (${graph.id}) v${graph.version}`, ''];
+
+  for (const [title, kind] of SECTIONS) {
+    const nodes = graph.getNodesByKind(kind);
+    lines.push(title);
+    if (nodes.length === 0) {
+      lines.push('- none');
+    }
+    for (const node of nodes) {
+      const edges = graph
+        .getOutgoingEdges(node.id)
+        .map((edge) => `${edge.kind} → ${graph.getNode(edge.to)?.name ?? edge.to}`)
+        .join(', ');
+      lines.push(`- ${describe(node)}${edges ? ` [${edges}]` : ''}`);
+    }
+    lines.push('');
+  }
+
+  const uiCount = graph.listNodes().filter((node) => !SECTIONS.some(([, kind]) => kind === node.kind)).length;
+  lines.push(`UI nodes: ${uiCount}`, `Edges: ${graph.listEdges().length}`);
+  return lines.join('\n');
+}
+
+function formatValidation(result: ValidationResult): string {
+  const lines: string[] = [];
+  for (const problem of result.errors) {
+    lines.push(`error   [${problem.code}] ${problem.message}`);
+  }
+  for (const problem of result.warnings) {
+    lines.push(`warning [${problem.code}] ${problem.message}`);
+  }
+  lines.push(
+    result.valid
+      ? `Graph is valid (${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'}).`
+      : `Graph is invalid: ${result.errors.length} error${result.errors.length === 1 ? '' : 's'}.`,
+  );
+  return lines.join('\n');
+}
+
+async function build(options: Options): Promise<void> {
+  const graph = await loadGraph(options);
+  const html = compileToHtml(graph);
+  const outputDir = path.resolve(process.cwd(), 'dist');
+  const outputFile = path.join(outputDir, `${graph.id}.html`);
+  await mkdir(outputDir, { recursive: true });
+  await writeFile(outputFile, html, 'utf8');
+  console.log(`Built ${outputFile}`);
+}
+
+async function serve(options: Options): Promise<void> {
+  const graph = await loadGraph(options);
+  const ir = compileToIR(graph);
+  const html = compileToHtml(graph);
+  const matches = (pathname: string): boolean =>
+    ir.routes.some((route) => {
+      const parts = pathname.split('?')[0].split('/').filter(Boolean);
+      return (
+        route.segments.length === parts.length &&
+        route.segments.every((segment, index) => segment.kind === 'parameter' || segment.value === parts[index])
+      );
+    });
+
+  const server = createServer((request, response) => {
+    if (request.url && matches(request.url)) {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(html);
+      return;
+    }
+    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    response.end('No route matches this path');
+  });
+
+  server.listen(options.port, '127.0.0.1', () => {
+    console.log(`${graph.name} available at http://127.0.0.1:${options.port}`);
+  });
+}
+
+async function main(): Promise<void> {
+  const options = parseArguments(process.argv.slice(2));
+  if (!options) {
+    console.error(
+      'Usage: axiom <build|inspect|validate|serve> <modelFile> [--export=name] [--port=3000]',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  switch (options.command) {
+    case 'build':
+      await build(options);
+      return;
+    case 'inspect': {
+      console.log(inspect(await loadGraph(options)));
+      return;
+    }
+    case 'validate': {
+      const result = validateGraph(await loadGraph(options));
+      console.log(formatValidation(result));
+      if (!result.valid) {
+        process.exitCode = 1;
+      }
+      return;
+    }
+    case 'serve':
+      await serve(options);
+      return;
+    default:
+      console.error(`Unknown command: ${options.command}`);
+      process.exitCode = 1;
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});

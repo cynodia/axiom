@@ -8,18 +8,37 @@
     "composite": true,
     "outDir": "./dist",
     "rootDir": "./src",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@axiom/core": ["packages/core/src/index.ts"],
-      "@axiom/runtime": ["packages/runtime/src/index.ts"],
-      "@axiom/compiler": ["packages/compiler/src/index.ts"],
-      "@axiom/agent-api": ["packages/agent-api/src/index.ts"],
-      "@axiom/cli": ["packages/cli/src/index.ts"],
-      "@axiom/demo": ["packages/demo/src/index.ts"],
-      "@axiom/demo/model": ["packages/demo/src/model.ts"]
+      "@axiom/core": [
+        "packages/core/src/index.ts"
+      ],
+      "@axiom/runtime": [
+        "packages/runtime/src/index.ts"
+      ],
+      "@axiom/compiler": [
+        "packages/compiler/src/index.ts"
+      ],
+      "@axiom/agent-api": [
+        "packages/agent-api/src/index.ts"
+      ],
+      "@axiom/cli": [
+        "packages/cli/src/index.ts"
+      ],
+      "@axiom/demo": [
+        "packages/demo/src/index.ts"
+      ],
+      "@axiom/demo/issue-tracker": [
+        "packages/demo/src/issue-tracker.ts"
+      ],
+      "@axiom/demo/inventory": [
+        "packages/demo/src/inventory.ts"
+      ]
     }
   }
 }

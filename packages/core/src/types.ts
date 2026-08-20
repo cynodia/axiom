@@ -1,93 +1,32 @@
-export type NodeType = 'entity' | 'state' | 'view' | 'action' | 'constraint' | 'route';
+import type {
+  ActionDef,
+  ConstraintDef,
+  EntityDef,
+  GraphEdge,
+  RouteDef,
+  StateDef,
+} from './nodes.js';
+import type { NodeId } from './ids.js';
+import type { UINode, UINodeKind } from './ui.js';
 
-export interface BaseNode {
-  id: string;
-  type: NodeType;
-  name: string;
-  createdAt: string;
-  metadata?: Record<string, unknown>;
-}
+export type SemanticNodeKind = 'entity' | 'state' | 'action' | 'constraint' | 'route';
 
-export interface FieldDef {
-  name: string;
-  fieldType: string;
-  required?: boolean;
-  validations?: string[];
-}
+export type NodeKind = SemanticNodeKind | UINodeKind;
 
-export interface EntityDef extends BaseNode {
-  type: 'entity';
-  fields: FieldDef[];
-}
+export type AnyNode = EntityDef | StateDef | ActionDef | ConstraintDef | RouteDef | UINode;
 
-export interface StateDef extends BaseNode {
-  type: 'state';
-  stateType: string;
-  initialValue?: unknown;
-  derivedFrom?: string[];
-}
+export type NodeOfKind<K extends NodeKind> = Extract<AnyNode, { kind: K }>;
 
-export interface ViewChild {
-  nodeId?: string;
-  inline?: string;
-}
-
-export interface ViewDef extends BaseNode {
-  type: 'view';
-  renderKind?: 'list' | 'detail' | 'editor' | 'create' | 'generic';
-  source?: string;
-  children?: ViewChild[];
-  actionIds?: string[];
-  props?: Record<string, string>;
-}
-
-export interface EffectDef {
-  kind: 'mutate' | 'navigate' | 'rest';
-  target?: string;
-  method?: string;
-}
-
-export interface ActionDef extends BaseNode {
-  type: 'action';
-  inputs?: FieldDef[];
-  outputs?: FieldDef[];
-  preconditions?: string[];
-  effects?: EffectDef[];
-  sideEffects?: EffectDef[];
-  failureModes?: string[];
-}
-
-export interface ConstraintDef extends BaseNode {
-  type: 'constraint';
-  description: string;
-  affectedEntityId?: string;
-  expression?: string;
-}
-
-export interface RouteDef extends BaseNode {
-  type: 'route';
-  path: string;
-  viewId: string;
-}
-
-export type AnyNode = EntityDef | StateDef | ViewDef | ActionDef | ConstraintDef | RouteDef;
-
-export interface GraphEdge {
-  from: string;
-  to: string;
-  kind: string;
-}
+/** A node as supplied by a caller: the id may be omitted and will be generated. */
+export type NodeInput<T extends AnyNode = AnyNode> = T extends AnyNode
+  ? Omit<T, 'id'> & { id?: NodeId }
+  : never;
 
 export interface ApplicationGraphData {
   id: string;
   name: string;
   version: string;
-  nodes: Record<string, AnyNode>;
-  edges: GraphEdge[];
-  createdAt: string;
-  updatedAt: string;
+  nodes: Record<NodeId, AnyNode>;
+  edges: Record<string, GraphEdge>;
+  metadata?: Record<string, unknown>;
 }
-
-export type NodeInput<T extends AnyNode = AnyNode> = T extends AnyNode
-  ? Omit<T, 'id' | 'createdAt'> & Partial<Pick<T, 'id' | 'createdAt'>>
-  : never;

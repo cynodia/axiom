@@ -1,113 +1,89 @@
-import type { ActionDef, ApplicationGraphData, RouteDef, ViewDef } from '@axiom/core';
-        import { ApplicationGraph } from '@axiom/core';
-        import { createRuntimeModuleSource } from '@axiom/runtime';
+import { createRuntimeModuleSource } from '@axiom/runtime';
+import type { ApplicationGraph, ApplicationIR } from '@axiom/core';
+import { compileToIR } from './normalize.js';
+import type { CompileOptions } from './normalize.js';
 
-        function escapeForScript(value: string): string {
-          return value.replace(/<\/script/gi, '<\\/script');
-        }
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
-        function escapeHtml(value: string): string {
-          return value
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
-        }
+function escapeForScript(value: string): string {
+  return value.replace(/<\/script/gi, '<\\/script');
+}
 
-        function sanitizeFunctionSuffix(id: string): string {
-          return id.replace(/[^a-zA-Z0-9_$]/g, '_');
-        }
+/** Domain-neutral styling for the semantic UI vocabulary. */
+const STYLESHEET = `
+:root { color-scheme: light; font-family: Inter, system-ui, sans-serif; }
+body { margin: 0; background: #f4f7fb; color: #1f2937; }
+#app { padding: 24px; max-width: 1100px; margin: 0 auto; }
+.axiom-view { display: grid; gap: 16px; }
+.axiom-container { display: flex; gap: 12px; }
+.axiom-layout-vertical { flex-direction: column; align-items: stretch; }
+.axiom-layout-horizontal { flex-direction: row; align-items: center; flex-wrap: wrap; }
+.axiom-layout-stack { flex-direction: column; gap: 4px; }
+.axiom-view > .axiom-container,
+.axiom-view > .axiom-form { background: #ffffff; border-radius: 16px; padding: 20px; box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08); }
+.axiom-repeat { display: grid; gap: 10px; }
+.axiom-field { display: flex; gap: 8px; align-items: baseline; }
+.axiom-field-label { color: #64748b; font-size: 13px; }
+.axiom-field-value { font-weight: 500; }
+.axiom-form { display: grid; gap: 12px; }
+.axiom-input { display: grid; gap: 6px; }
+.axiom-input-label { font-size: 13px; color: #475569; }
+.axiom-control { font: inherit; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; width: 100%; box-sizing: border-box; }
+textarea.axiom-control { min-height: 120px; resize: vertical; }
+input[type="checkbox"].axiom-control { width: auto; }
+.axiom-button { font: inherit; border: none; border-radius: 10px; padding: 10px 14px; background: #2563eb; color: #ffffff; cursor: pointer; }
+.axiom-button.axiom-destructive, .axiom-role-danger { background: #dc2626; }
+.axiom-role-secondary { background: #64748b; }
+.axiom-emphasis-strong { font-weight: 700; font-size: 18px; }
+.axiom-density-compact { padding: 6px 10px; }
+.axiom-no-route { padding: 20px; background: #ffffff; border-radius: 12px; }
+`.trim();
 
-        function createViewRenderer(view: ViewDef): string {
-          const fnName = `renderView_${sanitizeFunctionSuffix(view.id)}`;
-          const renderKind = view.renderKind ?? 'generic';
-          const renderCall: Record<string, string> = {
-            list: 'renderIssueList()',
-            detail: 'renderIssueDetail()',
-            editor: `renderIssueEditor(globalThis.__AXIOM_APP__.getState('currentIssue'))`,
-            create: 'renderCreateIssue()',
-            generic: `renderGeneric(${JSON.stringify(view)})`,
-          };
-          const body = renderCall[renderKind] ?? `renderGeneric(${JSON.stringify(view)})`;
-          return [
-            `function ${fnName}(ctx) {`,
-            `  return ${body};`,
-            `}`,
-          ].join('\n');
-        }
+export interface HtmlOptions extends CompileOptions {
+  title?: string;
+}
 
-        function createViewRegistry(views: ViewDef[]): string {
-          const entries = views
-            .map((view) => {
-              const fnName = `renderView_${sanitizeFunctionSuffix(view.id)}`;
-              return `${JSON.stringify(view.id)}: ${fnName}`;
-            })
-            .join(',\n  ');
-          return `globalThis.__AXIOM_VIEW_RENDERERS__ = {\n  ${entries}\n};`;
-        }
+/**
+ * Emits a self-contained page: the normalized IR as data, plus the generic runtime. No
+ * part of this output is derived from what the application is about.
+ */
+export function compileIRToHtml(ir: ApplicationIR, options: HtmlOptions = {}): string {
+  const runtimeSource = createRuntimeModuleSource();
+  const payload = escapeForScript(JSON.stringify(ir));
+  const title = options.title ?? ir.name;
 
-        function summarizeGraph(graph: ApplicationGraphData): string {
-          const counts = ['entity', 'state', 'view', 'action', 'constraint', 'route']
-            .map((type) => `${type}: ${Object.values(graph.nodes).filter((node) => node.type === type).length}`)
-            .join(' · ');
-          return `<p class="summary">${escapeHtml(counts)}</p>`;
-        }
+  return [
+    '<!DOCTYPE html>',
+    '<html lang="en">',
+    '<head>',
+    '  <meta charset="utf-8" />',
+    '  <meta name="viewport" content="width=device-width, initial-scale=1" />',
+    `  <title>${escapeHtml(title)}</title>`,
+    '  <style>',
+    STYLESHEET,
+    '  </style>',
+    '</head>',
+    '<body>',
+    '  <div id="app"></div>',
+    '  <script type="module">',
+    runtimeSource,
+    `const __AXIOM_IR__ = ${payload};`,
+    'const __axiomRoot = document.getElementById("app");',
+    'const __axiomApp = createAxiomRuntime({ ir: __AXIOM_IR__, rootElement: __axiomRoot, host: createBrowserHost() });',
+    'globalThis.__AXIOM_APP__ = __axiomApp;',
+    '__axiomApp.start();',
+    '  </script>',
+    '</body>',
+    '</html>',
+  ].join('\n');
+}
 
-        export function compileToHtml(graph: ApplicationGraph): string {
-          const data = graph.toJSON();
-          const views = Object.values(data.nodes).filter((node): node is ViewDef => node.type === 'view');
-          const runtimeSource = createRuntimeModuleSource();
-          const graphJson = escapeForScript(JSON.stringify(data));
-          const viewRenderers = views.map(createViewRenderer).join('\n\n');
-          const viewRegistry = createViewRegistry(views);
-          const actionNames = Object.values(data.nodes)
-            .filter((node): node is ActionDef => node.type === 'action')
-            .map((action) => action.name)
-            .join(', ');
-          const routeNames = Object.values(data.nodes)
-            .filter((node): node is RouteDef => node.type === 'route')
-            .map((route) => route.path)
-            .join(', ');
-
-          return [
-            '<!DOCTYPE html>',
-            '<html lang="en">',
-            '<head>',
-            '  <meta charset="utf-8" />',
-            '  <meta name="viewport" content="width=device-width, initial-scale=1" />',
-            `  <title>${escapeHtml(data.name)}</title>`,
-            '  <style>',
-            '    :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; }',
-            '    body { margin: 0; background: #f4f7fb; color: #1f2937; }',
-            '    #app { padding: 24px; max-width: 1100px; margin: 0 auto; }',
-            '    .layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.5fr) minmax(320px, 1fr); align-items: start; }',
-            '    .panel { background: white; border-radius: 16px; padding: 20px; box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08); }',
-            '    .panel-header { display: flex; justify-content: space-between; gap: 12px; align-items: start; }',
-            '    .filters, .actions, .stack { display: grid; gap: 12px; }',
-            '    .filters { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: 16px; }',
-            '    .issue-list, .comment-list { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 10px; }',
-            '    .issue-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 14px; background: #eef2ff; border-radius: 12px; }',
-            '    .issue-row button { text-align: left; }',
-            '    .issue-status, .badge { font-size: 12px; padding: 6px 10px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; }',
-            '    input, textarea, select, button { font: inherit; }',
-            '    input, textarea, select { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; margin-top: 6px; }',
-            '    textarea { min-height: 120px; resize: vertical; }',
-            '    button { border: none; border-radius: 10px; padding: 10px 14px; background: #2563eb; color: white; cursor: pointer; }',
-            '    button[data-nav="/"] { background: #64748b; }',
-            '    .empty-state { padding: 20px; text-align: center; background: #f8fafc; border-radius: 12px; }',
-            '    .summary { color: #475569; margin: 0 0 20px; }',
-            '  </style>',
-            '</head>',
-            '<body>',
-            '  <div id="app"></div>',
-            '  <script type="module">',
-            `    globalThis.__AXIOM_GRAPH__ = ${graphJson};`,
-            `    globalThis.__AXIOM_METADATA__ = ${JSON.stringify({ actions: actionNames, routes: routeNames })};`,
-            `    ${viewRenderers}`,
-            `    ${viewRegistry}`,
-            `    ${runtimeSource}`,
-            '  </script>',
-            '</body>',
-            '</html>',
-          ].join('\n').replace('<div id="app"></div>', `<div id="app"></div>${summarizeGraph(data)}`);
-        }
+export function compileToHtml(graph: ApplicationGraph, options: HtmlOptions = {}): string {
+  return compileIRToHtml(compileToIR(graph, options), options);
+}

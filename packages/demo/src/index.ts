@@ -1,20 +1,43 @@
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { compileToHtml } from '@axiom/compiler';
-import { createIssueTrackerModel } from './model.js';
+import type { ApplicationGraph } from '@axiom/core';
+import { createIssueTrackerGraph } from './issue-tracker.js';
+import { createInventoryGraph } from './inventory.js';
 
-export async function buildDemo(): Promise<string> {
-  const graph = createIssueTrackerModel();
-  const html = compileToHtml(graph);
-  const output = fileURLToPath(new URL('./index.html', import.meta.url));
-  await writeFile(output, html, 'utf8');
-  return output;
+export { createIssueTrackerGraph, issueTrackerIds } from './issue-tracker.js';
+export { createInventoryGraph, inventoryIds } from './inventory.js';
+
+export interface DemoApplication {
+  slug: string;
+  createGraph(): ApplicationGraph;
+}
+
+/** Both applications are compiled and executed by the same framework packages. */
+export const demoApplications: DemoApplication[] = [
+  { slug: 'issue-tracker', createGraph: createIssueTrackerGraph },
+  { slug: 'inventory', createGraph: createInventoryGraph },
+];
+
+export async function buildDemos(): Promise<string[]> {
+  const outputDir = fileURLToPath(new URL('./public/', import.meta.url));
+  await mkdir(outputDir, { recursive: true });
+  const written: string[] = [];
+  for (const application of demoApplications) {
+    const html = compileToHtml(application.createGraph());
+    const output = `${outputDir}${application.slug}.html`;
+    await writeFile(output, html, 'utf8');
+    written.push(output);
+  }
+  return written;
 }
 
 if (import.meta.url === new URL(process.argv[1], 'file:').href) {
-  buildDemo()
-    .then((output) => {
-      console.log(`Demo written to ${output}`);
+  buildDemos()
+    .then((outputs) => {
+      for (const output of outputs) {
+        console.log(`Built ${output}`);
+      }
     })
     .catch((error) => {
       console.error(error instanceof Error ? error.message : String(error));
