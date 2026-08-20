@@ -146,6 +146,7 @@ export function createIssueTrackerModel(): ApplicationGraph {
   const issueListViewId = graph.addNode({
     type: 'view',
     name: 'IssueList',
+    renderKind: 'list',
     source: issuesStateId,
     children: [{ nodeId: currentIssueStateId }],
     actionIds: [createIssueActionId],
@@ -155,6 +156,7 @@ export function createIssueTrackerModel(): ApplicationGraph {
   const issueEditorViewId = graph.addNode({
     type: 'view',
     name: 'IssueEditor',
+    renderKind: 'editor',
     source: currentIssueStateId,
     actionIds: [updateIssueActionId],
   });
@@ -162,6 +164,7 @@ export function createIssueTrackerModel(): ApplicationGraph {
   const issueDetailViewId = graph.addNode({
     type: 'view',
     name: 'IssueDetail',
+    renderKind: 'detail',
     source: currentIssueStateId,
     children: [{ nodeId: issueEditorViewId }],
     actionIds: [updateIssueActionId, deleteIssueActionId, addCommentActionId],
@@ -170,6 +173,7 @@ export function createIssueTrackerModel(): ApplicationGraph {
   const createIssueViewId = graph.addNode({
     type: 'view',
     name: 'CreateIssue',
+    renderKind: 'create',
     source: filtersStateId,
     actionIds: [createIssueActionId],
   });

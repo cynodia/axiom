@@ -34,6 +34,7 @@ export interface ViewChild {
 
 export interface ViewDef extends BaseNode {
   type: 'view';
+  renderKind?: 'list' | 'detail' | 'editor' | 'create' | 'generic';
   source?: string;
   children?: ViewChild[];
   actionIds?: string[];

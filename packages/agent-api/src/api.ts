@@ -31,6 +31,58 @@ interface ActiveChange {
   modifiedNodes: Set<string>;
 }
 
+interface ConstraintHelpers {
+  entity: (name: string) => EntityDef | undefined;
+  field: (entityName: string, fieldName: string) => FieldDef | undefined;
+  fieldRequired: (entityName: string, fieldName: string) => boolean;
+  fieldType: (entityName: string, fieldName: string, expected: string) => boolean;
+  fieldHasValidation: (entityName: string, fieldName: string, validation: string) => boolean;
+  fieldEnum: (entityName: string, fieldName: string, allowed: string[]) => boolean;
+}
+
+/**
+ * Evaluates a constraint expression using a safe declarative DSL.
+ *
+ * Supported call forms (resolved against `helpers`):
+ *   fieldRequired(entityName, fieldName)
+ *   fieldType(entityName, fieldName, expected)
+ *   fieldHasValidation(entityName, fieldName, validation)
+ *   fieldEnum(entityName, fieldName, [allowed, ...])
+ *
+ * Throws on unrecognized expressions so constraint errors surface clearly.
+ */
+function evaluateConstraintExpression(
+  expression: string,
+  helpers: ConstraintHelpers,
+  _targetEntity: EntityDef | undefined,
+): boolean {
+  const trimmed = expression.trim();
+
+  // Parse: functionName(arg1, arg2, ...) — each arg is a JSON literal or JSON array
+  const fnMatch = trimmed.match(/^(\w+)\((.+)\)$/s);
+  if (!fnMatch) {
+    throw new Error(`Unsupported constraint expression syntax: "${trimmed}"`);
+  }
+
+  const fnName = fnMatch[1] as keyof ConstraintHelpers;
+  const rawArgs = fnMatch[2].trim();
+
+  // Parse args as a JSON array so we support strings, numbers, and arrays safely
+  let args: unknown[];
+  try {
+    args = JSON.parse(`[${rawArgs}]`) as unknown[];
+  } catch {
+    throw new Error(`Could not parse arguments for constraint expression: "${trimmed}"`);
+  }
+
+  const fn = helpers[fnName];
+  if (typeof fn !== 'function') {
+    throw new Error(`Unknown constraint function: "${String(fnName)}"`);
+  }
+
+  return Boolean((fn as (...a: unknown[]) => unknown)(...args));
+}
+
 export class AgentAPI {
   private activeChange?: ActiveChange;
   private history: ChangeRecord[] = [];
@@ -158,7 +210,7 @@ export class AgentAPI {
     const entities = this.graph.getNodesByType<EntityDef>('entity');
     const entityByName = new Map(entities.map((entity) => [entity.name, entity]));
     const entityById = new Map(entities.map((entity) => [entity.id, entity]));
-    const helpers = {
+    const helpers: ConstraintHelpers = {
       entity: (name: string) => entityByName.get(name),
       field: (entityName: string, fieldName: string) =>
         entityByName.get(entityName)?.fields.find((field) => field.name === fieldName),
@@ -191,28 +243,7 @@ export class AgentAPI {
       }
 
       try {
-        const evaluate = new Function(
-          'helpers',
-          'entity',
-          'field',
-          'fieldRequired',
-          'fieldType',
-          'fieldHasValidation',
-          'fieldEnum',
-          'targetEntity',
-          `return Boolean(${constraint.expression});`,
-        ) as (...args: unknown[]) => boolean;
-
-        const passed = evaluate(
-          helpers,
-          helpers.entity,
-          helpers.field,
-          helpers.fieldRequired,
-          helpers.fieldType,
-          helpers.fieldHasValidation,
-          helpers.fieldEnum,
-          targetEntity,
-        );
+        const passed = evaluateConstraintExpression(constraint.expression, helpers, targetEntity);
         return {
           constraintId: constraint.id,
           constraintName: constraint.name,

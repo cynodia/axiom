@@ -22,7 +22,6 @@ for (const node of nodes) {
     states.set(node.name, clone(node.initialValue ?? null));
   }
 }
-const subscribers = new Set();
 const validStatuses = (() => {
   const issue = entityByName.get('Issue');
   const field = issue && issue.fields.find((candidate) => candidate.name === 'status');
@@ -38,9 +37,6 @@ function compileRoute(path) {
     const clean = candidate.split('?')[0];
     const routeParts = clean.split('/').filter(Boolean);
     if (parts.length !== routeParts.length) {
-      if (parts.length === 0 && routeParts.length === 0) {
-        return {};
-      }
       return null;
     }
     const params = {};
@@ -179,6 +175,7 @@ function syncRoute() {
   }
   if (match && match.route && match.route.path !== '/issues/:id') {
     setState('currentIssue', null);
+    return;
   }
   render();
 }

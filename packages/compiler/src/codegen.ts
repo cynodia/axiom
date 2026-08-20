@@ -20,15 +20,18 @@ import type { ActionDef, ApplicationGraphData, RouteDef, ViewDef } from '@axiom/
 
         function createViewRenderer(view: ViewDef): string {
           const fnName = `renderView_${sanitizeFunctionSuffix(view.id)}`;
-          const viewName = JSON.stringify(view.name);
+          const renderKind = view.renderKind ?? 'generic';
+          const renderCall: Record<string, string> = {
+            list: 'renderIssueList()',
+            detail: 'renderIssueDetail()',
+            editor: `renderIssueEditor(globalThis.__AXIOM_APP__.getState('currentIssue'))`,
+            create: 'renderCreateIssue()',
+            generic: `renderGeneric(${JSON.stringify(view)})`,
+          };
+          const body = renderCall[renderKind] ?? `renderGeneric(${JSON.stringify(view)})`;
           return [
             `function ${fnName}(ctx) {`,
-            `  const viewName = ${viewName};`,
-            `  if (viewName === 'IssueList') { return renderIssueList(); }`,
-            `  if (viewName === 'IssueDetail') { return renderIssueDetail(); }`,
-            `  if (viewName === 'IssueEditor') { return renderIssueEditor(globalThis.__AXIOM_APP__.getState('currentIssue')); }`,
-            `  if (viewName === 'CreateIssue') { return renderCreateIssue(); }`,
-            `  return renderGeneric(${JSON.stringify(view)});`,
+            `  return ${body};`,
             `}`,
           ].join('\n');
         }
