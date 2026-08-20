@@ -1,4 +1,9 @@
-import { inferLocationType, semanticContextFromGraph, validateGraph } from '@axiom/core';
+import {
+  inferLocationType,
+  locationRootStateId,
+  semanticContextFromGraph,
+  validateGraph,
+} from '@axiom/core';
 import type {
   ActionDef,
   ApplicationGraph,
@@ -117,6 +122,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
   // Resolve what each input writes to, so the runtime carries no type inference itself.
   const semantics = semanticContextFromGraph(graph);
   const locationTypes: Record<NodeId, TypeRef> = {};
+  const locationRoots: Record<NodeId, NodeId> = {};
   for (const node of Object.values(uiNodes)) {
     if (node.kind !== 'input') {
       continue;
@@ -125,6 +131,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
     if (resolved) {
       locationTypes[node.id] = resolved;
     }
+    locationRoots[node.id] = locationRootStateId(node.binding.location);
   }
 
   return {
@@ -141,6 +148,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
     routes,
     edges: graph.listEdges(),
     locationTypes,
+    locationRoots,
   };
 }
 

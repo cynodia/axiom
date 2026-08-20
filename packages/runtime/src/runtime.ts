@@ -21,6 +21,7 @@ import type { MutationContext, MutationLogEntry, MutationResult } from './mutati
 import { LocationResolutionError, resolveLocation } from './mutation/resolve-location.js';
 import { createStateStore } from './mutation/store.js';
 import { createTransactionManager } from './mutation/transaction.js';
+import type { RuntimeTransaction } from './mutation/transaction.js';
 import {
   cloneValue,
   compareValues,
@@ -273,6 +274,26 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       mutationLog.push(entry);
     },
   });
+
+  /**
+   * Settles a transaction and records the outcome against everything it logged. Only the
+   * outermost transaction decides: a nested one shares its parent's fate.
+   */
+  function settle(transaction: RuntimeTransaction, outcome: 'committed' | 'rolled-back'): void {
+    if (outcome === 'committed') {
+      transaction.commit();
+    } else {
+      transaction.rollback();
+    }
+    if (!transaction.isRoot) {
+      return;
+    }
+    for (const entry of mutationLog) {
+      if (entry.transactionId === transaction.id && entry.outcome === undefined) {
+        entry.outcome = outcome;
+      }
+    }
+  }
 
   /** Applies a mutation inside the current transaction and reports resolution failures. */
   function mutate(
@@ -576,6 +597,48 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     return failures;
   }
 
+  /** Invariant failures that must never be left standing in canonical state. */
+  function hardViolations(): RuntimeDiagnostic[] {
+    return evaluateInvariants().filter((diagnostic) => diagnostic.severity === 'error');
+  }
+
+  function violationKey(diagnostic: RuntimeDiagnostic): string {
+    return [
+      diagnostic.code,
+      diagnostic.nodeId ?? '',
+      diagnostic.fieldId ?? '',
+      diagnostic.message,
+    ].join('|');
+  }
+
+  function countViolations(violations: RuntimeDiagnostic[]): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const violation of violations) {
+      const key = violationKey(violation);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  /**
+   * Violations that were not already present. A change is only held responsible for what
+   * it broke, so data that was already invalid does not make the rest of the UI unusable.
+   */
+  function violationsIntroducedSince(before: Map<string, number>): RuntimeDiagnostic[] {
+    const remaining = new Map(before);
+    const introduced: RuntimeDiagnostic[] = [];
+    for (const violation of hardViolations()) {
+      const key = violationKey(violation);
+      const outstanding = remaining.get(key) ?? 0;
+      if (outstanding > 0) {
+        remaining.set(key, outstanding - 1);
+        continue;
+      }
+      introduced.push(violation);
+    }
+    return introduced;
+  }
+
   function evaluateConstraint(constraint: ConstraintDef): RuntimeDiagnostic[] {
     const severity = constraint.severity ?? 'error';
     const failures: RuntimeDiagnostic[] = [];
@@ -765,13 +828,13 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
 
     if (violations.length > 0) {
-      transaction.rollback();
+      settle(transaction, 'rolled-back');
       violations.forEach(report);
       renderApplication();
       return { ok: false, diagnostics: violations };
     }
 
-    transaction.commit();
+    settle(transaction, 'committed');
     renderApplication();
     return { ok: true, diagnostics: operationDiagnostics };
   }
@@ -1080,9 +1143,18 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
 
         // An input mutates through the same engine and transaction machinery as an
         // action. There is no separate write path inside the renderer.
+        //
+        // A write to canonical state is transactional with respect to hard invariants:
+        // if the value would break one, the whole mutation is rolled back. A write to a
+        // draft is not, because a draft is incomplete by definition while it is filled in.
         const apply = (event: DomEvent): void => {
           const source = (event.target ?? control) as DomElement;
           const next = coerceInputValue(node.id, source.value ?? '', source.checked);
+          const rootStateId = ir.locationRoots[node.id];
+          const rootState = rootStateId === undefined ? undefined : statesById.get(rootStateId);
+          const guarded = inputValidation === 'immediate' && rootState !== undefined && rootState.draft !== true;
+          const before = guarded ? countViolations(hardViolations()) : null;
+
           const transaction = transactions.begin();
           const context: MutationContext = {
             source: 'ui',
@@ -1097,18 +1169,21 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           );
 
           if (failures.length > 0) {
-            transaction.rollback();
+            settle(transaction, 'rolled-back');
             failures.forEach(report);
           } else {
-            transaction.commit();
-            if (inputValidation === 'immediate') {
-              // Constraints are evaluated but a half-typed value is not rolled back;
-              // applications surface that state with conditional UI instead.
-              for (const violation of evaluateInvariants()) {
-                if (violation.severity === 'error') {
-                  report(violation);
-                }
-              }
+            const introduced = before ? violationsIntroducedSince(before) : [];
+            if (introduced.length > 0) {
+              settle(transaction, 'rolled-back');
+              introduced.forEach(report);
+              report({
+                code: 'INPUT_REJECTED',
+                message: `${node.label ?? node.id} kept its previous value: ${introduced[0].message}`,
+                severity: 'warning',
+                nodeId: node.id,
+              });
+            } else {
+              settle(transaction, 'committed');
             }
           }
 
@@ -1224,10 +1299,10 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         failures,
       );
       if (failures.length > 0) {
-        transaction.rollback();
+        settle(transaction, 'rolled-back');
         failures.forEach(report);
       } else {
-        transaction.commit();
+        settle(transaction, 'committed');
       }
       renderApplication();
     },

@@ -124,6 +124,15 @@ checked, and **every mutation rolls back together** if anything fails.
 no field id. An input change goes through the same mutation engine and transaction as an
 action; there is no second write path inside the renderer.
 
+**Canonical state is always valid; drafts need not be.** A UI write whose location is
+rooted in ordinary state is transactional with respect to hard invariants: if the value
+would break one, the whole mutation rolls back and the control re-renders with what is
+actually stored. A write rooted in a `draft: true` state is not guarded, because a draft is
+incomplete by definition while it is being filled in — the action that commits it is where
+it has to be valid. This is spec3 §38's two editing patterns made enforceable rather than
+advisory, and which one an application uses is visible in the graph: look at what the
+input's location is rooted in.
+
 **Edges are derived, not hand written.** `synchronizeEdges(graph)` recomputes every
 structural edge from the node definitions and marks them `metadata.derived`. Write edges
 carry `metadata.fieldIds`, so `writes Product.name` is distinguishable from
@@ -167,16 +176,22 @@ impossible, so an editor must address the record where it is actually stored —
 | `resolve-location.ts` | `Location` → `ResolvedLocation` with `read()`, `write()` and a `ResolvedPath` of semantic provenance. |
 | `mutation-engine.ts` | Applies `set` / `insert` / `remove`, records provenance and the mutation log. |
 
-Two properties hold the design together:
+Three properties hold the design together:
 
 - **Stored values are deeply frozen.** An accidental `object[field] = value` on anything
   read from the store throws in strict mode rather than silently corrupting state.
 - **Writes rebuild the path** from the root state instead of editing in place, so a
   mutation never depends on the identity of an object an expression returned.
+- **A change is only judged on what it changed.** The invariant guard compares violations
+  before and after, so data that was already invalid — restored from storage, say — does
+  not make the rest of the UI unwritable. Actions are stricter, per spec3 §27: an action
+  must leave the whole application valid, not merely avoid breaking it further.
 
 `runtime.getMutationLog()` returns every mutation with its source (`action` / `ui` /
-`system` / `native`), the node that caused it, its transaction id, and the resolved path
-(`state_products → [product-1] → field_product_name`).
+`system` / `native`), the node that caused it, its transaction id, the resolved path
+(`state_products → [product-1] → field_product_name`), and its `outcome` once the
+surrounding transaction settles. Rejected attempts stay in the log as `rolled-back`.
+Only the outermost transaction decides an outcome; a nested one shares its parent's fate.
 
 ## How the browser page is produced
 
@@ -219,9 +234,10 @@ a `HostEnvironment`, so it can be driven headlessly without a browser or jsdom.
   used for fine-grained updates.
 - **Invariants are re-evaluated in full** after every action. Constraint read dependencies
   are in the graph, so selective evaluation is possible but unimplemented.
-- **UI mutations do not roll back on constraint failure.** A half-typed value is expected
-  to be transiently invalid; applications surface it with conditional UI. Actions do roll
-  back. `inputValidation: 'deferred'` skips the check entirely.
+- **`inputValidation: 'deferred'`** turns off the per-keystroke invariant check entirely,
+  leaving validity to the next action. `'immediate'` is the default.
+- **Warning-severity constraints never block a write.** Only error severity — the default
+  — is treated as a hard invariant.
 - **Remote persistence is declared but not executed** (`StatePersistence.kind: 'remote'`
   validates and does nothing). `memory` and `local-storage` work.
 - **Type inference is deliberately partial** (spec3 §22): it rejects obvious mismatches and

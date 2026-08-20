@@ -51,4 +51,9 @@ export interface ApplicationIR {
    * runtime never has to re-derive it.
    */
   locationTypes: Record<NodeId, TypeRef>;
+  /**
+   * The state each input's bound location is rooted in. A runtime uses it to tell a write
+   * to canonical application state from a write to a draft.
+   */
+  locationRoots: Record<NodeId, NodeId>;
 }

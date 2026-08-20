@@ -24,6 +24,8 @@ export interface MutationLogEntry {
   description: string;
   oldValue?: unknown;
   newValue?: unknown;
+  /** Set when the surrounding transaction settles. */
+  outcome?: 'committed' | 'rolled-back';
 }
 
 export interface MutationEngineOptions {

@@ -58,10 +58,12 @@ const ROUTE = nodeId('route_record');
 const PARAM_ROUTE_ID = nodeId('param_route_id');
 const VIEW = nodeId('ui_view');
 const UI_LABEL_INPUT = nodeId('ui_label_input');
+const UI_PRICE_INPUT = nodeId('ui_price_input');
 const UI_DRAFT_INPUT = nodeId('ui_draft_input');
 const UI_LABEL_DISPLAY = nodeId('ui_label_display');
 const SCOPE = nodeId('scope_lookup');
 const CONSTRAINT_LABEL = nodeId('constraint_label');
+const CONSTRAINT_PRICE = nodeId('constraint_price');
 
 /** The record named by the route, addressed where it is actually stored. */
 const routedRecord = itemLocation(
@@ -207,6 +209,12 @@ function buildGraph(): ApplicationGraph {
     label: 'Draft label',
     binding: { location: fieldLocation(stateLocation(STATE_DRAFT), F_LABEL) },
   });
+  graph.addNode<InputNode>({
+    id: UI_PRICE_INPUT,
+    kind: 'input',
+    label: 'Price',
+    binding: { location: fieldLocation(routedRecord, F_PRICE) },
+  });
   graph.addNode<FieldDisplayNode>({
     id: UI_LABEL_DISPLAY,
     kind: 'field-display',
@@ -216,7 +224,7 @@ function buildGraph(): ApplicationGraph {
   graph.addNode<ViewNode>({
     id: VIEW,
     kind: 'view',
-    children: [UI_LABEL_INPUT, UI_DRAFT_INPUT, UI_LABEL_DISPLAY],
+    children: [UI_LABEL_INPUT, UI_PRICE_INPUT, UI_DRAFT_INPUT, UI_LABEL_DISPLAY],
   });
 
   graph.addNode<ConstraintDef>({
@@ -226,6 +234,16 @@ function buildGraph(): ApplicationGraph {
     entityId: ENTITY,
     message: 'Every record must keep a label.',
     expression: call('required', field(ref(ENTITY), F_LABEL)),
+  });
+
+  graph.addNode<ConstraintDef>({
+    id: CONSTRAINT_PRICE,
+    kind: 'constraint',
+    name: 'Price should be positive',
+    entityId: ENTITY,
+    severity: 'warning',
+    message: 'A price of zero is unusual.',
+    expression: binary('gt', field(ref(ENTITY), F_PRICE), literal(0)),
   });
 
   graph.addNode<RouteDef>({
@@ -240,18 +258,27 @@ function buildGraph(): ApplicationGraph {
   return graph;
 }
 
-function createApp(options: MemoryHostOptions = {}) {
+function createApp(options: MemoryHostOptions & { inputValidation?: 'immediate' | 'deferred' } = {}) {
   const host = createMemoryHost({ path: '/records/r1', ...options });
   const app = createAxiomRuntime({
     ir: compileToIR(buildGraph()),
     rootElement: host.root,
     host,
+    ...(options.inputValidation ? { inputValidation: options.inputValidation } : {}),
     nativeOperations: {
       'test.stamp': (inputs) => `${String(inputs.current)} (stamped)`,
     },
   });
   app.start();
   return { app, host };
+}
+
+/** Types a value into a control and re-reads it after the re-render. */
+function typeInto(host: { root: MemoryElement }, id: string, value: string): MemoryElement {
+  const element = control(host.root, id);
+  element.value = value;
+  element.dispatch('input');
+  return control(host.root, id);
 }
 
 const records = (app: ReturnType<typeof createApp>['app']): Array<Record<string, unknown>> =>
@@ -356,6 +383,7 @@ test('an input writes to its location through the same engine as an action', () 
   assert.equal(entry?.description, `${STATE_RECORDS} → [r1] → ${F_LABEL}`);
   assert.equal(entry?.oldValue, 'First');
   assert.equal(entry?.newValue, 'Typed');
+  assert.equal(entry?.outcome, 'committed');
 });
 
 test('a draft input writes to the draft, never to the stored record', () => {
@@ -400,4 +428,84 @@ test('the runtime refuses to write derived state even if asked directly', () => 
     app.diagnostics().some((diagnostic) => diagnostic.code === 'DERIVED_STATE_WRITE'),
     'the attempt is reported rather than silently ignored',
   );
+});
+
+// ---------------------------------------------------------- invariant guarding
+
+test('a UI write that would break a hard invariant is rolled back', () => {
+  const { app, host } = createApp();
+
+  const reverted = typeInto(host, UI_LABEL_INPUT, '');
+
+  assert.equal(records(app)[0][F_LABEL], 'First', 'canonical state keeps the valid value');
+  assert.equal(reverted.value, 'First', 'the control shows what is actually stored');
+  assert.ok(
+    app.diagnostics().some((diagnostic) => diagnostic.code === 'CONSTRAINT_VIOLATION'),
+    'the violation is reported',
+  );
+  assert.ok(app.diagnostics().some((diagnostic) => diagnostic.code === 'INPUT_REJECTED'));
+
+  const entry = app.getMutationLog().at(-1);
+  assert.equal(entry?.outcome, 'rolled-back', 'the attempt is recorded as rejected');
+});
+
+test('a valid write still lands after a rejected one', () => {
+  const { app, host } = createApp();
+  typeInto(host, UI_LABEL_INPUT, '');
+  typeInto(host, UI_LABEL_INPUT, 'Second try');
+
+  assert.equal(records(app)[0][F_LABEL], 'Second try');
+  assert.deepEqual(
+    app.getMutationLog().map((entry) => entry.outcome),
+    ['rolled-back', 'committed'],
+  );
+});
+
+test('a draft may hold a temporarily invalid value', () => {
+  const { app, host } = createApp();
+
+  typeInto(host, UI_DRAFT_INPUT, 'Started');
+  const cleared = typeInto(host, UI_DRAFT_INPUT, '');
+
+  assert.equal(
+    (app.getState(STATE_DRAFT) as Record<string, unknown>)[F_LABEL],
+    '',
+    'the draft accepts an incomplete value',
+  );
+  assert.equal(cleared.value, '', 'and the control keeps showing it');
+  assert.equal(app.getMutationLog().at(-1)?.outcome, 'committed');
+});
+
+test('data that was already invalid does not lock the rest of the UI', () => {
+  const { app, host } = createApp();
+
+  // Seed a violation in a record the user is not editing.
+  const seeded = records(app);
+  seeded[1][F_LABEL] = '';
+  app.setState(STATE_RECORDS, seeded);
+
+  typeInto(host, UI_LABEL_INPUT, 'Still editable');
+
+  assert.equal(records(app)[0][F_LABEL], 'Still editable', 'the edit is only judged on what it changed');
+  assert.equal(records(app)[1][F_LABEL], '', 'the pre-existing violation is left alone');
+});
+
+test('a warning-severity constraint does not block a write', () => {
+  const { app, host } = createApp();
+
+  typeInto(host, UI_PRICE_INPUT, '0');
+
+  assert.equal(records(app)[0][F_PRICE], 0, 'only hard invariants are transactional');
+  assert.equal(app.getMutationLog().at(-1)?.outcome, 'committed');
+});
+
+test('deferred validation leaves the check to the next action', () => {
+  const { app, host } = createApp({ inputValidation: 'deferred' });
+
+  typeInto(host, UI_LABEL_INPUT, '');
+  assert.equal(records(app)[0][F_LABEL], '', 'nothing is checked while typing');
+
+  const result = app.invokeAction(ACTION_RAISE);
+  assert.equal(result.ok, false, 'the action refuses to commit on top of invalid state');
+  assert.equal(records(app)[0][F_PRICE], 10);
 });

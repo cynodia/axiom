@@ -192,3 +192,68 @@ test('the inventory application creates products and lists warehouses', () => {
   assert.match(textOf(host.root), /North depot/);
   assert.match(textOf(host.root), /Kristiansand/);
 });
+
+// ------------------------------------------------- the two editing patterns
+
+test('editing a stored record directly cannot leave it invalid', () => {
+  const { app, host } = run(createIssueTrackerGraph(), { path: '/issues/issue-1' });
+
+  type(host.root, issueTrackerIds.UI_DETAIL_TITLE_INPUT, '');
+
+  const stored = app.getState(issueTrackerIds.STATE_ISSUES) as Array<Record<string, unknown>>;
+  assert.equal(
+    stored[0][issueTrackerIds.F_ISSUE_TITLE],
+    'Describe the semantic UI vocabulary',
+    'the direct editor keeps canonical state valid',
+  );
+  assert.equal(control(host.root, issueTrackerIds.UI_DETAIL_TITLE_INPUT).value, 'Describe the semantic UI vocabulary');
+
+  type(host.root, issueTrackerIds.UI_DETAIL_TITLE_INPUT, 'A better title');
+  assert.equal(
+    (app.getState(issueTrackerIds.STATE_ISSUES) as Array<Record<string, unknown>>)[0][
+      issueTrackerIds.F_ISSUE_TITLE
+    ],
+    'A better title',
+  );
+});
+
+test('filling in a draft may pass through invalid states', () => {
+  const { app, host } = run(createIssueTrackerGraph(), { path: '/issues/new' });
+
+  type(host.root, 'ui_create_title_input' as NodeId, 'Half');
+  type(host.root, 'ui_create_title_input' as NodeId, '');
+
+  assert.equal(
+    (app.getState(issueTrackerIds.STATE_DRAFT_ISSUE) as Record<string, unknown>)[
+      issueTrackerIds.F_ISSUE_TITLE
+    ],
+    '',
+    'a draft is incomplete by definition while it is being filled in',
+  );
+  assert.equal(
+    app.invokeAction(issueTrackerIds.ACTION_CREATE_ISSUE).ok,
+    false,
+    'the action is where the draft has to be valid',
+  );
+
+  type(host.root, 'ui_create_title_input' as NodeId, 'Complete now');
+  assert.equal(app.invokeAction(issueTrackerIds.ACTION_CREATE_ISSUE).ok, true);
+});
+
+test('a required field of a stored product is equally protected', () => {
+  const { app, host } = run(createInventoryGraph(), { path: '/products/product-1' });
+  const skuInput = findByNodeId(host.root, 'ui_product_sku_input' as NodeId).find(
+    (element) => element.tagName !== 'label',
+  );
+  assert.ok(skuInput);
+
+  skuInput.value = '';
+  skuInput.dispatch('input');
+
+  assert.equal(
+    (app.getState(inventoryIds.STATE_PRODUCTS) as Array<Record<string, unknown>>)[0][
+      inventoryIds.F_PRODUCT_SKU
+    ],
+    'AX-1001',
+  );
+});
