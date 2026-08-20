@@ -10,18 +10,23 @@ human-oriented source files: agents modify the graph, and a generic compiler and
 turn it into a working browser application whose generated JavaScript nobody reads.
 
 * `doc/spec.md` — the 0.1 vision, research goals and metrics.
-* `doc/spec2.md` — the **0.2 architecture specification, which this codebase implements**.
-  It is the authority on design decisions. §2 (invariants), §39–§41 (the domain
-  independence tests), §44 (definition of done) and §49 (the architectural warning)
-  settle most arguments.
+* `doc/spec2.md` — the 0.2 architecture: domain-independent compiler and runtime.
+* `doc/spec3.md` — the **0.3 architecture: semantic mutation and addressing**. Together
+  with spec2 this is the authority on design decisions.
 
-The governing rule, from spec2 §2.4:
+Two rules govern almost every decision:
 
-> `core`, `compiler`, `runtime` and `agent-api` must contain no knowledge of any
-> application domain. A new application is a new graph, never a framework change.
+> **Domain independence** (spec2 §2.4) — `core`, `compiler`, `runtime` and `agent-api`
+> must contain no knowledge of any application domain. A new application is a new graph,
+> never a framework change.
 
-`packages/core/test/architecture.test.ts` enforces this by scanning framework sources for
-application vocabulary. It is a real test, not a guideline — check it before naming things.
+> **Addressed mutation** (spec3 §3) — no application state may be changed by mutating the
+> JavaScript object some expression happened to return. Expressions produce values;
+> **locations** name writable positions.
+
+Both are enforced by tests, not convention: `packages/core/test/architecture.test.ts`
+scans framework sources for application vocabulary, and `packages/runtime/test/store.test.ts`
+checks that state writes stay confined to the mutation subsystem.
 
 ## Commands
 
@@ -40,7 +45,22 @@ node packages/cli/dist/index.js build    packages/demo/dist/issue-tracker.js --e
 node packages/cli/dist/index.js serve    packages/demo/dist/inventory.js --export=createInventoryGraph --port=3000
 ```
 
+`inspect` renders locations in readable form, which is the fastest way to see what an
+action actually writes:
+
+```
+- receiveStock (action_receive_stock) [writes → products (On hand), reads → products (Id)]
+    set products → [Id = id] → On hand
+```
+
 There is no linter, formatter, or CI. Match the style of the file you are editing.
+
+## Working agreements
+
+- **Add new files to git as you create them.** `git add` every file you introduce in the
+  same session you introduce it; a change set that builds only because of untracked files
+  is broken for everyone else. Staging is enough — don't commit unless asked.
+- Don't commit or push unless the user asks for it.
 
 ## Layout
 
@@ -51,10 +71,10 @@ so editors and tests resolve to source.
 
 | Package     | Owns |
 | ----------- | ---- |
-| `core`      | `ApplicationGraph`, node and field definitions, `TypeRef`, expressions, edge kinds, validation, edge derivation, the IR contract. No dependencies. |
-| `agent-api` | Semantic queries, transactions, transformations, change sets. |
+| `core`      | `ApplicationGraph`, node and field definitions, `TypeRef`, expressions, **locations**, edge kinds, validation, type inference, edge derivation, the IR contract. No dependencies. |
+| `agent-api` | Semantic queries, mutation impact, transactions, transformations, change sets. |
 | `compiler`  | Validation + normalization into `ApplicationIR`, and page emission. |
-| `runtime`   | State, expression evaluation, action execution, constraint checking, UI rendering, routing. |
+| `runtime`   | State store, expression evaluation, the mutation subsystem, constraint checking, UI rendering, routing. |
 | `cli`       | Graph loading, `inspect` / `validate` / `build` / `serve`. |
 | `demo`      | Two applications: `issue-tracker.ts` and `inventory.ts`. |
 
@@ -78,34 +98,46 @@ optional | enum` (`core/type-ref.ts`), with builders `primitiveType()`, `entityT
 `object`, `binary`, `unary`, `call`, `filter`, `find`. A `ref` resolves an **id** against
 the scope chain, in order: action parameters → iteration scopes → route parameters →
 state. The iteration scope for a `repeat` is the repeat node's own id, and for
-`filter`/`find` it is the expression's `scopeId`; that is why templates say
-`ref(<repeat node id>)` rather than naming an alias.
+`filter`/`find` it is the expression's `scopeId`. Evaluation is pure: it never changes
+state.
+
+**Locations name writable positions** (`core/location.ts`): `state`, `field` (a field of
+another location), and `collection-item` (an item of a collection location, selected by
+identity — preferred — or by index). Build them with `stateLocation()`,
+`fieldLocation()`, `itemLocation()`, `identitySelector()`, or the shorthand
+`itemFieldLocation(stateId, identityFieldId, identityValue, fieldId)`. Every location is
+structurally traceable to its root state via `locationRootStateId()`; the expressions
+inside it (`locationExpressions()`) are read dependencies, and the fields it writes
+(`locationFieldIds()`) are write dependencies.
 
 **Nodes.** `entity`, `state`, `action`, `constraint`, `route`, plus the nine UI kinds
 (`view`, `container`, `text`, `repeat`, `field-display`, `form`, `input`, `button`,
 `conditional`). All of them live in the same graph and are discriminated by `kind`.
 
+**Behaviour is data.** An `ActionDef` has parameters, preconditions, operations,
+postconditions and failure modes. Operations are `set`, `insert`, `remove` (the three
+mutations, each addressing a `Location`), plus `invoke`, `navigate` and `native`. An
+action runs as a transaction: mutations apply, then schema conformance and constraints are
+checked, and **every mutation rolls back together** if anything fails.
+
+**Inputs write to a location too.** `InputNode.binding` is `{ location }` — no expression,
+no field id. An input change goes through the same mutation engine and transaction as an
+action; there is no second write path inside the renderer.
+
 **Edges are derived, not hand written.** `synchronizeEdges(graph)` recomputes every
-structural edge (`contains`, `reads`, `writes`, `binds`, `invokes`, `renders`,
-`derives-from`, `constrains`, `routes-to`, `references`, `depends-on`) from the node
-definitions and marks them `metadata.derived`. Call it after building or transforming a
-graph; `Transaction.validate()` does it for you. Hand-added edges without that marker are
-preserved.
+structural edge from the node definitions and marks them `metadata.derived`. Write edges
+carry `metadata.fieldIds`, so `writes Product.name` is distinguishable from
+`writes Product.stockQuantity`. Call it after building or transforming a graph;
+`Transaction.validate()` does it for you. Hand-added edges without the marker survive.
 
 **Graph reads are deep clones.** Mutating a node you fetched changes nothing — write it
-back with `updateNode`. This applies to the authoring graph only; the runtime works on the
-IR and deliberately keeps live references so `update-field` can mutate a stored record.
+back with `updateNode`.
 
 **Validation is not optional.** `validateGraph` resolves every reference — nodes, fields,
-edges, expressions, UI children, route targets — and `compileToIR` throws
-`GraphValidationError` rather than compiling an invalid graph. Warnings (unreachable UI,
-missing identity field) do not block.
-
-**Behaviour is data.** An `ActionDef` has parameters, preconditions, operations,
-postconditions and failure modes. Operations are `set-state`, `add-item`, `remove-item`,
-`update-field`, `invoke`, `navigate` and `native`. An action runs as a transaction: the
-runtime snapshots state, applies operations, then checks schema conformance and
-constraints, and **restores the snapshot if anything fails**.
+edges, expressions, locations, UI children, route targets — and `compileToIR` throws
+`GraphValidationError` rather than compiling an invalid graph. Location validation
+additionally rejects writes to derived state, fields that don't belong to the addressed
+entity, selectors on non-collections, and obviously incompatible assignments.
 
 **Three layers of correctness**, don't confuse them:
 1. `validateGraph` — is the graph structurally sound? (authoring time)
@@ -117,69 +149,88 @@ constraints, and **restores the snapshot if anything fails**.
 are skipped by instance validation, otherwise a half-filled form would fail every
 invariant and roll back every action.
 
-## Conventions
+**Derived state is read-only and copied.** A state with a `derivation` is recomputed on
+demand and handed out as a frozen deep copy. Writing to it is rejected by the validator
+and by the runtime. This is deliberate: it makes the aliasing the 0.2 runtime relied on
+impossible, so an editor must address the record where it is actually stored — see
+`packages/demo/test/acceptance.test.ts`, "editing a record works through its location".
 
-- ESM throughout (`"type": "module"`, `module: NodeNext`). **Relative imports need the
-  `.js` extension** (`./graph.js`), even from `.ts` files.
-- `strict` is on; `declaration` and `composite` are on for project references.
-- Tests are `node:test` + `node:assert/strict` under `packages/*/test/`, compiled by a
-  separate `tsconfig.test.json` into `dist/test/`. A package with tests builds both
-  configs (`tsc -b tsconfig.json tsconfig.test.json`) and declares a `test` script.
-- Never write an application-domain word into a framework package — not in code, not in a
-  comment, not in an example. `ValidationIssue` is the single allowed collision (spec2 §26
-  names the type), and it is listed explicitly in the architecture test.
+## The mutation subsystem
+
+`packages/runtime/src/mutation/` is the only place application state is written.
+
+| Module | Role |
+| ------ | ---- |
+| `values.ts` | Cloning, deep freezing, comparison, coercion helpers. |
+| `store.ts` | The state store. Owns the map, freezes everything on the way in, snapshots. |
+| `transaction.ts` | Runtime transactions; nested ones join the outermost snapshot. |
+| `resolve-location.ts` | `Location` → `ResolvedLocation` with `read()`, `write()` and a `ResolvedPath` of semantic provenance. |
+| `mutation-engine.ts` | Applies `set` / `insert` / `remove`, records provenance and the mutation log. |
+
+Two properties hold the design together:
+
+- **Stored values are deeply frozen.** An accidental `object[field] = value` on anything
+  read from the store throws in strict mode rather than silently corrupting state.
+- **Writes rebuild the path** from the root state instead of editing in place, so a
+  mutation never depends on the identity of an object an expression returned.
+
+`runtime.getMutationLog()` returns every mutation with its source (`action` / `ui` /
+`system` / `native`), the node that caused it, its transaction id, and the resolved path
+(`state_products → [product-1] → field_product_name`).
+
+## How the browser page is produced
+
+The runtime modules are ordinary, type-checked TypeScript that import nothing at run time
+except each other. `createRuntimeModuleSource()` concatenates their compiled output in
+dependency order and strips the module syntax — that is the entire "bundler". The compiler
+then inlines that source, the IR as JSON, and a two-line bootstrap into one page.
+
+**The runtime must never import a value from `@axiom/core`.** Type-only imports are fine
+(they are erased). A value import would be stripped from the bundle and become `undefined`
+in the browser, so `source.ts` now throws `UnbundledDependencyError` at build time if it
+finds one. When the runtime needs something core computes, resolve it during compilation
+and put it in the IR instead — `ApplicationIR.locationTypes` exists for exactly that
+reason. Adding a module under `mutation/` means adding it to `RUNTIME_MODULES`.
 
 ## Where the tests live, and why
 
 Test placement follows the dependency direction, which is why some tests are not in the
 package they exercise:
 
-- `core` — graph semantics, validation failures, and the architecture leak scan.
-- `runtime` — the memory host and the browser bundle shape (no IR needed).
-- `compiler` — normalization and page emission, **plus the runtime behaviour tests**:
-  `compileToIR` is the only IR producer, and the compiler is the lowest package that can
-  see both it and the runtime.
-- `agent-api` — queries, transactions, and edge maintenance.
-- `demo` — both applications end to end, and the two acceptance scenarios from spec2 §45
-  and §46. `acceptance.test.ts` is the canonical demonstration: an agent adds a field and
-  its UI purely through graph operations, and the application supports it immediately.
+- `core` — graph semantics, locations and their validation, type inference, and the
+  architecture leak scan.
+- `runtime` — the store's freezing and snapshot behaviour, location resolution, the
+  memory host, the browser bundle's shape, and the mutation-confinement check.
+- `compiler` — normalization and page emission, **plus the runtime behaviour tests**
+  (`runtime.test.ts`, `mutation.test.ts`): `compileToIR` is the only IR producer, and the
+  compiler is the lowest package that can see both it and the runtime.
+- `agent-api` — queries, field-level dependencies, mutation impact, transactions.
+- `demo` — both applications end to end, and the acceptance scenarios from spec2 §45/§46
+  and spec3 §51/§52.
 
 `@axiom/runtime` exports `createMemoryHost()` and an in-memory DOM. That is deliberate
 framework code, not test-only scaffolding: the runtime takes its whole environment through
 a `HostEnvironment`, so it can be driven headlessly without a browser or jsdom.
 
-## How the browser page is produced
-
-`packages/runtime/src/runtime.ts` is ordinary, type-checked TypeScript that imports
-nothing at run time (only `import type` from core). `createRuntimeModuleSource()` reads
-its own compiled `dist/runtime.js` and strips the `export` keywords — that is the entire
-"bundler". The compiler then inlines that source, the IR as JSON, and a three-line
-bootstrap into one self-contained page.
-
-Consequences worth knowing:
-- **`runtime.ts` must never gain a runtime import.** A value import would break inlining.
-  Keep the DOM surface in `dom.ts` as types only.
-- The runtime is fully type-checked and tested, unlike the 0.1 string-template runtime.
-- The renderer talks to a narrow structural DOM interface, so no DOM lib types are needed
-  in `tsconfig`.
-
 ## Current limits
 
 - **Rendering is full re-render.** Every state change rebuilds the view and restores focus
-  and caret position by node id. Fine at demo scale; incremental update is unimplemented.
-- **`update-field` mutates live objects** in the store rather than resolving a write path.
-  It works because reads inside the runtime are not cloned, but it is the sharpest edge in
-  the design.
+  and caret position by node id. `MutationResult.affectedLocations` is recorded but not yet
+  used for fine-grained updates.
+- **Invariants are re-evaluated in full** after every action. Constraint read dependencies
+  are in the graph, so selective evaluation is possible but unimplemented.
+- **UI mutations do not roll back on constraint failure.** A half-typed value is expected
+  to be transiently invalid; applications surface it with conditional UI. Actions do roll
+  back. `inputValidation: 'deferred'` skips the check entirely.
 - **Remote persistence is declared but not executed** (`StatePersistence.kind: 'remote'`
   validates and does nothing). `memory` and `local-storage` work.
-- **No arithmetic beyond `add`/`subtract`/`multiply`/`divide`**, no aggregation over a
-  projection (no `map`/`sum`), and no conditional expression. Applications that need a
-  branch express it with two actions or a `conditional` UI node.
+- **Type inference is deliberately partial** (spec3 §22): it rejects obvious mismatches and
+  stays silent wherever a type depends on an iteration scope.
+- **No aggregation over a projection** (no `map`/`sum`) and no conditional expression.
+  Applications express a branch with two actions or a `conditional` UI node.
 - **Change sets are in memory** and per `AgentAPI` instance. There is no semantic version
   control and no on-disk graph format — graphs are still TypeScript builder functions,
   which remains a concession to human authoring.
-- **Styling is a small set of presentation hints** mapped to CSS classes. Spec2 §36 says
-  that is deliberate.
 
 When adding a capability, push it **down into the graph model and out of the framework**.
 If a demo application seems to need a framework change, the change must be justifiable in

@@ -176,3 +176,19 @@ export function walkExpression(expression: Expression, visit: (node: Expression)
     default:
   }
 }
+
+/** Field ids an expression reads, including nested sources and constructed records. */
+export function expressionFieldIds(expression: Expression): FieldId[] {
+  const found: FieldId[] = [];
+  walkExpression(expression, (node) => {
+    if (node.kind === 'field') {
+      found.push(node.fieldId);
+    }
+    if (node.kind === 'object') {
+      for (const entry of node.entries) {
+        found.push(entry.fieldId);
+      }
+    }
+  });
+  return found;
+}

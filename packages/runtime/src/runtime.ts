@@ -8,6 +8,7 @@ import type {
   Expression,
   FieldDef,
   FieldId,
+  Location,
   NodeId,
   Operation,
   StateDef,
@@ -15,6 +16,21 @@ import type {
   UINode,
 } from '@axiom/core';
 import type { DomElement, DomEvent, HostEnvironment } from './dom.js';
+import { createMutationEngine } from './mutation/mutation-engine.js';
+import type { MutationContext, MutationLogEntry, MutationResult } from './mutation/mutation-engine.js';
+import { LocationResolutionError, resolveLocation } from './mutation/resolve-location.js';
+import { createStateStore } from './mutation/store.js';
+import { createTransactionManager } from './mutation/transaction.js';
+import {
+  cloneValue,
+  compareValues,
+  deepFreeze,
+  isPresent,
+  isRecord,
+  toBoolean,
+  toText,
+  valuesEqual,
+} from './mutation/values.js';
 
 export interface RuntimeDiagnostic {
   code: string;
@@ -37,11 +53,17 @@ export interface RouteMatch {
 
 export type NativeImplementation = (inputs: Record<string, unknown>) => unknown;
 
+/** When constraints are evaluated after an input writes to its location. */
+export type InputValidationMode = 'immediate' | 'deferred';
+
 export interface AxiomRuntimeOptions {
   ir: ApplicationIR;
   rootElement: DomElement;
   host: HostEnvironment;
   nativeOperations?: Record<string, NativeImplementation>;
+  inputValidation?: InputValidationMode;
+  /** Records previous and next values in the mutation log. */
+  recordMutationValues?: boolean;
 }
 
 export interface AxiomRuntime {
@@ -53,6 +75,8 @@ export interface AxiomRuntime {
   navigate(path: string): void;
   currentRoute(): RouteMatch | null;
   diagnostics(): RuntimeDiagnostic[];
+  /** Every mutation this runtime has applied, in order, with its semantic location. */
+  getMutationLog(): MutationLogEntry[];
   registerNativeOperation(implementationId: string, implementation: NativeImplementation): void;
 }
 
@@ -62,70 +86,6 @@ interface Scope {
 }
 
 const MISSING = Symbol('missing');
-
-function cloneValue<T>(value: T): T {
-  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** Presence semantics used by `required` — distinct from boolean coercion. */
-function isPresent(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return false;
-  }
-  if (typeof value === 'string') {
-    return value.trim().length > 0;
-  }
-  if (Array.isArray(value)) {
-    return value.length > 0;
-  }
-  return true;
-}
-
-function toBoolean(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.length > 0;
-  }
-  return Boolean(value);
-}
-
-function toText(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-  return JSON.stringify(value);
-}
-
-function compareValues(left: unknown, right: unknown): number {
-  if (typeof left === 'number' && typeof right === 'number') {
-    return left === right ? 0 : left < right ? -1 : 1;
-  }
-  const leftText = toText(left);
-  const rightText = toText(right);
-  return leftText === rightText ? 0 : leftText < rightText ? -1 : 1;
-}
-
-function valuesEqual(left: unknown, right: unknown): boolean {
-  if (left === right) {
-    return true;
-  }
-  if (left === null || left === undefined || right === null || right === undefined) {
-    return (left ?? null) === (right ?? null);
-  }
-  if (typeof left === 'object' || typeof right === 'object') {
-    return JSON.stringify(left) === JSON.stringify(right);
-  }
-  return false;
-}
 
 function unwrapType(type: TypeRef): TypeRef {
   return type.kind === 'optional' ? unwrapType(type.valueType) : type;
@@ -157,7 +117,7 @@ function defaultForType(type: TypeRef): unknown {
 
 export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   const { ir, rootElement, host } = options;
-  const store = new Map<string, unknown>();
+  const store = createStateStore();
   const derivedCache = new Map<string, unknown>();
   const natives = new Map<string, NativeImplementation>(
     Object.entries(options.nativeOperations ?? {}),
@@ -167,9 +127,23 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   let focusedNodeId: string | null = null;
   let focusedCaret: number | null = null;
   let started = false;
+  let transactionCounter = 0;
+  const mutationLog: MutationLogEntry[] = [];
+  const inputValidation = options.inputValidation ?? 'immediate';
 
   const statesById = new Map<string, StateDef>(ir.states.map((state) => [state.id, state]));
   const entitiesById = new Map<string, EntityDef>(ir.entities.map((entity) => [entity.id, entity]));
+  const parameterTypes = new Map<string, TypeRef | undefined>();
+  for (const action of Object.values(ir.actions)) {
+    for (const parameter of action.parameters ?? []) {
+      parameterTypes.set(parameter.id, parameter.valueType);
+    }
+  }
+  for (const route of ir.routes) {
+    for (const parameter of route.parameters) {
+      parameterTypes.set(parameter.id, parameter.valueType);
+    }
+  }
 
   function report(diagnostic: RuntimeDiagnostic): void {
     diagnostics.push(diagnostic);
@@ -197,7 +171,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         const persisted = host.storage.read(key);
         if (persisted !== null) {
           try {
-            store.set(state.id, JSON.parse(persisted) as unknown);
+            store.write(state.id, JSON.parse(persisted) as unknown);
             continue;
           } catch {
             report({
@@ -209,7 +183,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           }
         }
       }
-      store.set(
+      store.write(
         state.id,
         state.initialValue === undefined ? defaultForType(state.valueType) : cloneValue(state.initialValue),
       );
@@ -223,10 +197,14 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
     const key = storageKey(state);
     if (key) {
-      host.storage.write(key, JSON.stringify(store.get(stateId) ?? null));
+      host.storage.write(key, JSON.stringify(store.read(stateId) ?? null));
     }
   }
 
+  /**
+   * Derived values are recomputed from their derivation and handed out as frozen copies,
+   * so nothing can work by sharing an object with the state it was derived from.
+   */
   function readState(stateId: string): unknown {
     const state = statesById.get(stateId);
     if (state?.derivation) {
@@ -234,33 +212,86 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return derivedCache.get(stateId);
       }
       derivedCache.set(stateId, null);
-      const value = evaluate(state.derivation, rootScope());
+      const value = deepFreeze(cloneValue(evaluate(state.derivation, rootScope())));
       derivedCache.set(stateId, value);
       return value;
     }
-    return store.get(stateId);
+    return store.read(stateId);
   }
 
+  /** The only place the store is written. Values are frozen on the way in. */
   function writeState(stateId: string, value: unknown): void {
-    store.set(stateId, value);
+    if (!statesById.has(stateId)) {
+      report({
+        code: 'UNKNOWN_STATE',
+        message: `Cannot write to unknown state ${stateId}`,
+        severity: 'error',
+        nodeId: stateId as NodeId,
+      });
+      return;
+    }
+    if (statesById.get(stateId)?.derivation) {
+      report({
+        code: 'DERIVED_STATE_WRITE',
+        message: `${stateId} is derived state and cannot be written to`,
+        severity: 'error',
+        nodeId: stateId as NodeId,
+      });
+      return;
+    }
+    store.write(stateId, value);
     derivedCache.clear();
     persistState(stateId);
   }
 
-  function snapshotStore(): Map<string, unknown> {
-    const snapshot = new Map<string, unknown>();
-    for (const [key, value] of store) {
-      snapshot.set(key, cloneValue(value));
-    }
-    return snapshot;
+  function restoreStore(snapshot: unknown): void {
+    store.restore(snapshot);
+    derivedCache.clear();
   }
 
-  function restoreStore(snapshot: Map<string, unknown>): void {
-    store.clear();
-    for (const [key, value] of snapshot) {
-      store.set(key, value);
+  // ------------------------------------------------------- mutation subsystem
+
+  const transactions = createTransactionManager(
+    {
+      capture: () => store.capture(),
+      restore: restoreStore,
+    },
+    () => {
+      transactionCounter += 1;
+      return `tx_${transactionCounter}`;
+    },
+  );
+
+  const mutations = createMutationEngine({
+    runtime: {
+      readState: (stateId: NodeId) => readState(stateId),
+      writeState: (stateId: NodeId, value: unknown) => writeState(stateId, value),
+      evaluate: (expression: Expression, scope: unknown) => evaluate(expression, scope as Scope),
+    },
+    recordValues: options.recordMutationValues !== false,
+    onLog: (entry: MutationLogEntry) => {
+      mutationLog.push(entry);
+    },
+  });
+
+  /** Applies a mutation inside the current transaction and reports resolution failures. */
+  function mutate(
+    apply: () => MutationResult,
+    context: MutationContext,
+    failures: RuntimeDiagnostic[],
+  ): MutationResult | null {
+    try {
+      return apply();
+    } catch (error) {
+      const failure: RuntimeDiagnostic = {
+        code: error instanceof LocationResolutionError ? 'LOCATION_UNRESOLVED' : 'MUTATION_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+        severity: 'error',
+        ...(context.sourceNodeId ? { nodeId: context.sourceNodeId } : {}),
+      };
+      failures.push(failure);
+      return null;
     }
-    derivedCache.clear();
   }
 
   // ------------------------------------------------------------------- scopes
@@ -574,65 +605,18 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
 
   // --------------------------------------------------------------- behaviour
 
-  function resolveIdentityField(entityId: string | null): FieldId | null {
-    if (!entityId) {
-      return null;
-    }
-    return entitiesById.get(entityId)?.identityFieldId ?? null;
-  }
-
-  function executeOperation(operation: Operation, scope: Scope, result: RuntimeDiagnostic[]): void {
+  function executeOperation(
+    operation: Operation,
+    scope: Scope,
+    context: MutationContext,
+    result: RuntimeDiagnostic[],
+  ): void {
     switch (operation.kind) {
-      case 'set-state':
-        writeState(operation.stateId, cloneValue(evaluate(operation.value, scope)));
+      case 'set':
+      case 'insert':
+      case 'remove':
+        mutate(() => mutations.apply(operation, scope, context), context, result);
         return;
-      case 'add-item': {
-        const collection = readState(operation.collectionId);
-        const items = Array.isArray(collection) ? collection : [];
-        const value = cloneValue(evaluate(operation.value, scope));
-        if (operation.position === 'start') {
-          items.unshift(value);
-        } else {
-          items.push(value);
-        }
-        writeState(operation.collectionId, items);
-        return;
-      }
-      case 'remove-item': {
-        const collection = readState(operation.collectionId);
-        if (!Array.isArray(collection)) {
-          return;
-        }
-        const target = evaluate(operation.item, scope);
-        const state = statesById.get(operation.collectionId);
-        const identity = resolveIdentityField(state ? collectionEntityId(state) : null);
-        const remaining = collection.filter((item) => {
-          if (identity && isRecord(item) && isRecord(target)) {
-            return !valuesEqual(item[identity], target[identity]);
-          }
-          return !valuesEqual(item, target);
-        });
-        writeState(operation.collectionId, remaining);
-        return;
-      }
-      case 'update-field': {
-        const target = evaluate(operation.target, scope);
-        if (!isRecord(target)) {
-          result.push({
-            code: 'UPDATE_TARGET_MISSING',
-            message: `Update target for field ${operation.fieldId} did not resolve to a record`,
-            severity: 'error',
-            fieldId: operation.fieldId,
-          });
-          return;
-        }
-        target[operation.fieldId] = evaluate(operation.value, scope);
-        derivedCache.clear();
-        for (const state of ir.states) {
-          persistState(state.id);
-        }
-        return;
-      }
       case 'invoke': {
         const args: Record<string, unknown> = {};
         for (const [parameterId, argument] of Object.entries(operation.arguments ?? {})) {
@@ -675,9 +659,18 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         }
         const inputs: Record<string, unknown> = {};
         for (const [key, argument] of Object.entries(operation.inputs ?? {})) {
-          inputs[key] = evaluate(argument, scope);
+          // Native code receives copies: it can never reach into managed state.
+          inputs[key] = cloneValue(evaluate(argument, scope));
         }
-        implementation(inputs);
+        const returned = implementation(inputs);
+        if (operation.resultTarget) {
+          const target = operation.resultTarget;
+          mutate(
+            () => mutations.set(target, cloneValue(returned), scope, { ...context, source: 'native' }),
+            context,
+            result,
+          );
+        }
         return;
       }
       default:
@@ -745,10 +738,15 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       }
     }
 
-    const snapshot = snapshotStore();
+    const transaction = transactions.begin();
+    const context: MutationContext = {
+      source: 'action',
+      sourceNodeId: action.id,
+      transactionId: transaction.id,
+    };
     const operationDiagnostics: RuntimeDiagnostic[] = [];
     for (const operation of action.operations ?? []) {
-      executeOperation(operation, scope, operationDiagnostics);
+      executeOperation(operation, scope, context, operationDiagnostics);
     }
 
     const violations = [
@@ -767,12 +765,13 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
 
     if (violations.length > 0) {
-      restoreStore(snapshot);
+      transaction.rollback();
       violations.forEach(report);
       renderApplication();
       return { ok: false, diagnostics: violations };
     }
 
+    transaction.commit();
     renderApplication();
     return { ok: true, diagnostics: operationDiagnostics };
   }
@@ -868,13 +867,26 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     return ir.fields[id]?.field;
   }
 
+  /** Reads through a location without giving the renderer a way to write. */
+  function readLocation(location: Location, scope: Scope): unknown {
+    try {
+      return resolveLocation(location, scope, {
+        readState,
+        writeState,
+        evaluate: (expression: Expression, inner: unknown) => evaluate(expression, inner as Scope),
+      }).read();
+    } catch {
+      return null;
+    }
+  }
+
   function resolveInputTag(node: UINode & { kind: 'input' }): {
     tag: string;
     type?: string;
     options?: string[];
   } {
-    const field = fieldOf(node.binding.fieldId);
-    const resolved = field ? unwrapType(field.valueType) : null;
+    const located = ir.locationTypes[node.id];
+    const resolved = located ? unwrapType(located) : null;
     const hint = node.inputHint;
     if (hint === 'multiline') {
       return { tag: 'textarea' };
@@ -926,15 +938,16 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     });
   }
 
-  function coerceInputValue(fieldId: FieldId, raw: string, checked: boolean | undefined): unknown {
-    const field = fieldOf(fieldId);
-    const resolved = field ? unwrapType(field.valueType) : null;
+  function coerceInputValue(inputId: NodeId, raw: string, checked: boolean | undefined): unknown {
+    const located = ir.locationTypes[inputId];
+    const optional = located?.kind === 'optional';
+    const resolved = located ? unwrapType(located) : null;
     if (resolved?.kind === 'primitive' && resolved.primitive === 'boolean') {
       return Boolean(checked);
     }
     if (resolved?.kind === 'primitive' && resolved.primitive === 'number') {
       if (raw.trim() === '') {
-        return field?.required ? 0 : null;
+        return optional ? null : 0;
       }
       const parsed = Number(raw);
       return Number.isNaN(parsed) ? raw : parsed;
@@ -1046,8 +1059,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         if (node.placeholder) {
           control.setAttribute('placeholder', node.placeholder);
         }
-        const target = evaluate(node.binding.target, scope);
-        const current = isRecord(target) ? target[node.binding.fieldId] : null;
+        const current = readLocation(node.binding.location, scope);
         if (descriptor.type === 'checkbox') {
           control.checked = Boolean(current);
         } else if (descriptor.tag === 'select') {
@@ -1066,18 +1078,40 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           control.setAttribute('value', toText(current));
         }
 
+        // An input mutates through the same engine and transaction machinery as an
+        // action. There is no separate write path inside the renderer.
         const apply = (event: DomEvent): void => {
           const source = (event.target ?? control) as DomElement;
-          const next = coerceInputValue(node.binding.fieldId, source.value ?? '', source.checked);
-          const liveTarget = evaluate(node.binding.target, scope);
-          if (!isRecord(liveTarget)) {
-            return;
+          const next = coerceInputValue(node.id, source.value ?? '', source.checked);
+          const transaction = transactions.begin();
+          const context: MutationContext = {
+            source: 'ui',
+            sourceNodeId: node.id,
+            transactionId: transaction.id,
+          };
+          const failures: RuntimeDiagnostic[] = [];
+          mutate(
+            () => mutations.set(node.binding.location, next, scope, context),
+            context,
+            failures,
+          );
+
+          if (failures.length > 0) {
+            transaction.rollback();
+            failures.forEach(report);
+          } else {
+            transaction.commit();
+            if (inputValidation === 'immediate') {
+              // Constraints are evaluated but a half-typed value is not rolled back;
+              // applications surface that state with conditional UI instead.
+              for (const violation of evaluateInvariants()) {
+                if (violation.severity === 'error') {
+                  report(violation);
+                }
+              }
+            }
           }
-          liveTarget[node.binding.fieldId] = next;
-          derivedCache.clear();
-          for (const state of ir.states) {
-            persistState(state.id);
-          }
+
           focusedNodeId = node.id;
           focusedCaret = typeof source.selectionStart === 'number' ? source.selectionStart : null;
           renderApplication();
@@ -1181,7 +1215,20 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       return cloneValue(readState(id));
     },
     setState(id: NodeId, value: unknown): void {
-      writeState(id, cloneValue(value));
+      const transaction = transactions.begin();
+      const failures: RuntimeDiagnostic[] = [];
+      const context: MutationContext = { source: 'system', transactionId: transaction.id };
+      mutate(
+        () => mutations.set({ kind: 'state', stateId: id }, cloneValue(value), rootScope(), context),
+        context,
+        failures,
+      );
+      if (failures.length > 0) {
+        transaction.rollback();
+        failures.forEach(report);
+      } else {
+        transaction.commit();
+      }
       renderApplication();
     },
     invokeAction(id: NodeId, args: Record<string, unknown> = {}): ActionResult {
@@ -1193,6 +1240,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     },
     diagnostics(): RuntimeDiagnostic[] {
       return diagnostics.map((diagnostic) => ({ ...diagnostic }));
+    },
+    getMutationLog(): MutationLogEntry[] {
+      return mutationLog.map((entry) => ({ ...entry }));
     },
     registerNativeOperation(implementationId: string, implementation: NativeImplementation): void {
       natives.set(implementationId, implementation);

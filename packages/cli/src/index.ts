@@ -4,8 +4,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { compileToHtml, compileToIR } from '@axiom/compiler';
-import { ApplicationGraph, validateGraph } from '@axiom/core';
-import type { AnyNode, NodeKind, ValidationResult } from '@axiom/core';
+import { ApplicationGraph, formatLocation, semanticContextFromGraph, validateGraph } from '@axiom/core';
+import type { AnyNode, NodeKind, Operation, SemanticContext, ValidationResult } from '@axiom/core';
 
 const GRAPH_EXPORT_CANDIDATES = ['default', 'createGraph', 'createApplicationGraph'];
 
@@ -112,15 +112,40 @@ function describe(node: AnyNode): string {
   if (node.kind === 'route') {
     return `${label} — ${node.path}`;
   }
-  if (node.kind === 'action') {
-    const operations = (node.operations ?? []).map((operation) => operation.kind).join(', ');
-    return `${label}${operations ? ` — operations: ${operations}` : ''}`;
-  }
   return label;
 }
 
+/** Locations are stored by id and resolved to names only for human inspection. */
+function describeOperation(operation: Operation, semantics: SemanticContext): string {
+  switch (operation.kind) {
+    case 'set':
+      return `set ${formatLocation(operation.target, semantics)}`;
+    case 'insert':
+      return `insert into ${formatLocation(operation.target, semantics)}`;
+    case 'remove':
+      return `remove ${formatLocation(operation.target, semantics)}`;
+    case 'invoke':
+      return `invoke ${semantics.getName?.(operation.actionId) ?? operation.actionId}`;
+    case 'navigate':
+      return `navigate ${operation.path ?? semantics.getName?.(operation.routeId!) ?? operation.routeId}`;
+    case 'native':
+      return `native ${operation.implementationId}`;
+    default:
+      return 'unknown operation';
+  }
+}
+
 function inspect(graph: ApplicationGraph): string {
+  const semantics = semanticContextFromGraph(graph);
   const lines: string[] = [`${graph.name} (${graph.id}) v${graph.version}`, ''];
+
+  const fieldNames = (edge: { metadata?: Record<string, unknown> }): string => {
+    const fieldIds = edge.metadata?.fieldIds;
+    if (!Array.isArray(fieldIds) || fieldIds.length === 0) {
+      return '';
+    }
+    return ` (${fieldIds.map((id) => graph.getField(id as never)?.field.name ?? String(id)).join(', ')})`;
+  };
 
   for (const [title, kind] of SECTIONS) {
     const nodes = graph.getNodesByKind(kind);
@@ -131,9 +156,14 @@ function inspect(graph: ApplicationGraph): string {
     for (const node of nodes) {
       const edges = graph
         .getOutgoingEdges(node.id)
-        .map((edge) => `${edge.kind} → ${graph.getNode(edge.to)?.name ?? edge.to}`)
+        .map((edge) => `${edge.kind} → ${graph.getNode(edge.to)?.name ?? edge.to}${fieldNames(edge)}`)
         .join(', ');
       lines.push(`- ${describe(node)}${edges ? ` [${edges}]` : ''}`);
+      if (node.kind === 'action') {
+        for (const operation of node.operations ?? []) {
+          lines.push(`    ${describeOperation(operation, semantics)}`);
+        }
+      }
     }
     lines.push('');
   }

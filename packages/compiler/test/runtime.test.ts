@@ -9,11 +9,15 @@ import {
   enumType,
   field,
   fieldId,
+  fieldLocation,
+  identitySelector,
+  itemLocation,
   literal,
   nodeId,
   optionalType,
   primitiveType,
   ref,
+  stateLocation,
   synchronizeEdges,
   unary,
 } from '@axiom/core';
@@ -170,8 +174,8 @@ function buildGraph(): ApplicationGraph {
     failureModes: [{ code: 'label-missing', message: 'A record needs a label.' }],
     operations: [
       {
-        kind: 'add-item',
-        collectionId: STATE_RECORDS,
+        kind: 'insert',
+        target: stateLocation(STATE_RECORDS),
         value: {
           kind: 'object',
           entityId: ENTITY,
@@ -184,7 +188,7 @@ function buildGraph(): ApplicationGraph {
           ],
         },
       },
-      { kind: 'set-state', stateId: STATE_DRAFT, value: literal({ ...emptyDraft }) },
+      { kind: 'set', target: stateLocation(STATE_DRAFT), value: literal({ ...emptyDraft }) },
     ],
   });
 
@@ -195,8 +199,13 @@ function buildGraph(): ApplicationGraph {
     destructive: true,
     requiresConfirmation: true,
     confirmationMessage: 'Remove this record?',
-    parameters: [{ id: PARAM_REMOVE, name: 'record', valueType: entityType(ENTITY), required: true }],
-    operations: [{ kind: 'remove-item', collectionId: STATE_RECORDS, item: ref(PARAM_REMOVE) }],
+    parameters: [{ id: PARAM_REMOVE, name: 'recordId', valueType: primitiveType('string'), required: true }],
+    operations: [
+      {
+        kind: 'remove',
+        target: itemLocation(stateLocation(STATE_RECORDS), identitySelector(F_ID, ref(PARAM_REMOVE))),
+      },
+    ],
   });
 
   graph.addNode<ActionDef>({
@@ -205,9 +214,11 @@ function buildGraph(): ApplicationGraph {
     name: 'growCurrent',
     operations: [
       {
-        kind: 'update-field',
-        target: ref(STATE_CURRENT),
-        fieldId: F_SIZE,
+        kind: 'set',
+        target: fieldLocation(
+          itemLocation(stateLocation(STATE_RECORDS), identitySelector(F_ID, ref(PARAM_ROUTE_ID))),
+          F_SIZE,
+        ),
         value: binary('add', field(ref(STATE_CURRENT), F_SIZE), literal(3)),
       },
     ],
@@ -276,25 +287,25 @@ function buildGraph(): ApplicationGraph {
     id: UI_INPUT_LABEL,
     kind: 'input',
     label: 'Label',
-    binding: { target: ref(STATE_DRAFT), fieldId: F_LABEL },
+    binding: { location: fieldLocation(stateLocation(STATE_DRAFT), F_LABEL) },
   });
   graph.addNode<InputNode>({
     id: UI_INPUT_SIZE,
     kind: 'input',
     label: 'Size',
-    binding: { target: ref(STATE_DRAFT), fieldId: F_SIZE },
+    binding: { location: fieldLocation(stateLocation(STATE_DRAFT), F_SIZE) },
   });
   graph.addNode<InputNode>({
     id: UI_INPUT_STAGE,
     kind: 'input',
     label: 'Stage',
-    binding: { target: ref(STATE_DRAFT), fieldId: F_STAGE },
+    binding: { location: fieldLocation(stateLocation(STATE_DRAFT), F_STAGE) },
   });
   graph.addNode<InputNode>({
     id: UI_INPUT_ACTIVE,
     kind: 'input',
     label: 'Active',
-    binding: { target: ref(STATE_DRAFT), fieldId: F_ACTIVE },
+    binding: { location: fieldLocation(stateLocation(STATE_DRAFT), F_ACTIVE) },
   });
   graph.addNode<FormNode>({
     id: UI_FORM,
@@ -468,7 +479,7 @@ test('a route parameter feeds derived state, and a missing record renders the ot
   assert.match(textOf(missing.root), /Not found/);
 });
 
-test('update-field mutates the record the expression resolves to', () => {
+test('a set writes into the record its location addresses', () => {
   const { app, host } = createApp({ path: '/records/r1' });
   findByNodeId(host.root, UI_GROW)[0].dispatch('click');
 
@@ -478,21 +489,18 @@ test('update-field mutates the record the expression resolves to', () => {
 
 test('a destructive action asks for confirmation and honours the answer', () => {
   const declined = createApp({ confirm: false });
-  const record = (declined.app.getState(STATE_RECORDS) as unknown[])[0];
-  declined.app.invokeAction(ACTION_REMOVE, { [PARAM_REMOVE]: record });
+  declined.app.invokeAction(ACTION_REMOVE, { [PARAM_REMOVE]: 'r1' });
   assert.equal((declined.app.getState(STATE_RECORDS) as unknown[]).length, 2);
   assert.deepEqual(declined.host.confirmations, ['Remove this record?']);
 
   const accepted = createApp({ confirm: true });
-  accepted.app.invokeAction(ACTION_REMOVE, {
-    [PARAM_REMOVE]: (accepted.app.getState(STATE_RECORDS) as unknown[])[0],
-  });
+  accepted.app.invokeAction(ACTION_REMOVE, { [PARAM_REMOVE]: 'r1' });
   assert.equal((accepted.app.getState(STATE_RECORDS) as unknown[]).length, 1);
 });
 
-test('items are removed by identity, not by object reference', () => {
+test('an item is removed by the identity its location selects', () => {
   const { app } = createApp({ confirm: true });
-  app.invokeAction(ACTION_REMOVE, { [PARAM_REMOVE]: { [F_ID]: 'r2' } });
+  app.invokeAction(ACTION_REMOVE, { [PARAM_REMOVE]: 'r2' });
   const remaining = app.getState(STATE_RECORDS) as Array<Record<string, unknown>>;
   assert.deepEqual(
     remaining.map((item) => item[F_ID]),

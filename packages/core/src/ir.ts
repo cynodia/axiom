@@ -7,9 +7,10 @@ import type {
   RouteParameter,
   StateDef,
 } from './nodes.js';
-import type { FieldLocation } from './graph.js';
+import type { FieldIndexEntry } from './graph.js';
 import type { UINode } from './ui.js';
 import type { AnyNode } from './types.js';
+import type { TypeRef } from './type-ref.js';
 
 export interface RouteSegment {
   kind: 'static' | 'parameter';
@@ -37,7 +38,7 @@ export interface ApplicationIR {
   name: string;
   version: string;
   nodes: Record<NodeId, AnyNode>;
-  fields: Record<FieldId, FieldLocation>;
+  fields: Record<FieldId, FieldIndexEntry>;
   entities: EntityDef[];
   states: StateDef[];
   actions: Record<NodeId, ActionDef>;
@@ -45,4 +46,9 @@ export interface ApplicationIR {
   constraints: ConstraintDef[];
   routes: CompiledRoute[];
   edges: GraphEdge[];
+  /**
+   * The type each input's bound location addresses, resolved during normalization so a
+   * runtime never has to re-derive it.
+   */
+  locationTypes: Record<NodeId, TypeRef>;
 }

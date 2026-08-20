@@ -1,4 +1,5 @@
 import type { Expression } from './expressions.js';
+import type { CollectionItemLocation, Location } from './location.js';
 import type { EdgeId, FieldId, NodeId } from './ids.js';
 import type { TypeRef } from './type-ref.js';
 
@@ -84,38 +85,37 @@ export interface ActionDef extends NodeBase {
 }
 
 export type Operation =
-  | SetStateOperation
-  | AddItemOperation
-  | RemoveItemOperation
-  | UpdateFieldOperation
+  | SetOperation
+  | InsertOperation
+  | RemoveOperation
   | InvokeOperation
   | NavigateOperation
   | NativeOperation;
 
-export interface SetStateOperation {
-  kind: 'set-state';
-  stateId: NodeId;
+/** Every mutation is a set, an insert or a remove against an addressed Location. */
+export type MutationOperation = SetOperation | InsertOperation | RemoveOperation;
+
+export interface SetOperation {
+  kind: 'set';
+  target: Location;
   value: Expression;
 }
 
-export interface AddItemOperation {
-  kind: 'add-item';
-  collectionId: NodeId;
+export interface InsertOperation {
+  kind: 'insert';
+  /** A location addressing a collection. */
+  target: Location;
   value: Expression;
   position?: 'start' | 'end';
 }
 
-export interface RemoveItemOperation {
-  kind: 'remove-item';
-  collectionId: NodeId;
-  item: Expression;
+export interface RemoveOperation {
+  kind: 'remove';
+  target: CollectionItemLocation;
 }
 
-export interface UpdateFieldOperation {
-  kind: 'update-field';
-  target: Expression;
-  fieldId: FieldId;
-  value: Expression;
+export function isMutationOperation(operation: Operation): operation is MutationOperation {
+  return operation.kind === 'set' || operation.kind === 'insert' || operation.kind === 'remove';
 }
 
 export interface InvokeOperation {
@@ -146,6 +146,11 @@ export interface NativeOperation {
   kind: 'native';
   implementationId: string;
   inputs?: Record<string, Expression>;
+  /**
+   * Where the implementation's return value is stored. Native code never writes Axiom
+   * state itself; it returns a value that the mutation engine then sets.
+   */
+  resultTarget?: Location;
   declaredEffects?: NativeEffect[];
 }
 

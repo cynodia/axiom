@@ -7,7 +7,7 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
-export interface FieldLocation {
+export interface FieldIndexEntry {
   entityId: NodeId;
   field: FieldDef;
 }
@@ -25,9 +25,9 @@ export class ApplicationGraph {
   private data: ApplicationGraphData;
   private outgoing = new Map<NodeId, GraphEdge[]>();
   private incoming = new Map<NodeId, GraphEdge[]>();
-  private fieldIndex = new Map<FieldId, FieldLocation>();
+  private fieldIndex = new Map<FieldId, FieldIndexEntry>();
 
-  constructor(id: string, name: string, version = '0.2.0') {
+  constructor(id: string, name: string, version = '0.3.0') {
     this.data = { id, name, version, nodes: {}, edges: {} };
   }
 
@@ -95,12 +95,12 @@ export class ApplicationGraph {
   }
 
   /** Resolves a field id to its owning entity. Fields are globally identifiable. */
-  getField(id: FieldId): FieldLocation | undefined {
+  getField(id: FieldId): FieldIndexEntry | undefined {
     const location = this.fieldIndex.get(id);
     return location ? clone(location) : undefined;
   }
 
-  listFields(): FieldLocation[] {
+  listFields(): FieldIndexEntry[] {
     return [...this.fieldIndex.values()].map((location) => clone(location));
   }
 

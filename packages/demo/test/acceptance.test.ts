@@ -1,7 +1,26 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { field, optionalType, primitiveType, ref } from '@axiom/core';
-import type { ActionDef, EntityDef, FieldDisplayNode, FieldId, InputNode, NodeId } from '@axiom/core';
+import {
+  field,
+  fieldLocation,
+  itemFieldLocation,
+  locationExpressions,
+  locationFieldIds,
+  locationRootStateId,
+  optionalType,
+  primitiveType,
+  ref,
+} from '@axiom/core';
+import type {
+  ActionDef,
+  EntityDef,
+  FieldDisplayNode,
+  FieldId,
+  FieldLocation,
+  InputNode,
+  Location,
+  NodeId,
+} from '@axiom/core';
 import { AgentAPI } from '@axiom/agent-api';
 import { compileToIR } from '@axiom/compiler';
 import { createAxiomRuntime, createMemoryHost, findByNodeId, textOf } from '@axiom/runtime';
@@ -37,56 +56,51 @@ test('an agent adds a field and its UI through graph operations alone', () => {
   const entity = graph.getNodesByKind('entity').find((candidate) => candidate.name === 'Issue');
   assert.ok(entity, 'the entity is found in the graph, not in a source file');
 
-  const singleRecordStates = new Set(graph.getNodesByKind('state').map((state) => state.id));
   let addedFieldId = '' as FieldId;
 
   const outcome = agent.transact(
     (transaction) => {
       // 2-4. Add the field with a stable id and a structured type.
-      const fieldId = transaction.addField(entity.id, {
+      const newFieldId = transaction.addField(entity.id, {
         name: 'Reporter contact',
         valueType: optionalType(primitiveType('string')),
       });
-      addedFieldId = fieldId;
+      addedFieldId = newFieldId;
 
-      // 5-6. Wherever the entity is edited, add an input bound to the new field.
-      for (const form of agent.getFormsForEntity(entity.id)) {
-        transaction.bindField({
-          parentId: form.id,
-          target: form.target,
-          fieldId,
-          label: 'Reporter contact',
-        });
-        // A form that submits a record must also carry the field into the new instance.
-        if (form.submitActionId) {
-          transaction.addFieldToConstructors(entity.id, fieldId, field(form.target, fieldId));
-        }
-      }
-
-      // Inputs that edit one record directly (rather than a repeated row) share a parent.
-      // Each parent keeps its own binding target: a draft here, the selected record there.
-      const editors = new Map<NodeId, InputNode['binding']['target']>();
+      // 5-6. Every place the entity is already edited tells the agent which record that
+      // editor writes to — a draft state or a record inside a collection. The new input
+      // reuses that address, so the agent never has to know which strategy is in use.
+      const editors = new Map<NodeId, Location>();
       for (const node of agent
         .getUiNodesForEntity(entity.id)
-        .filter((candidate): candidate is InputNode => candidate.kind === 'input')
-        .filter(
-          (candidate) =>
-            candidate.binding.target.kind === 'ref' && singleRecordStates.has(candidate.binding.target.targetId),
-        )) {
+        .filter((candidate): candidate is InputNode => candidate.kind === 'input')) {
+        const bound = node.binding.location;
+        if (bound.kind !== 'field') {
+          continue;
+        }
         for (const parent of agent.getDependents(node.id, ['contains'])) {
           if (!editors.has(parent.id)) {
-            editors.set(parent.id, node.binding.target);
+            editors.set(parent.id, bound.target);
           }
         }
       }
-      for (const form of agent.getFormsForEntity(entity.id)) {
-        editors.delete(form.id);
+      for (const [parentId, record] of editors) {
+        transaction.bindField({
+          parentId,
+          location: fieldLocation(record, newFieldId),
+          label: 'Reporter contact',
+        });
       }
-      for (const [parentId, target] of editors) {
-        transaction.bindField({ parentId, target, fieldId, label: 'Reporter contact' });
+
+      // A form that submits a record must also carry the field into the new instance.
+      for (const form of agent.getFormsForEntity(entity.id)) {
+        if (form.submitActionId) {
+          transaction.addFieldToConstructors(entity.id, newFieldId, field(form.target, newFieldId));
+        }
       }
 
       // 7-8. Wherever a single record is displayed, add a read-only display too.
+      const singleRecordStates = new Set(graph.getNodesByKind('state').map((state) => state.id));
       const detailParents = new Map<NodeId, FieldDisplayNode['source']>();
       for (const node of agent
         .getUiNodesForEntity(entity.id)
@@ -99,7 +113,12 @@ test('an agent adds a field and its UI through graph operations alone', () => {
         }
       }
       for (const [parentId, source] of detailParents) {
-        transaction.displayField({ parentId, source, fieldId, label: 'Reporter contact' });
+        transaction.displayField({
+          parentId,
+          source,
+          fieldId: newFieldId,
+          label: 'Reporter contact',
+        });
       }
     },
     // 9-10. Validation and commit are part of the transaction.
@@ -116,7 +135,12 @@ test('an agent adds a field and its UI through graph operations alone', () => {
   const created = run(graph, { path: '/issues/new' });
   const newInputs = agent
     .getUiNodesForEntity(entity.id)
-    .filter((node): node is InputNode => node.kind === 'input' && node.binding.fieldId === addedFieldId);
+    .filter(
+      (node): node is InputNode =>
+        node.kind === 'input' &&
+        node.binding.location.kind === 'field' &&
+        node.binding.location.fieldId === addedFieldId,
+    );
   assert.equal(newInputs.length, 2, 'one input in the create form, one where a record is edited');
 
   const renderedInput = (root: MemoryElement): MemoryElement | undefined =>
@@ -176,9 +200,7 @@ test('an agent makes every destructive action require confirmation in one transa
   );
 
   const before = run(graph, { path: '/products/product-1', confirm: false });
-  before.app.invokeAction(inventoryIds.ACTION_DELETE_PRODUCT, {
-    [inventoryIds.PARAM_DELETE_PRODUCT]: (before.app.getState(inventoryIds.STATE_PRODUCTS) as unknown[])[0],
-  });
+  before.app.invokeAction(inventoryIds.ACTION_DELETE_PRODUCT);
   assert.deepEqual(before.host.confirmations, [], 'nothing asks for confirmation yet');
   assert.equal((before.app.getState(inventoryIds.STATE_PRODUCTS) as unknown[]).length, 1);
 
@@ -202,13 +224,118 @@ test('an agent makes every destructive action require confirmation in one transa
   }
 
   const after = run(graph, { path: '/products/product-1', confirm: false });
-  after.app.invokeAction(inventoryIds.ACTION_DELETE_PRODUCT, {
-    [inventoryIds.PARAM_DELETE_PRODUCT]: (after.app.getState(inventoryIds.STATE_PRODUCTS) as unknown[])[0],
-  });
+  after.app.invokeAction(inventoryIds.ACTION_DELETE_PRODUCT);
   assert.equal(after.host.confirmations.length, 1, 'the same action now asks first');
   assert.equal(
     (after.app.getState(inventoryIds.STATE_PRODUCTS) as unknown[]).length,
     2,
     'declining leaves the data untouched',
+  );
+});
+
+/**
+ * Section 51 — the canonical 0.3 demonstration. The application's derived "current
+ * product" is a copy, so editing can only work if the input addresses the record where
+ * it is actually stored.
+ */
+test('editing a record works through its location, not through object identity', () => {
+  const graph = createInventoryGraph();
+  const agent = new AgentAPI(graph);
+
+  const nameInput = agent
+    .getUiNodesForEntity(inventoryIds.ENTITY_PRODUCT)
+    .find(
+      (node): node is InputNode =>
+        node.kind === 'input' &&
+        node.binding.location.kind === 'field' &&
+        node.binding.location.fieldId === inventoryIds.F_PRODUCT_NAME &&
+        node.binding.location.target.kind === 'collection-item',
+    );
+  assert.ok(nameInput, 'the detail editor addresses the stored record, not a derived copy');
+
+  // The location names the state, the record inside it, and the field.
+  const location = nameInput.binding.location as FieldLocation;
+  assert.equal(locationRootStateId(location), inventoryIds.STATE_PRODUCTS);
+  assert.deepEqual(locationFieldIds(location), [inventoryIds.F_PRODUCT_NAME]);
+  assert.deepEqual(locationExpressions(location), [ref(inventoryIds.PARAM_ROUTE_PRODUCT_ID)]);
+
+  const { app, host } = run(graph, { path: '/products/product-1' });
+
+  const derived = app.getState(inventoryIds.STATE_CURRENT_PRODUCT) as Record<string, unknown>;
+  const stored = (app.getState(inventoryIds.STATE_PRODUCTS) as Array<Record<string, unknown>>)[0];
+  assert.notEqual(derived, stored, 'the derived value is a copy');
+  assert.equal(derived[inventoryIds.F_PRODUCT_NAME], stored[inventoryIds.F_PRODUCT_NAME]);
+
+  const control = findByNodeId(host.root, nameInput.id).find((element) => element.tagName !== 'label');
+  assert.ok(control);
+  control.value = 'Renamed analyser';
+  control.dispatch('input');
+
+  const products = app.getState(inventoryIds.STATE_PRODUCTS) as Array<Record<string, unknown>>;
+  assert.equal(products[0][inventoryIds.F_PRODUCT_NAME], 'Renamed analyser', 'the collection holds the new name');
+  assert.equal(
+    (app.getState(inventoryIds.STATE_CURRENT_PRODUCT) as Record<string, unknown>)[
+      inventoryIds.F_PRODUCT_NAME
+    ],
+    'Renamed analyser',
+    'derived state is recomputed',
+  );
+  // The detail view edits the name through an input, so the re-rendered control carries
+  // the new value rather than the page text.
+  const rerendered = findByNodeId(host.root, nameInput.id).find((element) => element.tagName !== 'label');
+  assert.equal(rerendered?.value, 'Renamed analyser', 'the UI reflects the new value');
+
+  const entry = app.getMutationLog().at(-1);
+  assert.equal(entry?.description, `${inventoryIds.STATE_PRODUCTS} → [product-1] → ${inventoryIds.F_PRODUCT_NAME}`);
+
+  // The dependency graph reports the write and the reads the selector needs.
+  const writes = graph.getOutgoingEdges(nameInput.id, { kinds: ['writes'] });
+  assert.deepEqual(writes.map((edge) => edge.to), [inventoryIds.STATE_PRODUCTS]);
+  assert.deepEqual(writes[0].metadata?.fieldIds, [inventoryIds.F_PRODUCT_NAME]);
+  assert.ok(
+    graph
+      .getOutgoingEdges(nameInput.id, { kinds: ['reads'] })
+      .some((edge) => edge.to === inventoryIds.STATE_PRODUCTS),
+    'addressing the record is itself a read',
+  );
+});
+
+/**
+ * Section 52 — "what can change this field, and what would that affect?", answered
+ * without reading a line of application source.
+ */
+test('an agent can report what changes a field and what that would affect', () => {
+  const graph = createInventoryGraph();
+  const agent = new AgentAPI(graph);
+  const quantity = inventoryIds.F_PRODUCT_QUANTITY;
+
+  const writers = agent.getFieldWriters(quantity).map((node) => node.name ?? node.id);
+  assert.ok(writers.includes('receiveStock'));
+  assert.ok(writers.includes('issueStock'));
+  assert.ok(!writers.includes('createProduct') === false, 'creating a product also writes it');
+
+  const impact = agent.getMutationImpact(
+    itemFieldLocation(
+      inventoryIds.STATE_PRODUCTS,
+      inventoryIds.F_PRODUCT_ID,
+      ref(inventoryIds.PARAM_ROUTE_PRODUCT_ID),
+      quantity,
+    ),
+  );
+
+  assert.equal(impact.rootStateId, inventoryIds.STATE_PRODUCTS);
+  assert.ok(
+    impact.dependentDerivedStates.some((state) => state.id === inventoryIds.STATE_CURRENT_PRODUCT),
+    'the derived current product depends on it',
+  );
+  assert.deepEqual(
+    impact.affectedConstraints.map((constraint) => constraint.name),
+    ['Stock is never negative'],
+    'only the constraint that observes the quantity',
+  );
+  assert.ok(impact.affectedViews.length > 0);
+  assert.ok(
+    impact.affectedViews.every((view) => view.kind === 'view'),
+    'the answer is a set of semantic views, not file paths',
   );
 });

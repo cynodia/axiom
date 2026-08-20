@@ -11,9 +11,13 @@ import {
   field,
   fieldId,
   literal,
+  fieldLocation,
+  identitySelector,
+  itemLocation,
   nodeId,
   primitiveType,
   ref,
+  stateLocation,
   validateGraph,
 } from '@axiom/core';
 import type {
@@ -57,7 +61,7 @@ function validGraph(): ApplicationGraph {
   graph.addNode<ActionDef>({
     id: ACTION,
     kind: 'action',
-    operations: [{ kind: 'set-state', stateId: STATE, value: literal([]) }],
+    operations: [{ kind: 'set', target: stateLocation(STATE), value: literal([]) }],
   });
   graph.addNode<ViewNode>({ id: VIEW, kind: 'view', children: [] });
   graph.addNode<RouteDef>({ id: ROUTE, kind: 'route', path: '/', viewId: VIEW });
@@ -79,7 +83,7 @@ test('a dangling field reference is rejected', () => {
   graph.addNode<InputNode>({
     id: nodeId('ui_input'),
     kind: 'input',
-    binding: { target: ref(STATE), fieldId: fieldId('field_missing') },
+    binding: { location: fieldLocation(stateLocation(STATE), fieldId('field_missing')) },
   });
   assert.ok(codes(graph).includes(VALIDATION_CODES.danglingFieldRef));
 });
@@ -195,14 +199,14 @@ test('an empty enum type is rejected', () => {
   assert.ok(codes(graph).includes(VALIDATION_CODES.invalidTypeRef));
 });
 
-test('an operation on a non-state node is rejected', () => {
+test('an operation targeting a non-state node is rejected', () => {
   const graph = validGraph();
   graph.addNode<ActionDef>({
     id: nodeId('action_bad'),
     kind: 'action',
-    operations: [{ kind: 'add-item', collectionId: ENTITY, value: literal(null) }],
+    operations: [{ kind: 'insert', target: stateLocation(ENTITY), value: literal(null) }],
   });
-  assert.ok(codes(graph).includes(VALIDATION_CODES.invalidStateRef));
+  assert.ok(codes(graph).includes(VALIDATION_CODES.unknownStateRef));
 });
 
 test('unreachable UI nodes are reported as warnings, not errors', () => {

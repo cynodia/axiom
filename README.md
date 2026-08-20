@@ -7,8 +7,14 @@ fields, state, actions, constraints, routes and UI nodes. A generic compiler nor
 that graph and a generic runtime executes it in an unmodified browser. The JavaScript and
 HTML that reach the browser are output, not source, and are never maintained by hand.
 
+Values are described by expressions; writable positions are described by **locations**.
+Every state change — from an action or from a keystroke in a form — is an addressed,
+validated, transactional mutation, so an agent can answer "if I change this, what exactly
+am I changing, and what does that affect?" from the graph alone.
+
 * `doc/spec.md` — the original 0.1 vision and research goals.
-* `doc/spec2.md` — the 0.2 architecture specification this repository implements.
+* `doc/spec2.md` — the 0.2 architecture: a domain-independent compiler and runtime.
+* `doc/spec3.md` — the 0.3 architecture: semantic mutation and addressing, implemented here.
 * `CLAUDE.md` — orientation for working in the codebase.
 
 ## Quick start

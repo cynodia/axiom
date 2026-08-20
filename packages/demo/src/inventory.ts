@@ -7,11 +7,15 @@ import {
   enumType,
   field,
   fieldId,
+  fieldLocation,
+  identitySelector,
+  itemLocation,
   literal,
   nodeId,
   optionalType,
   primitiveType,
   ref,
+  stateLocation,
   synchronizeEdges,
 } from '@axiom/core';
 import type {
@@ -75,7 +79,6 @@ const ACTION_OPEN_PRODUCT = nodeId('action_open_product');
 const PARAM_OPEN_PRODUCT_ID = nodeId('param_open_product_id');
 const ACTION_CREATE_PRODUCT = nodeId('action_create_product');
 const ACTION_DELETE_PRODUCT = nodeId('action_delete_product');
-const PARAM_DELETE_PRODUCT = nodeId('param_delete_product');
 const ACTION_RECEIVE_STOCK = nodeId('action_receive_stock');
 const ACTION_ISSUE_STOCK = nodeId('action_issue_stock');
 
@@ -167,7 +170,21 @@ const emptyMovement = {
   [F_MOVEMENT_RECORDED]: '',
 };
 
+/** A read-only derived copy of the product named by the route. */
 const currentProduct = ref(STATE_CURRENT_PRODUCT);
+
+/** Where that product is actually stored, which is what edits address. */
+const routedProduct = itemLocation(
+  stateLocation(STATE_PRODUCTS),
+  identitySelector(F_PRODUCT_ID, ref(PARAM_ROUTE_PRODUCT_ID)),
+);
+
+const routedProductField = (id: typeof F_PRODUCT_SKU) => fieldLocation(routedProduct, id);
+const draftProductField = (id: typeof F_PRODUCT_SKU) =>
+  fieldLocation(stateLocation(STATE_DRAFT_PRODUCT), id);
+const draftMovementField = (id: typeof F_MOVEMENT_QUANTITY) =>
+  fieldLocation(stateLocation(STATE_DRAFT_MOVEMENT), id);
+
 const draftQuantity = field(ref(STATE_DRAFT_MOVEMENT), F_MOVEMENT_QUANTITY);
 
 function movementRecord(direction: string) {
@@ -367,8 +384,8 @@ export function createInventoryGraph(): ApplicationGraph {
     failureModes: [{ code: 'incomplete', message: 'A product needs both an SKU and a name.' }],
     operations: [
       {
-        kind: 'add-item',
-        collectionId: STATE_PRODUCTS,
+        kind: 'insert',
+        target: stateLocation(STATE_PRODUCTS),
         position: 'start',
         value: {
           kind: 'object',
@@ -382,7 +399,7 @@ export function createInventoryGraph(): ApplicationGraph {
           ],
         },
       },
-      { kind: 'set-state', stateId: STATE_DRAFT_PRODUCT, value: literal({ ...emptyProduct }) },
+      { kind: 'set', target: stateLocation(STATE_DRAFT_PRODUCT), value: literal({ ...emptyProduct }) },
       { kind: 'navigate', routeId: ROUTE_PRODUCTS },
     ],
   });
@@ -394,11 +411,8 @@ export function createInventoryGraph(): ApplicationGraph {
     destructive: true,
     requiresConfirmation: true,
     confirmationMessage: 'Delete this product and stop tracking its stock?',
-    parameters: [
-      { id: PARAM_DELETE_PRODUCT, name: 'product', valueType: entityType(ENTITY_PRODUCT), required: true },
-    ],
     operations: [
-      { kind: 'remove-item', collectionId: STATE_PRODUCTS, item: ref(PARAM_DELETE_PRODUCT) },
+      { kind: 'remove', target: routedProduct },
       { kind: 'navigate', routeId: ROUTE_PRODUCTS },
     ],
   });
@@ -411,13 +425,12 @@ export function createInventoryGraph(): ApplicationGraph {
     failureModes: [{ code: 'quantity-invalid', message: 'Received quantity must be greater than zero.' }],
     operations: [
       {
-        kind: 'update-field',
-        target: currentProduct,
-        fieldId: F_PRODUCT_QUANTITY,
+        kind: 'set',
+        target: routedProductField(F_PRODUCT_QUANTITY),
         value: binary('add', field(currentProduct, F_PRODUCT_QUANTITY), draftQuantity),
       },
-      { kind: 'add-item', collectionId: STATE_MOVEMENTS, value: movementRecord('in') },
-      { kind: 'set-state', stateId: STATE_DRAFT_MOVEMENT, value: literal({ ...emptyMovement }) },
+      { kind: 'insert', target: stateLocation(STATE_MOVEMENTS), value: movementRecord('in') },
+      { kind: 'set', target: stateLocation(STATE_DRAFT_MOVEMENT), value: literal({ ...emptyMovement }) },
     ],
   });
 
@@ -432,13 +445,12 @@ export function createInventoryGraph(): ApplicationGraph {
     failureModes: [{ code: 'insufficient-stock', message: 'There is not enough stock on hand.' }],
     operations: [
       {
-        kind: 'update-field',
-        target: currentProduct,
-        fieldId: F_PRODUCT_QUANTITY,
+        kind: 'set',
+        target: routedProductField(F_PRODUCT_QUANTITY),
         value: binary('subtract', field(currentProduct, F_PRODUCT_QUANTITY), draftQuantity),
       },
-      { kind: 'add-item', collectionId: STATE_MOVEMENTS, value: movementRecord('out') },
-      { kind: 'set-state', stateId: STATE_DRAFT_MOVEMENT, value: literal({ ...emptyMovement }) },
+      { kind: 'insert', target: stateLocation(STATE_MOVEMENTS), value: movementRecord('out') },
+      { kind: 'set', target: stateLocation(STATE_DRAFT_MOVEMENT), value: literal({ ...emptyMovement }) },
     ],
   });
 
@@ -478,7 +490,7 @@ export function createInventoryGraph(): ApplicationGraph {
     kind: 'input',
     label: 'Search',
     placeholder: 'SKU or name',
-    binding: { target: ref(STATE_SEARCH), fieldId: F_SEARCH_TEXT },
+    binding: { location: fieldLocation(stateLocation(STATE_SEARCH), F_SEARCH_TEXT) },
   });
 
   graph.addNode<FieldDisplayNode>({
@@ -566,21 +578,21 @@ export function createInventoryGraph(): ApplicationGraph {
     id: UI_PRODUCT_SKU_INPUT,
     kind: 'input',
     label: 'SKU',
-    binding: { target: currentProduct, fieldId: F_PRODUCT_SKU },
+    binding: { location: routedProductField(F_PRODUCT_SKU) },
   });
 
   graph.addNode<InputNode>({
     id: UI_PRODUCT_NAME_INPUT,
     kind: 'input',
     label: 'Name',
-    binding: { target: currentProduct, fieldId: F_PRODUCT_NAME },
+    binding: { location: routedProductField(F_PRODUCT_NAME) },
   });
 
   graph.addNode<InputNode>({
     id: UI_PRODUCT_WAREHOUSE_INPUT,
     kind: 'input',
     label: 'Warehouse',
-    binding: { target: currentProduct, fieldId: F_PRODUCT_WAREHOUSE },
+    binding: { location: routedProductField(F_PRODUCT_WAREHOUSE) },
     options: {
       source: ref(STATE_WAREHOUSES),
       scopeId: SCOPE_WAREHOUSE_OPTION,
@@ -617,7 +629,6 @@ export function createInventoryGraph(): ApplicationGraph {
     label: 'Delete product',
     destructive: true,
     actionId: ACTION_DELETE_PRODUCT,
-    arguments: { [PARAM_DELETE_PRODUCT]: currentProduct },
   });
 
   graph.addNode<TextNode>({
@@ -631,14 +642,14 @@ export function createInventoryGraph(): ApplicationGraph {
     id: UI_STOCK_QUANTITY_INPUT,
     kind: 'input',
     label: 'Quantity',
-    binding: { target: ref(STATE_DRAFT_MOVEMENT), fieldId: F_MOVEMENT_QUANTITY },
+    binding: { location: draftMovementField(F_MOVEMENT_QUANTITY) },
   });
 
   graph.addNode<InputNode>({
     id: UI_STOCK_WAREHOUSE_INPUT,
     kind: 'input',
     label: 'Warehouse',
-    binding: { target: ref(STATE_DRAFT_MOVEMENT), fieldId: F_MOVEMENT_WAREHOUSE },
+    binding: { location: draftMovementField(F_MOVEMENT_WAREHOUSE) },
     options: {
       source: ref(STATE_WAREHOUSES),
       scopeId: SCOPE_WAREHOUSE_OPTION,
@@ -783,28 +794,28 @@ export function createInventoryGraph(): ApplicationGraph {
     id: UI_CREATE_SKU,
     kind: 'input',
     label: 'SKU',
-    binding: { target: ref(STATE_DRAFT_PRODUCT), fieldId: F_PRODUCT_SKU },
+    binding: { location: draftProductField(F_PRODUCT_SKU) },
   });
 
   graph.addNode<InputNode>({
     id: UI_CREATE_NAME,
     kind: 'input',
     label: 'Name',
-    binding: { target: ref(STATE_DRAFT_PRODUCT), fieldId: F_PRODUCT_NAME },
+    binding: { location: draftProductField(F_PRODUCT_NAME) },
   });
 
   graph.addNode<InputNode>({
     id: UI_CREATE_QUANTITY,
     kind: 'input',
     label: 'Opening quantity',
-    binding: { target: ref(STATE_DRAFT_PRODUCT), fieldId: F_PRODUCT_QUANTITY },
+    binding: { location: draftProductField(F_PRODUCT_QUANTITY) },
   });
 
   graph.addNode<InputNode>({
     id: UI_CREATE_WAREHOUSE,
     kind: 'input',
     label: 'Warehouse',
-    binding: { target: ref(STATE_DRAFT_PRODUCT), fieldId: F_PRODUCT_WAREHOUSE },
+    binding: { location: draftProductField(F_PRODUCT_WAREHOUSE) },
     options: {
       source: ref(STATE_WAREHOUSES),
       scopeId: SCOPE_WAREHOUSE_OPTION,
@@ -966,7 +977,6 @@ export const inventoryIds = {
   ACTION_RECEIVE_STOCK,
   ACTION_ISSUE_STOCK,
   ACTION_DELETE_PRODUCT,
-  PARAM_DELETE_PRODUCT,
   PARAM_ROUTE_PRODUCT_ID,
   ROUTE_PRODUCT,
   UI_PRODUCTS_VIEW,

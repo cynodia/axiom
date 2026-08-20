@@ -1,5 +1,6 @@
 import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
+import type { Location } from './location.js';
 import type { PresentationHints } from './nodes.js';
 
 export type UINodeKind =
@@ -78,9 +79,12 @@ export interface FormNode extends UIBase {
   submitLabel?: string;
 }
 
-export interface FieldBinding {
-  target: Expression;
-  fieldId: FieldId;
+/**
+ * An input writes to an addressed Location, never to whatever object an expression
+ * happened to evaluate to.
+ */
+export interface InputBinding {
+  location: Location;
 }
 
 export type InputHint = 'text' | 'email' | 'number' | 'password' | 'date' | 'checkbox' | 'multiline' | 'select';
@@ -99,7 +103,7 @@ export interface InputOptionsSource {
 
 export interface InputNode extends UIBase {
   kind: 'input';
-  binding: FieldBinding;
+  binding: InputBinding;
   /** Presentation hint only; the runtime infers a control from the field type otherwise. */
   inputHint?: InputHint;
   options?: InputOptionsSource;

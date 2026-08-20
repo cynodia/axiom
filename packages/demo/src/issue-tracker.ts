@@ -7,11 +7,16 @@ import {
   enumType,
   field,
   fieldId,
+  fieldLocation,
+  identitySelector,
+  itemFieldLocation,
+  itemLocation,
   literal,
   nodeId,
   optionalType,
   primitiveType,
   ref,
+  stateLocation,
   synchronizeEdges,
 } from '@axiom/core';
 import type {
@@ -74,7 +79,6 @@ const ACTION_OPEN_ISSUE = nodeId('action_open_issue');
 const PARAM_OPEN_ISSUE_ID = nodeId('param_open_issue_id');
 const ACTION_CREATE_ISSUE = nodeId('action_create_issue');
 const ACTION_DELETE_ISSUE = nodeId('action_delete_issue');
-const PARAM_DELETE_ISSUE = nodeId('param_delete_issue');
 const ACTION_ADD_COMMENT = nodeId('action_add_comment');
 
 // Routes
@@ -161,8 +165,23 @@ const emptyComment = {
   [F_COMMENT_CREATED]: '',
 };
 
-/** The current issue as selected by the active route. */
+/** The current issue as selected by the active route — a read-only derived copy. */
 const currentIssue: Expression = ref(STATE_CURRENT_ISSUE);
+
+/**
+ * Where the issue named by the route actually lives. Editing addresses this location, so
+ * nothing depends on the derived copy sharing an object with the stored record.
+ */
+const routedIssue = itemLocation(
+  stateLocation(STATE_ISSUES),
+  identitySelector(F_ISSUE_ID, ref(PARAM_ROUTE_ISSUE_ID)),
+);
+
+const routedIssueField = (id: typeof F_ISSUE_TITLE) => fieldLocation(routedIssue, id);
+const draftIssueField = (id: typeof F_ISSUE_TITLE) =>
+  fieldLocation(stateLocation(STATE_DRAFT_ISSUE), id);
+const draftCommentField = (id: typeof F_COMMENT_BODY) =>
+  fieldLocation(stateLocation(STATE_DRAFT_COMMENT), id);
 
 export function createIssueTrackerGraph(): ApplicationGraph {
   const graph = new ApplicationGraph('issue-tracker', 'Issue Tracker');
@@ -348,8 +367,8 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     failureModes: [{ code: 'title-missing', message: 'An issue needs a title before it can be created.' }],
     operations: [
       {
-        kind: 'add-item',
-        collectionId: STATE_ISSUES,
+        kind: 'insert',
+        target: stateLocation(STATE_ISSUES),
         position: 'start',
         value: {
           kind: 'object',
@@ -364,7 +383,7 @@ export function createIssueTrackerGraph(): ApplicationGraph {
           ],
         },
       },
-      { kind: 'set-state', stateId: STATE_DRAFT_ISSUE, value: literal({ ...emptyIssue }) },
+      { kind: 'set', target: stateLocation(STATE_DRAFT_ISSUE), value: literal({ ...emptyIssue }) },
       { kind: 'navigate', routeId: ROUTE_LIST },
     ],
   });
@@ -376,9 +395,8 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     destructive: true,
     requiresConfirmation: true,
     confirmationMessage: 'Delete this issue permanently?',
-    parameters: [{ id: PARAM_DELETE_ISSUE, name: 'issue', valueType: entityType(ENTITY_ISSUE), required: true }],
     operations: [
-      { kind: 'remove-item', collectionId: STATE_ISSUES, item: ref(PARAM_DELETE_ISSUE) },
+      { kind: 'remove', target: routedIssue },
       { kind: 'navigate', routeId: ROUTE_LIST },
     ],
   });
@@ -391,8 +409,8 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     failureModes: [{ code: 'body-missing', message: 'A comment needs a body.' }],
     operations: [
       {
-        kind: 'add-item',
-        collectionId: STATE_COMMENTS,
+        kind: 'insert',
+        target: stateLocation(STATE_COMMENTS),
         value: {
           kind: 'object',
           entityId: ENTITY_COMMENT,
@@ -405,7 +423,7 @@ export function createIssueTrackerGraph(): ApplicationGraph {
           ],
         },
       },
-      { kind: 'set-state', stateId: STATE_DRAFT_COMMENT, value: literal({ ...emptyComment }) },
+      { kind: 'set', target: stateLocation(STATE_DRAFT_COMMENT), value: literal({ ...emptyComment }) },
     ],
   });
 
@@ -437,14 +455,14 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     kind: 'input',
     label: 'Search',
     placeholder: 'Search titles',
-    binding: { target: ref(STATE_FILTER), fieldId: F_FILTER_SEARCH },
+    binding: { location: fieldLocation(stateLocation(STATE_FILTER), F_FILTER_SEARCH) },
   });
 
   graph.addNode<InputNode>({
     id: UI_FILTER_STATUS,
     kind: 'input',
     label: 'Status',
-    binding: { target: ref(STATE_FILTER), fieldId: F_FILTER_STATUS },
+    binding: { location: fieldLocation(stateLocation(STATE_FILTER), F_FILTER_STATUS) },
   });
 
   graph.addNode<ContainerNode>({
@@ -545,7 +563,7 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     id: UI_DETAIL_TITLE_INPUT,
     kind: 'input',
     label: 'Title',
-    binding: { target: currentIssue, fieldId: F_ISSUE_TITLE },
+    binding: { location: routedIssueField(F_ISSUE_TITLE) },
   });
 
   graph.addNode<TextNode>({
@@ -567,21 +585,21 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     kind: 'input',
     label: 'Description',
     inputHint: 'multiline',
-    binding: { target: currentIssue, fieldId: F_ISSUE_DESCRIPTION },
+    binding: { location: routedIssueField(F_ISSUE_DESCRIPTION) },
   });
 
   graph.addNode<InputNode>({
     id: UI_DETAIL_STATUS_INPUT,
     kind: 'input',
     label: 'Status',
-    binding: { target: currentIssue, fieldId: F_ISSUE_STATUS },
+    binding: { location: routedIssueField(F_ISSUE_STATUS) },
   });
 
   graph.addNode<InputNode>({
     id: UI_DETAIL_ASSIGNEE_INPUT,
     kind: 'input',
     label: 'Assignee',
-    binding: { target: currentIssue, fieldId: F_ISSUE_ASSIGNEE },
+    binding: { location: routedIssueField(F_ISSUE_ASSIGNEE) },
     options: {
       source: ref(STATE_USERS),
       scopeId: SCOPE_USER_OPTION,
@@ -604,7 +622,6 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     label: 'Delete issue',
     destructive: true,
     actionId: ACTION_DELETE_ISSUE,
-    arguments: { [PARAM_DELETE_ISSUE]: currentIssue },
   });
 
   graph.addNode<TextNode>({
@@ -663,7 +680,7 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     id: UI_COMMENT_AUTHOR_INPUT,
     kind: 'input',
     label: 'Author',
-    binding: { target: ref(STATE_DRAFT_COMMENT), fieldId: F_COMMENT_AUTHOR },
+    binding: { location: draftCommentField(F_COMMENT_AUTHOR) },
     options: {
       source: ref(STATE_USERS),
       scopeId: SCOPE_USER_OPTION,
@@ -677,7 +694,7 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     kind: 'input',
     label: 'Comment',
     inputHint: 'multiline',
-    binding: { target: ref(STATE_DRAFT_COMMENT), fieldId: F_COMMENT_BODY },
+    binding: { location: draftCommentField(F_COMMENT_BODY) },
   });
 
   graph.addNode<FormNode>({
@@ -757,7 +774,7 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     id: UI_CREATE_TITLE_INPUT,
     kind: 'input',
     label: 'Title',
-    binding: { target: ref(STATE_DRAFT_ISSUE), fieldId: F_ISSUE_TITLE },
+    binding: { location: draftIssueField(F_ISSUE_TITLE) },
   });
 
   graph.addNode<InputNode>({
@@ -765,21 +782,21 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     kind: 'input',
     label: 'Description',
     inputHint: 'multiline',
-    binding: { target: ref(STATE_DRAFT_ISSUE), fieldId: F_ISSUE_DESCRIPTION },
+    binding: { location: draftIssueField(F_ISSUE_DESCRIPTION) },
   });
 
   graph.addNode<InputNode>({
     id: UI_CREATE_STATUS_INPUT,
     kind: 'input',
     label: 'Status',
-    binding: { target: ref(STATE_DRAFT_ISSUE), fieldId: F_ISSUE_STATUS },
+    binding: { location: draftIssueField(F_ISSUE_STATUS) },
   });
 
   graph.addNode<InputNode>({
     id: UI_CREATE_ASSIGNEE_INPUT,
     kind: 'input',
     label: 'Assignee',
-    binding: { target: ref(STATE_DRAFT_ISSUE), fieldId: F_ISSUE_ASSIGNEE },
+    binding: { location: draftIssueField(F_ISSUE_ASSIGNEE) },
     options: {
       source: ref(STATE_USERS),
       scopeId: SCOPE_USER_OPTION,
@@ -886,7 +903,6 @@ export const issueTrackerIds = {
   ACTION_DELETE_ISSUE,
   ACTION_ADD_COMMENT,
   ACTION_OPEN_ISSUE,
-  PARAM_DELETE_ISSUE,
   PARAM_OPEN_ISSUE_ID,
   PARAM_ROUTE_ISSUE_ID,
   ROUTE_DETAIL,

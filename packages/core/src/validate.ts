@@ -1,5 +1,7 @@
 import type { Expression } from './expressions.js';
-import type { EdgeId, FieldId, NodeId } from './ids.js';
+import type { FieldId, NodeId } from './ids.js';
+import { VALIDATION_CODES } from './diagnostics.js';
+import type { ValidationIssue, ValidationResult } from './diagnostics.js';
 import { EDGE_KINDS } from './nodes.js';
 import type {
   ActionDef,
@@ -14,41 +16,18 @@ import { isUINode, uiChildIds } from './ui.js';
 import type { UINode } from './ui.js';
 import type { AnyNode } from './types.js';
 import type { ApplicationGraph } from './graph.js';
+import { semanticContextFromGraph } from './context.js';
+import { inferExpressionType, inferLocationType, isObviouslyIncompatible } from './infer.js';
+import type { SemanticContext } from './infer.js';
+import { locationExpressions } from './location.js';
+import type { Location } from './location.js';
+import { validateLocation } from './validate-location.js';
 
-export interface ValidationIssue {
-  code: string;
-  message: string;
-  nodeId?: NodeId;
-  fieldId?: FieldId;
-  edgeId?: EdgeId;
-}
 
-export interface ValidationResult {
-  valid: boolean;
-  errors: ValidationIssue[];
-  warnings: ValidationIssue[];
-}
-
-export const VALIDATION_CODES = {
-  duplicateNodeId: 'DUPLICATE_NODE_ID',
-  duplicateFieldId: 'DUPLICATE_FIELD_ID',
-  danglingNodeRef: 'DANGLING_NODE_REF',
-  danglingFieldRef: 'DANGLING_FIELD_REF',
-  invalidTypeRef: 'INVALID_TYPE_REF',
-  invalidEdgeKind: 'INVALID_EDGE_KIND',
-  invalidUiChild: 'INVALID_UI_CHILD',
-  invalidActionRef: 'INVALID_ACTION_REF',
-  invalidStateRef: 'INVALID_STATE_REF',
-  invalidRouteView: 'INVALID_ROUTE_VIEW',
-  invalidExpressionRef: 'INVALID_EXPRESSION_REF',
-  invalidRouteParameter: 'INVALID_ROUTE_PARAMETER',
-  duplicateRoutePath: 'DUPLICATE_ROUTE_PATH',
-  missingIdentityField: 'MISSING_IDENTITY_FIELD',
-  unreachableUiNode: 'UNREACHABLE_UI_NODE',
-} as const;
 
 interface Context {
   graph: ApplicationGraph;
+  semantics: SemanticContext;
   nodes: Map<NodeId, AnyNode>;
   fields: Map<FieldId, NodeId>;
   /** Ids that a `ref` expression is allowed to resolve at runtime. */
@@ -67,7 +46,15 @@ export function validateGraph(graph: ApplicationGraph): ValidationResult {
   const fields = new Map<FieldId, NodeId>();
   const errors: ValidationIssue[] = [];
   const warnings: ValidationIssue[] = [];
-  const context: Context = { graph, nodes, fields, scopes: new Set(), errors, warnings };
+  const context: Context = {
+    graph,
+    semantics: semanticContextFromGraph(graph),
+    nodes,
+    fields,
+    scopes: new Set(),
+    errors,
+    warnings,
+  };
 
   for (const node of graph.listNodes()) {
     if (nodes.has(node.id)) {
@@ -209,22 +196,36 @@ function validateOperation(
   local: Set<NodeId>,
 ): void {
   switch (operation.kind) {
-    case 'set-state':
-      requireKind(operation.stateId, 'state', action.id, context, VALIDATION_CODES.invalidStateRef);
+    case 'set': {
+      checkLocation(operation.target, action.id, context, local, true);
       validateExpression(operation.value, action.id, context, local);
+      checkAssignment(operation.target, operation.value, action.id, context);
       return;
-    case 'add-item':
-      requireKind(operation.collectionId, 'state', action.id, context, VALIDATION_CODES.invalidStateRef);
+    }
+    case 'insert': {
+      checkLocation(operation.target, action.id, context, local, true);
       validateExpression(operation.value, action.id, context, local);
+      const target = resolveKnownType(inferLocationType(operation.target, context.semantics));
+      if (target && target.kind !== 'collection') {
+        context.errors.push({
+          code: VALIDATION_CODES.selectorOnNonCollection,
+          message: `Action ${action.id} inserts into a ${target.kind} location, which is not a collection`,
+          nodeId: action.id,
+        });
+        return;
+      }
+      if (target?.kind === 'collection') {
+        reportIncompatible(
+          target.itemType,
+          inferExpressionType(operation.value, context.semantics),
+          action.id,
+          context,
+        );
+      }
       return;
-    case 'remove-item':
-      requireKind(operation.collectionId, 'state', action.id, context, VALIDATION_CODES.invalidStateRef);
-      validateExpression(operation.item, action.id, context, local);
-      return;
-    case 'update-field':
-      validateExpression(operation.target, action.id, context, local);
-      validateExpression(operation.value, action.id, context, local);
-      requireField(operation.fieldId, action.id, context);
+    }
+    case 'remove':
+      checkLocation(operation.target, action.id, context, local, true);
       return;
     case 'invoke': {
       requireKind(operation.actionId, 'action', action.id, context, VALIDATION_CODES.invalidActionRef);
@@ -260,6 +261,9 @@ function validateOperation(
       for (const input of Object.values(operation.inputs ?? {})) {
         validateExpression(input, action.id, context, local);
       }
+      if (operation.resultTarget) {
+        checkLocation(operation.resultTarget, action.id, context, local, true);
+      }
       for (const effect of operation.declaredEffects ?? []) {
         if (effect.kind !== 'external') {
           requireKind(effect.stateId, 'state', action.id, context, VALIDATION_CODES.invalidStateRef);
@@ -272,6 +276,70 @@ function validateOperation(
         message: `Unknown operation kind in action ${action.id}`,
         nodeId: action.id,
       });
+  }
+}
+
+function resolveKnownType(type: TypeRef | undefined): TypeRef | undefined {
+  return type?.kind === 'optional' ? resolveKnownType(type.valueType) : type;
+}
+
+/** Validates a location structurally and validates the expressions inside it. */
+function checkLocation(
+  location: Location,
+  ownerId: NodeId,
+  context: Context,
+  local: Set<NodeId>,
+  requireWritable: boolean,
+): void {
+  context.errors.push(
+    ...validateLocation(location, context.semantics, { ownerId, requireWritable }),
+  );
+  for (const expression of locationExpressions(location)) {
+    validateExpression(expression, ownerId, context, local);
+  }
+}
+
+function checkAssignment(target: Location, value: Expression, ownerId: NodeId, context: Context): void {
+  reportIncompatible(
+    inferLocationType(target, context.semantics),
+    inferExpressionType(value, context.semantics),
+    ownerId,
+    context,
+  );
+}
+
+function reportIncompatible(
+  target: TypeRef | undefined,
+  value: TypeRef | undefined,
+  ownerId: NodeId,
+  context: Context,
+): void {
+  if (isObviouslyIncompatible(target, value)) {
+    context.errors.push({
+      code: VALIDATION_CODES.assignmentTypeMismatch,
+      message: `${ownerId} assigns a ${describeType(value)} to a ${describeType(target)} location`,
+      nodeId: ownerId,
+    });
+  }
+}
+
+function describeType(type: TypeRef | undefined): string {
+  if (!type) {
+    return 'value of unknown type';
+  }
+  switch (type.kind) {
+    case 'primitive':
+      return type.primitive;
+    case 'entity':
+      return `entity ${type.entityId}`;
+    case 'collection':
+      return `collection of ${describeType(type.itemType)}`;
+    case 'optional':
+      return `optional ${describeType(type.valueType)}`;
+    case 'enum':
+      return `enum(${type.values.join('|')})`;
+    default:
+      return 'value of unknown type';
   }
 }
 
@@ -351,8 +419,15 @@ function validateUiNode(node: UINode, context: Context): void {
       }
       return;
     case 'input':
-      validateExpression(node.binding.target, node.id, context, new Set());
-      requireField(node.binding.fieldId, node.id, context);
+      if (!node.binding?.location) {
+        context.errors.push({
+          code: VALIDATION_CODES.unknownStateRef,
+          message: `Input ${node.id} has no bound location`,
+          nodeId: node.id,
+        });
+        return;
+      }
+      checkLocation(node.binding.location, node.id, context, new Set(), true);
       if (node.options) {
         validateExpression(node.options.source, node.id, context, new Set());
         requireField(node.options.valueFieldId, node.id, context);

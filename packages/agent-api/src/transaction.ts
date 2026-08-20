@@ -22,6 +22,7 @@ import type {
   FieldId,
   FormNode,
   InputNode,
+  Location,
   NodeId,
   RepeatNode,
   RouteDef,
@@ -188,8 +189,8 @@ export class Transaction extends GraphQueries {
    */
   bindField(request: {
     parentId: NodeId;
-    target: Expression;
-    fieldId: FieldId;
+    /** The addressable position the input writes to. */
+    location: Location;
     label?: string;
     inputHint?: InputNode['inputHint'];
     id?: NodeId;
@@ -199,7 +200,7 @@ export class Transaction extends GraphQueries {
       id: request.id,
       label: request.label,
       inputHint: request.inputHint,
-      binding: { target: request.target, fieldId: request.fieldId },
+      binding: { location: request.location },
     });
     this.appendChild(request.parentId, inputId, request.position);
     return inputId;

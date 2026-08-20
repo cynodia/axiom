@@ -1,4 +1,10 @@
-import { isUINode, referencedIds } from '@axiom/core';
+import {
+  isUINode,
+  locationFieldIds,
+  locationRootStateId,
+  locationSelectorFieldIds,
+  referencedIds,
+} from '@axiom/core';
 import type {
   ActionDef,
   AnyNode,
@@ -10,6 +16,7 @@ import type {
   FieldId,
   FormNode,
   GraphEdge,
+  Location,
   NodeId,
   StateDef,
   UINode,
@@ -30,6 +37,22 @@ export interface Subgraph {
 const READ_KINDS: readonly EdgeKind[] = ['reads', 'binds', 'derives-from'];
 const WRITE_KINDS: readonly EdgeKind[] = ['writes'];
 const CONTAINMENT_KINDS: readonly EdgeKind[] = ['contains', 'renders'];
+
+/** What a change to a location can reach. */
+export interface MutationImpact {
+  location: Location;
+  rootStateId: NodeId;
+  fieldIds: FieldId[];
+  directWriters: AnyNode[];
+  dependentDerivedStates: StateDef[];
+  affectedConstraints: ConstraintDef[];
+  affectedViews: ViewNode[];
+}
+
+function edgeFieldIds(edge: GraphEdge): FieldId[] {
+  const fieldIds = edge.metadata?.fieldIds;
+  return Array.isArray(fieldIds) ? (fieldIds as FieldId[]) : [];
+}
 
 export class GraphQueries {
   constructor(protected graph: ApplicationGraph) {}
@@ -109,7 +132,7 @@ export class GraphQueries {
       .filter((node): node is UINode => isUINode(node))
       .filter((node) => {
         if (node.kind === 'input') {
-          return fieldIds.has(node.binding.fieldId);
+          return locationFieldIds(node.binding.location).some((id) => fieldIds.has(id));
         }
         if (node.kind === 'field-display') {
           return fieldIds.has(node.fieldId);
@@ -152,7 +175,7 @@ export class GraphQueries {
       .filter(
         (action) =>
           action.destructive === true ||
-          (action.operations ?? []).some((operation) => operation.kind === 'remove-item'),
+          (action.operations ?? []).some((operation) => operation.kind === 'remove'),
       );
   }
 
@@ -191,6 +214,135 @@ export class GraphQueries {
   /** Ids a node's expressions reference, for dependency reporting. */
   referencedBy(expression: Expression): NodeId[] {
     return referencedIds(expression);
+  }
+
+  /** Nodes that read a specific field, from the field metadata on their read edges. */
+  getFieldReaders(fieldId: FieldId): AnyNode[] {
+    return this.nodesWithFieldEdge(fieldId, READ_KINDS);
+  }
+
+  /** Nodes that write a specific field — actions and the inputs bound to it. */
+  getFieldWriters(fieldId: FieldId): AnyNode[] {
+    return this.nodesWithFieldEdge(fieldId, WRITE_KINDS);
+  }
+
+  /**
+   * What can change this location, and what observes it. The answer comes entirely from
+   * graph relationships, so an agent never has to read application source to find out.
+   */
+  getMutationImpact(location: Location): MutationImpact {
+    const rootStateId = locationRootStateId(location);
+    const fieldIds = locationFieldIds(location);
+    const selectorFieldIds = locationSelectorFieldIds(location);
+
+    const directWriters = this.graph
+      .getIncomingEdges(rootStateId, { kinds: WRITE_KINDS })
+      .filter((edge) => {
+        if (fieldIds.length === 0) {
+          return true;
+        }
+        const edgeFields = edgeFieldIds(edge);
+        // An edge with no field metadata replaces the whole value.
+        return edgeFields.length === 0 || edgeFields.some((id) => fieldIds.includes(id));
+      })
+      .map((edge) => this.graph.getNode(edge.from))
+      .filter((node): node is AnyNode => Boolean(node));
+
+    const dependentDerivedStates = this.derivedStatesFrom(rootStateId);
+
+    const entityIds = new Set(
+      [...fieldIds, ...selectorFieldIds]
+        .map((id) => this.graph.getField(id)?.entityId)
+        .filter((id): id is NodeId => Boolean(id)),
+    );
+    if (entityIds.size === 0) {
+      // Replacing a whole state affects every entity stored in it.
+      for (const edge of this.graph.getOutgoingEdges(rootStateId, { kinds: ['references'] })) {
+        entityIds.add(edge.to);
+      }
+    }
+    const affectedConstraints = this.graph.getNodesByKind('constraint').filter((constraint) => {
+      if (constraint.entityId && entityIds.has(constraint.entityId)) {
+        return fieldIds.length === 0 || this.constraintTouches(constraint, fieldIds);
+      }
+      return this.graph
+        .getOutgoingEdges(constraint.id, { kinds: READ_KINDS })
+        .some((edge) => edge.to === rootStateId);
+    });
+
+    const observers = new Set<NodeId>([rootStateId, ...dependentDerivedStates.map((state) => state.id)]);
+    const views = new Map<NodeId, ViewNode>();
+    for (const node of this.graph.listNodes()) {
+      if (!isUINode(node)) {
+        continue;
+      }
+      const touches = this.graph
+        .getOutgoingEdges(node.id, { kinds: [...READ_KINDS, ...WRITE_KINDS] })
+        .some((edge) => observers.has(edge.to));
+      if (!touches) {
+        continue;
+      }
+      for (const view of this.enclosingViews(node.id)) {
+        views.set(view.id, view);
+      }
+    }
+
+    return {
+      location,
+      rootStateId,
+      fieldIds,
+      directWriters,
+      dependentDerivedStates,
+      affectedConstraints,
+      affectedViews: [...views.values()],
+    };
+  }
+
+  private constraintTouches(constraint: ConstraintDef, fieldIds: readonly FieldId[]): boolean {
+    const declared = this.graph
+      .getOutgoingEdges(constraint.id, { kinds: ['constrains'] })
+      .flatMap((edge) => edgeFieldIds(edge));
+    return declared.length === 0 || declared.some((id) => fieldIds.includes(id));
+  }
+
+  /** Derived states that depend on a state, directly or through other derived states. */
+  private derivedStatesFrom(stateId: NodeId): StateDef[] {
+    const found = new Map<NodeId, StateDef>();
+    let frontier = [stateId];
+    const seen = new Set<NodeId>([stateId]);
+
+    while (frontier.length > 0) {
+      const next: NodeId[] = [];
+      for (const current of frontier) {
+        for (const edge of this.graph.getIncomingEdges(current, { kinds: ['derives-from'] })) {
+          if (seen.has(edge.from)) {
+            continue;
+          }
+          seen.add(edge.from);
+          const node = this.graph.getNode(edge.from);
+          if (node?.kind === 'state') {
+            found.set(node.id, node);
+            next.push(node.id);
+          }
+        }
+      }
+      frontier = next;
+    }
+    return [...found.values()];
+  }
+
+  private nodesWithFieldEdge(fieldId: FieldId, kinds: readonly EdgeKind[]): AnyNode[] {
+    const found = new Map<NodeId, AnyNode>();
+    for (const edge of this.graph.listEdges()) {
+      if (!kinds.includes(edge.kind) || !edgeFieldIds(edge).includes(fieldId)) {
+        continue;
+      }
+      const node = this.graph.getNode(edge.from);
+      if (node) {
+        found.set(node.id, node);
+      }
+    }
+    return [...found.values()];
   }
 
   protected ancestors(id: NodeId): UINode[] {

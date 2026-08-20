@@ -7,11 +7,15 @@ import {
   entityType,
   field,
   fieldId,
+  fieldLocation,
+  identitySelector,
+  itemLocation,
   literal,
   nodeId,
   optionalType,
   primitiveType,
   ref,
+  stateLocation,
   synchronizeEdges,
 } from '@axiom/core';
 import type {
@@ -73,8 +77,8 @@ function buildGraph(): ApplicationGraph {
     name: 'addRecord',
     operations: [
       {
-        kind: 'add-item',
-        collectionId: STATE,
+        kind: 'insert',
+        target: stateLocation(STATE),
         value: {
           kind: 'object',
           entityId: ENTITY,
@@ -90,14 +94,19 @@ function buildGraph(): ApplicationGraph {
     id: ACTION_REMOVE,
     kind: 'action',
     name: 'removeRecord',
-    parameters: [{ id: PARAM_REMOVE, name: 'record', valueType: entityType(ENTITY) }],
-    operations: [{ kind: 'remove-item', collectionId: STATE, item: ref(PARAM_REMOVE) }],
+    parameters: [{ id: PARAM_REMOVE, name: 'recordId', valueType: primitiveType('string') }],
+    operations: [
+      {
+        kind: 'remove',
+        target: itemLocation(stateLocation(STATE), identitySelector(F_ID, ref(PARAM_REMOVE))),
+      },
+    ],
   });
   graph.addNode<InputNode>({
     id: INPUT_LABEL,
     kind: 'input',
     label: 'Label',
-    binding: { target: ref(STATE_DRAFT), fieldId: F_LABEL },
+    binding: { location: fieldLocation(stateLocation(STATE_DRAFT), F_LABEL) },
   });
   graph.addNode<FormNode>({
     id: FORM,
@@ -230,7 +239,11 @@ test('committing maintains the derived edges for new nodes', () => {
       name: 'Note',
       valueType: optionalType(primitiveType('string')),
     });
-    transaction.bindField({ parentId: FORM, target: ref(STATE_DRAFT), fieldId: noteId, label: 'Note' });
+    transaction.bindField({
+      parentId: FORM,
+      location: fieldLocation(stateLocation(STATE_DRAFT), noteId),
+      label: 'Note',
+    });
   }, { reason: 'Make notes editable' });
 
   assert.equal(outcome.committed, true);
@@ -272,7 +285,7 @@ test('an agent can add a whole feature — entity, state, action and UI — in o
     });
     const clearAction = transaction.addAction({
       name: 'clearTags',
-      operations: [{ kind: 'set-state', stateId: tagsState, value: literal([]) }],
+      operations: [{ kind: 'set', target: stateLocation(tagsState), value: literal([]) }],
     });
     const buttonId = transaction.addButton({ label: 'Clear tags', actionId: clearAction });
     transaction.appendChild(VIEW, buttonId);
