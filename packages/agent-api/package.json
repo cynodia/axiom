@@ -1,0 +1,20 @@
+{
+  "name": "@axiom/agent-api",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@axiom/core": "file:../core"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json tsconfig.test.json",
+    "test": "node --test dist/test/**/*.test.js"
+  }
+}
