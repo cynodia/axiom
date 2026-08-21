@@ -3,3 +3,4 @@ dist/
 *.tsbuildinfo
 dist-test/
 release/
+packages/axiom/docs/

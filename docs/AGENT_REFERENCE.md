@@ -1,0 +1,424 @@
+# Agent reference
+
+Axiom 0.5.1-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+declarations before authoring or modifying an Axiom application.
+
+Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
+[`ANTI_PATTERNS.md`](ANTI_PATTERNS.md).
+
+## Glossary
+
+One canonical term per concept. These are not interchangeable.
+
+| Term | Meaning |
+| --- | --- |
+| **Graph** | `ApplicationGraph`. The authoritative application representation. |
+| **Node** | Any graph member: entity, state, action, constraint, transition-constraint, route, or one of nine UI kinds. |
+| **Expression** | A pure value computation. Never writes. |
+| **Location** | An address of a writable position. |
+| **Operation** | One step of an action: `set` `insert` `remove` `for-each` `invoke` `navigate` `native`. |
+| **Mutation** | A `set`, `insert` or `remove` against a Location. The only way state changes. |
+| **Guard** | An action precondition paired with the failure it reports. Refuses *this invocation*. |
+| **Constraint** | An invariant over proposed state. Refuses *any* state that breaks it. |
+| **Transition constraint** | An invariant over previous → proposed state. Refuses a *change*. |
+| **Validation** | Authoring-time structural checking (`validateGraph`). |
+| **Diagnostic** | A structured runtime failure record. |
+| **Presentation** | Semantic UX intent on a UI node. |
+| **Theme** | Translation of presentation intent into visual values. |
+
+"Rule" is not an Axiom concept; say guard, constraint or transition constraint.
+
+## Graph construction
+
+```ts
+const graph = new ApplicationGraph(id, name);      // version defaults to '0.5.1'
+graph.addNode<StateDef>({ id, kind: 'state', ... }); // returns NodeId; throws if id exists
+graph.getNode<StateDef>(id);                        // deep clone, or undefined
+graph.updateNode(node);                             // write a modified node back
+graph.removeNode(id);
+graph.getNodesByKind('action');
+graph.listNodes();
+graph.getField(fieldId);                            // → { entityId, field } | undefined
+graph.setTheme(partialTheme);
+graph.serialize() / ApplicationGraph.deserialize(json);
+```
+
+- Reads return **deep clones**. Mutating a fetched node changes nothing; call `updateNode`.
+- Edges are **derived on demand** from the current nodes (`graph.semanticEdges()`), cached against a revision counter. `synchronizeEdges(graph)` materializes them into graph data; correctness never depends on calling it.
+- `addNode` with no `id` generates one (`createNodeId(kind)`).
+
+## Ids
+
+`NodeId`, `FieldId`, `EdgeId` are branded strings. Build with `nodeId()`, `fieldId()`,
+`edgeId()`; generate with `createNodeId(prefix)`, `createFieldId(prefix)`.
+
+Names are metadata for humans. **Nothing resolves by name.**
+
+## TypeRef
+
+Types are structures, never strings.
+
+| Builder | Shape |
+| --- | --- |
+| `primitiveType(p)` | `{ kind: 'primitive', primitive }` where `p` ∈ `string` `number` `boolean` `date` `datetime` `binary` |
+| `entityType(id)` | `{ kind: 'entity', entityId }` |
+| `collectionType(t)` | `{ kind: 'collection', itemType }` |
+| `optionalType(t)` | `{ kind: 'optional', valueType }` |
+| `enumType([...])` | `{ kind: 'enum', values }` |
+
+## ENTITY VALUE INVARIANT
+
+Runtime entity records are keyed by **`FieldId`**.
+
+Correct:
+
+```ts
+{ [F_TITLE]: 'Dune', [F_AUTHOR]: 'Frank Herbert' }
+```
+
+Incorrect — validated and rejected:
+
+```ts
+{ title: 'Dune', author: 'Frank Herbert' }
+```
+
+`initialValue` is walked against its `TypeRef` recursively. Data keyed by field *name*
+produces `INITIAL_VALUE_UNKNOWN_FIELD` plus `INITIAL_VALUE_MISSING_REQUIRED_FIELD`, with a
+`path` such as `state_orders[2].field_lines[0]`. It never surfaces later as an
+inexplicably empty UI.
+
+This applies to every record: `initialValue`, `hydrateState` values, `object` expression
+output, and anything read back with `getState`.
+
+## Expressions
+
+15 kinds. Full semantics: [`EXPRESSIONS.md`](EXPRESSIONS.md).
+
+```ts
+literal(v) ref(id) field(src, fieldId) object(entries, entityId?)
+binary(op, l, r) unary(op, operand) call(fn, ...args) conditional(c, t, f)
+filter(src, scopeId, predicate) find(src, scopeId, predicate)
+map(src, scopeId, projection) sort(src, scopeId, by, direction?)
+every(src, scopeId, predicate) some(src, scopeId, predicate) flatten(src)
+```
+
+Builtins (14): `required` `is-empty` `non-empty` `length` `contains` `concat` `coalesce`
+`one-of` `count` `sum` `lowercase` `to-string` `now` `uuid`.
+
+Binary operators: `eq` `neq` `gt` `gte` `lt` `lte` `and` `or` `add` `subtract` `multiply`
+`divide`. Unary: `not` `negate`.
+
+### Presence semantics
+
+`required(x)` asks only whether a value exists.
+
+| Value | `required` | `is-empty` | truthy in a condition |
+| --- | --- | --- | --- |
+| `null` / `undefined` | `false` | `true` | `false` |
+| `[]` | **`true`** | `true` | **`false`** |
+| `[x]` | `true` | `false` | `true` |
+| `''` | **`true`** | `true` | `false` |
+| `'  '` (whitespace) | `true` | **`true`** | `true` |
+| `0` | **`true`** | `false` | `false` |
+| `false` | **`true`** | `false` | `false` |
+| `{}` | `true` | `false` | `true` |
+
+Field-level `required: true` means *present*, not non-blank. Express "must not be blank"
+as a constraint using `non-empty`.
+
+### Collection null semantics
+
+Collection operators are strict: `null` is a missing collection and **fails**; `[]` is a
+present empty collection and behaves normally. Nothing returns a plausible value alongside
+a failure.
+
+| Applied to | `[]` | `null` |
+| --- | --- | --- |
+| `map` `filter` `sort` | `[]` | error |
+| `find` | `null` | error |
+| `every` | `true` | error |
+| `some` | `false` | error |
+| `flatten` | `[]` | error |
+| `count` | `0` | error |
+| `sum` | `0` | error |
+| `length` | `0` | `0` (falls back to text length) |
+| `for-each` | zero iterations | error |
+
+An error is an `ExpressionEvaluationError`, caught at each boundary (derivation,
+precondition, constraint, operation, render) and reported as a diagnostic. **A constraint
+that cannot be evaluated counts as violated, never as satisfied.**
+
+Where a collection may legitimately be absent, say so:
+
+```ts
+coalesce(field(ref(CURRENT_ORDER), F_LINES), literal([]))
+```
+
+`sum` additionally fails if any member is not a finite number, so a malformed aggregation
+cannot quietly satisfy a guard.
+
+### Scope resolution
+
+A `ref` resolves its `targetId` against the scope chain, innermost first, then state:
+
+```text
+innermost iteration scope → … → outermost iteration scope
+  → action parameters → route parameters
+  → state
+```
+
+Unresolved → `UNRESOLVED_REFERENCE`.
+
+| Scope | Introduced by | Bound id |
+| --- | --- | --- |
+| Route parameter | `RouteDef.parameters[].id` | the parameter id |
+| Action parameter | `ActionDef.parameters[].id` | the parameter id |
+| Repeat item | `RepeatNode` | **the repeat node's own id** |
+| Collection item | `filter` `find` `map` `sort` `every` `some` | the expression's `scopeId` |
+| Iteration member | `for-each` | the operation's `scopeId` |
+| Entity under validation | `ConstraintDef.entityId` | **the entity node's id** |
+| Transition previous / proposed | `TransitionConstraintDef` | `previousScopeId` / `proposedScopeId` |
+
+Iteration scopes are ordinary `NodeId`s, not a distinct branded type. Validation prevents
+misuse: a scope id MUST NOT shadow an enclosing scope (`SCOPE_SHADOWING`) and MUST NOT be
+the id of a graph node (`SCOPE_COLLIDES_WITH_NODE`).
+
+An action parameter with the same id as a route parameter shadows it.
+
+## Locations
+
+`Expression` = value. `Location` = address. Full detail: [`LOCATIONS.md`](LOCATIONS.md).
+
+```ts
+stateLocation(stateId)
+fieldLocation(target, fieldId)
+itemLocation(collection, selector)
+identitySelector(fieldId, valueExpression)     // preferred
+indexSelector(indexExpression)
+itemFieldLocation(stateId, identityFieldId, identityValue, fieldId)   // shorthand
+```
+
+```ts
+// order → the line with this id → its quantity
+fieldLocation(
+  itemLocation(routedLines, identitySelector(F_LINE_ID, ref(SCOPE_LINE))),
+  F_LINE_QUANTITY,
+)
+```
+
+- Every location is traceable to its root state (`locationRootStateId`).
+- A write **rebuilds the path from the root state**; it never depends on the identity of an object an expression returned.
+- Writing derived state is rejected at validation (`DERIVED_STATE_WRITE`) and at runtime.
+- `locationExpressions()` are read dependencies; `locationFieldIds()` are write dependencies.
+
+## State
+
+```ts
+{ id, kind: 'state', valueType, initialValue?, derivation?, draft?, ephemeral?, persistence? }
+```
+
+| Kind | Written by | Instance validation | Notes |
+| --- | --- | --- | --- |
+| Stored | actions, input bindings, `hydrateState` | yes | The default. |
+| Derived (`derivation`) | nothing | skipped | Recomputed on demand, handed out as a frozen deep copy. |
+| Draft (`draft: true`) | as stored | skipped | Work in progress. Input writes are not guarded per keystroke. |
+| Ephemeral (`ephemeral: true`) | as stored | skipped | A UI fact, not a domain fact. MUST NOT be persisted. |
+
+`persistence`: `{ kind: 'memory' }` and `{ kind: 'local-storage', key? }` work.
+`{ kind: 'remote', sourceId }` validates and **does nothing**.
+
+Absent `initialValue`, a state starts at the default for its type: `optional` → `null`,
+`collection` → `[]`, `number` → `0`, `boolean` → `false`, other primitive → `''`,
+`enum` → its first value, `entity` → `null`.
+
+## Actions and transactions
+
+```ts
+{
+  id, kind: 'action', parameters?, guards?, preconditions?, failureModes?,
+  operations, postconditions?, destructive?, requiresConfirmation?,
+  confirmationMessage?, confirmation?,
+}
+```
+
+Prefer `guards: [{ condition, failureMode }]`. The older parallel `preconditions` /
+`failureModes` arrays align **by position** — `failureModes[2]` reports
+`preconditions[2]` — and the compiler normalizes `guards` into them.
+
+Lifecycle, exactly:
+
+```text
+resolve action            → ACTION_NOT_FOUND
+bind parameters           → PARAMETER_MISSING (required parameter absent)
+evaluate preconditions    → PRECONDITION_FAILED { preconditionIndex, failureMode }
+confirmation (if required)→ declined ends the invocation
+  ── no transaction has been opened up to this point; nothing was mutated ──
+BEGIN TRANSACTION
+  execute operations sequentially against provisional state
+  evaluate entity constraints against proposed state
+  evaluate transition constraints against entry state → proposed state
+  evaluate postconditions
+COMMIT if nothing failed, otherwise ROLL BACK EVERY MUTATION
+re-render
+```
+
+`invokeAction` returns `{ ok, diagnostics }` for **that invocation**.
+
+### Operations
+
+| Kind | Semantics |
+| --- | --- |
+| `set` | Writes `value` to `target`. |
+| `insert` | Appends `value` to the collection at `target`; `position: 'start'` prepends. |
+| `remove` | Removes the selected item. **A selector matching nothing is a no-op, not an error.** |
+| `for-each` | Runs nested mutations once per member. Mutations only — no nested iteration, navigation or invocation. |
+| `invoke` | Runs another action inside the same transaction. Its failure fails the enclosing action. |
+| `navigate` | Changes route. Not transactional. |
+| `native` | Escape hatch. Receives cloned inputs, returns a value written to `resultTarget`. |
+
+### `for-each`
+
+```text
+collection read ONCE, before any member is mutated
+iteration N observes provisional writes from iterations < N
+no transaction of its own — it runs inside the action's transaction
+a failure in iteration N rolls back iterations 0..N-1 as well
+```
+
+Two members touching the same record therefore debit it twice:
+
+```text
+stock 5 → member A (−3) → 2 → member B (−3) → −1 → `stock >= 0` fails → all rolled back
+```
+
+That is a guarantee. It is what lets an aggregate rule be written as a per-record
+invariant.
+
+Locations inside the iteration may use `ref(scopeId)` to address the canonical record the
+current member points at.
+
+## Constraints
+
+| | Question | Bound scope | Evaluated |
+| --- | --- | --- | --- |
+| `ConstraintDef` | Is this state allowed? | the instance, bound to `entityId` | once per canonical instance, after every governed mutation |
+| `TransitionConstraintDef` | Is this change allowed? | `previousScopeId`, `proposedScopeId` | once per instance that existed at transaction entry and is not identical now |
+
+- Without `entityId`, a constraint is evaluated once in the root scope.
+- `severity: 'error'` (default) blocks. `severity: 'warning'` **never** blocks a write.
+- Instances are found by walking state values against their declared types, so an entity nested inside a collection inside another entity is validated where it actually lives.
+- A transition constraint requires the entity to declare `identityFieldId`; without one the rule is **silently skipped**.
+- A removed instance has a proposed value of `null`. **A newly inserted instance has no previous state and is not evaluated** — govern creation with an action guard or an entity constraint.
+
+Schema conformance runs alongside constraints on every canonical instance: required fields
+present (`REQUIRED_FIELD_MISSING`), enum membership (`ENUM_VALUE_INVALID`), and number and
+boolean types (`TYPE_MISMATCH`).
+
+## UI nodes
+
+Nine kinds: `view` `container` `text` `repeat` `field-display` `form` `input` `button`
+`conditional`. Detail: [`UI.md`](UI.md).
+
+- `RepeatNode` binds the current item to **the repeat node's own id**; the template refers to it as `ref(repeatNodeId)`.
+- `InputNode.binding` is `{ location }` — no expression, no field id. An input write goes through the same mutation engine and transaction as an action.
+- `ButtonNode.arguments` is keyed by **action parameter id**.
+- `visibleWhen` and `ConditionalNode` are interaction behavior, **not authorization**.
+
+## Presentation
+
+Semantic UX intent on any UI node, entirely optional. Full vocabulary:
+[`PRESENTATION.md`](PRESENTATION.md).
+
+```ts
+presentation: {
+  role?, uxRole?, emphasis?, density?, textRole?, surface?, treatment?, icon?,
+  accessibleLabel?, description?, layout?, sizing?, padding?, gap?, format?,
+  control?, responsive?, rendererOverrides?,
+}
+```
+
+Resolution precedence, lowest first:
+
+```text
+renderer defaults → theme → inherited → semantic inference → node → responsive
+```
+
+`ResolvedPresentation.origins` records which layer decided each property. `density` is the
+only property that inherits.
+
+**PRESENTATION NEVER AUTHORIZES BEHAVIOR.** `hidden` ≠ forbidden. `role: 'destructive'` is
+not a constraint. Enforcement belongs to guards, constraints and transition constraints.
+
+## Compilation and running
+
+```ts
+const ir = compileToIR(graph);                  // throws GraphValidationError if invalid
+const html = compileToHtml(graph, { title?, appearance? });
+const css = createThemeStylesheet(ir.theme);
+
+const app = createAxiomRuntime({ ir, rootElement, host, nativeOperations?, inputValidation?, recordMutationValues? });
+app.start();
+```
+
+`compileToIR` refuses an invalid graph. Pass `{ validate: false }` only for diagnostics.
+
+Hosts: `createBrowserHost()` for a page, `createMemoryHost()` for headless use. The runtime
+reads nothing from globals.
+
+## Runtime API
+
+| Member | Governed | Notes |
+| --- | --- | --- |
+| `invokeAction(id, args?)` | yes | Returns this invocation's `{ ok, diagnostics }`. |
+| `getState(id)` | — | Deep clone. |
+| **`hydrateState(id, value)`** | **NO** | Administrative. Evaluates no precondition, constraint or transition constraint. For hosts, tests and seeding. |
+| `navigate(path)` / `currentRoute()` | — | |
+| `diagnostics()` / `clearDiagnostics()` | — | Running log. |
+| `getMutationLog()` | — | Every attempted mutation with source, path and `outcome`. |
+| `registerNativeOperation(id, fn)` | — | |
+| `start()` / `render()` | — | Rendering is a full re-render; focus and caret are restored by node id. |
+
+## Diagnostics
+
+23 runtime codes, all in `RUNTIME_DIAGNOSTIC_CODES`. Match on `code`, never on the message.
+Full table with `details` fields: [`RUNTIME.md`](RUNTIME.md#diagnostic-codes).
+
+```ts
+const result = app.invokeAction(CONFIRM_ORDER);
+if (!result.ok) {
+  const failure = result.diagnostics.find(
+    (d) => d.code === RUNTIME_DIAGNOSTIC_CODES.PRECONDITION_FAILED,
+  );
+  failure?.details; // { preconditionIndex: 2, failureMode: 'insufficient-stock' }
+}
+```
+
+## Validation
+
+`validateGraph(graph)` → `{ valid, errors, warnings }`. `valid` is `errors.length === 0`;
+warnings never make a graph invalid. 49 codes in `VALIDATION_CODES`, grouped in
+[`VALIDATION.md`](VALIDATION.md).
+
+## Agent API
+
+```ts
+const agent = new AgentAPI(graph);
+agent.getMutationImpact(location);   // writers, derived states, constraints, views + analysisComplete
+agent.findDestructiveActions();
+agent.getFieldReaders(fieldId) / agent.getFieldWriters(fieldId);
+agent.resolvePresentation(nodeId) / agent.getFormStructure(formId);
+agent.transact((tx) => { tx.setDensity(FORM, 'compact'); }, { reason });
+```
+
+`getMutationImpact` reports `analysisComplete: false` with `analysisGaps` when something —
+a native operation with undeclared effects — cannot be analyzed. **An incomplete answer
+says so; it is never presented as exhaustive.** Detail: [`AGENT_API.md`](AGENT_API.md).
+
+## Serialization
+
+The whole graph, theme included, is JSON. `graph.serialize()` /
+`ApplicationGraph.deserialize()` round-trip losslessly.
+
+No construct anywhere in the graph may hold a function. There is no `formatter: fn`, no
+`validator: fn`, no stored closure, and no way to add one. Values are cloned with
+`structuredClone`, not a JSON round trip, so `NaN` is not disguised as `null`.

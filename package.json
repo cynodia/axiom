@@ -1,22 +1,23 @@
 {
   "name": "axiom",
-  "version": "0.5.0-alpha.1",
+  "version": "0.5.1-alpha.1",
   "private": true,
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run docs:sync && npm run build --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
     "release:clean": "node scripts/clean.mjs",
-    "release:pack": "node scripts/pack.mjs",
+    "release:pack": "npm run docs:sync && node scripts/pack.mjs",
     "release:verify": "node scripts/verify-packages.mjs",
     "release:consumer-test": "node scripts/consumer-test.mjs",
     "release:prepare": "npm run release:clean && npm run build && npm test && npm run release:pack && npm run release:verify && npm run release:consumer-test",
     "release:publish": "node scripts/publish.mjs",
     "release:dist-tag": "node scripts/dist-tag.mjs",
     "release:dist-tag:dry-run": "node scripts/dist-tag.mjs --dry-run",
-    "release:publish:dry-run": "node scripts/publish.mjs --dry-run"
+    "release:publish:dry-run": "node scripts/publish.mjs --dry-run",
+    "docs:sync": "node scripts/sync-docs.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

@@ -10,10 +10,23 @@ export interface NodeBase {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * A field of an entity.
+ *
+ * Fields are independently identifiable and globally unique across the graph, and
+ * **instance data is keyed by `FieldId`, never by `name`**: a record looks like
+ * `{ [F_TITLE]: 'Dune' }`, not `{ title: 'Dune' }`. `name` is metadata for humans and
+ * resolves nothing.
+ */
 export interface FieldDef {
   id: FieldId;
   name?: string;
   valueType: TypeRef;
+  /**
+   * The value must be **present** in every canonical instance — not `null` and not
+   * `undefined`. It says nothing about emptiness: `0`, `false`, `''` and `[]` all satisfy
+   * it. Express "must not be blank" as a `ConstraintDef` using `non-empty`.
+   */
   required?: boolean;
   defaultValue?: LiteralValue;
   metadata?: Record<string, unknown>;
@@ -27,10 +40,21 @@ export type LiteralValue =
   | LiteralValue[]
   | { [key: string]: LiteralValue };
 
+/**
+ * A record type. Instances of it are found wherever a state's declared type says they
+ * live — including nested inside collections and inside other entities — and are validated
+ * there.
+ */
 export interface EntityDef extends NodeBase {
   kind: 'entity';
   fields: FieldDef[];
-  /** Field used to distinguish instances of this entity. */
+  /**
+   * Field used to distinguish instances of this entity.
+   *
+   * Required in order to address an instance by identity (`identitySelector`), and
+   * required by every `TransitionConstraintDef` on this entity — without it such a rule is
+   * **silently skipped**. Declare it on every entity stored in a collection.
+   */
   identityFieldId?: FieldId;
 }
 
@@ -39,11 +63,34 @@ export type StatePersistence =
   | { kind: 'local-storage'; key?: string }
   | { kind: 'remote'; sourceId: NodeId };
 
+/**
+ * A named application value: stored, or computed from other state.
+ *
+ * A state with no `derivation` is stored, and one that is neither `draft` nor `ephemeral`
+ * is **canonical** — the state entity constraints and schema conformance apply to. Stored
+ * values are deeply frozen on entry to the store, and every read hands out a copy.
+ */
 export interface StateDef extends NodeBase {
   kind: 'state';
   valueType: TypeRef;
+  /**
+   * Seed data, keyed by `FieldId` wherever it contains a record. It is walked against
+   * `valueType` recursively at validation time, so data keyed by field *name* is rejected
+   * rather than surfacing later as an inexplicably empty UI.
+   *
+   * Absent, the state starts at the default for its type: `optional` → `null`,
+   * `collection` → `[]`, `number` → `0`, `boolean` → `false`, other primitive → `''`,
+   * `enum` → its first value, `entity` → `null`.
+   */
   initialValue?: LiteralValue;
-  /** When present the state is computed rather than stored. */
+  /**
+   * When present the state is computed rather than stored.
+   *
+   * Derived state is **read-only**: a write is rejected by `validateGraph` and by the
+   * runtime. It is recomputed on demand and handed out as a frozen deep copy, so nothing
+   * can work by sharing an object with the state it was derived from. Instance validation
+   * skips it, because the data is already validated where it is stored.
+   */
   derivation?: Expression;
   /**
    * Marks a state that holds work in progress. Draft instances are incomplete by
@@ -81,6 +128,18 @@ export interface ActionGuard {
   failureMode?: FailureMode;
 }
 
+/**
+ * Behaviour expressed as data, executed as a transaction.
+ *
+ * An invocation proceeds: resolve the action, bind parameters, evaluate preconditions in
+ * order, ask for confirmation if required — **none of which opens a transaction, so a
+ * refusal at any of those stages mutates nothing** — then begin a transaction, run the
+ * operations sequentially against provisional state, evaluate entity constraints,
+ * transition constraints and postconditions, and either commit everything or roll back
+ * every mutation.
+ *
+ * `invokeAction` returns the diagnostics of that invocation.
+ */
 export interface ActionDef extends NodeBase {
   kind: 'action';
   parameters?: ActionParameter[];
@@ -137,33 +196,56 @@ export const OPERATION_KINDS: readonly OperationKind[] = [
 /** Every mutation is a set, an insert or a remove against an addressed Location. */
 export type MutationOperation = SetOperation | InsertOperation | RemoveOperation;
 
+/**
+ * Writes a value to an addressed position.
+ *
+ * A missing field along the path is created. A missing **collection item** is not: an
+ * identity selector that matches nothing reports `LOCATION_RESOLUTION_FAILED`.
+ */
 export interface SetOperation {
   kind: 'set';
   target: Location;
   value: Expression;
 }
 
+/**
+ * Adds a member to a collection. The constructed value is deep-cloned before it is stored.
+ *
+ * A newly inserted entity instance has no previous state, so **no transition constraint is
+ * evaluated for it**. Govern creation with an action guard or an entity constraint.
+ */
 export interface InsertOperation {
   kind: 'insert';
-  /** A location addressing a collection. */
+  /** A location addressing a collection. A non-array current value is treated as `[]`. */
   target: Location;
   value: Expression;
+  /** Defaults to `'end'`. */
   position?: 'start' | 'end';
 }
 
+/**
+ * Removes one member of a collection.
+ *
+ * A selector that matches nothing is a **no-op**: no mutation, no log entry and no
+ * diagnostic. Removing an existing instance *is* a transition, with the proposed value
+ * bound to nothing.
+ */
 export interface RemoveOperation {
   kind: 'remove';
   target: CollectionItemLocation;
 }
 
 /**
- * Performs a set of mutations once per member of a collection. The iteration is not a
- * transaction of its own: it runs inside the action's transaction, so a failure in any
- * iteration rolls the whole action back.
+ * Performs a set of mutations once per member of a collection.
+ *
+ * Iteration N observes provisional writes from previous iterations. The loop executes
+ * inside the containing action's transaction and opens none of its own, so any failure
+ * rolls back the complete action — every iteration included. The collection itself is
+ * evaluated **once**, before the first member is mutated.
  *
  * `scopeId` introduces an iteration scope. Nested expressions refer to the current member
  * as `ref(scopeId)`, and nested locations may use it to address the canonical record the
- * member points at.
+ * member points at. Nested operations must be mutations only.
  */
 export interface ForEachOperation {
   kind: 'for-each';
@@ -220,11 +302,22 @@ export interface NativeOperation {
   declaredEffects?: NativeEffect[];
 }
 
+/**
+ * An invariant over proposed state, evaluated after every governed mutation.
+ *
+ * A constraint that cannot be evaluated counts as **violated**, never as satisfied.
+ */
 export interface ConstraintDef extends NodeBase {
   kind: 'constraint';
   expression: Expression;
-  /** When set, the expression is evaluated once per instance of this entity. */
+  /**
+   * When set, the expression is evaluated once per canonical instance of this entity, with
+   * the instance bound to `ref(entityId)` — wherever that instance is stored, including
+   * nested inside another entity. Without it the expression is evaluated once, in the root
+   * scope.
+   */
   entityId?: NodeId;
+  /** Defaults to `'error'`. A `'warning'` is advice and **never blocks a write**. */
   severity?: 'error' | 'warning';
   message?: string;
 }
@@ -240,6 +333,13 @@ export interface ConstraintDef extends NodeBase {
  *
  * `previousScopeId` and `proposedScopeId` bind those two instances for the expression.
  * When the instance is being removed, the proposed scope is bound to nothing.
+ *
+ * "Previous" means committed state as it stood immediately before the **outermost**
+ * transaction began — not the previous operation, and not the previous iteration.
+ *
+ * A **newly inserted** instance has no previous state and is therefore **not evaluated**.
+ * Govern creation with an action guard or an entity constraint. The entity must declare
+ * `identityFieldId`; without one this rule is silently skipped.
  */
 export interface TransitionConstraintDef extends NodeBase {
   kind: 'transition-constraint';

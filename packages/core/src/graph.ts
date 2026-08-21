@@ -20,9 +20,15 @@ export interface EdgeQuery {
 }
 
 /**
- * The Application Graph is the canonical representation of an application. Reads return
- * deep clones, so a node retrieved from the graph must be written back with
- * `updateNode` for the change to take effect.
+ * The Application Graph is the canonical representation of an application. Everything else
+ * — the IR, the emitted page, the DOM — is derived from it and is never edited.
+ *
+ * Reads return **deep clones**, so a node retrieved from the graph must be written back
+ * with `updateNode` for the change to take effect.
+ *
+ * Relationships are derived from the current nodes on demand and cached against a revision
+ * counter, so an edge cannot fall out of step with the nodes it describes and no
+ * correctness property depends on resynchronizing anything.
  */
 export class ApplicationGraph {
   private data: ApplicationGraphData;
@@ -38,7 +44,7 @@ export class ApplicationGraph {
     incoming: Map<NodeId, GraphEdge[]>;
   };
 
-  constructor(id: string, name: string, version = '0.5.0') {
+  constructor(id: string, name: string, version = '0.5.1') {
     this.data = { id, name, version, nodes: {}, edges: {} };
   }
 

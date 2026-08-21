@@ -9,6 +9,7 @@ import { createOrderSystemGraph } from './order-system.js';
 export { createIssueTrackerGraph, issueTrackerIds } from './issue-tracker.js';
 export { createInventoryGraph, inventoryIds } from './inventory.js';
 export { createOrderSystemGraph, orderSystemIds } from './order-system.js';
+export { createMinimalGraph, runMinimalExample } from './minimal.js';
 
 export interface DemoApplication {
   slug: string;

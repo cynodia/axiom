@@ -30,6 +30,12 @@ export interface UIBase {
   id: NodeId;
   kind: UINodeKind;
   name?: string;
+  /**
+   * Whether the node is rendered. This is interaction behaviour, **not authorization**:
+   * hidden is not forbidden, and a governed write is checked whether or not any control
+   * for it is visible. A rule belongs in an action guard, a `ConstraintDef` or a
+   * `TransitionConstraintDef`.
+   */
   visibleWhen?: Expression;
   /** Presentation and UX intent. Entirely optional; defaults do the rest. */
   presentation?: Presentation;
@@ -60,8 +66,12 @@ export interface TextNode extends UIBase {
 }
 
 /**
- * Repeats `templateId` over `source`. The current item is bound to this node's own id,
+ * Repeats `templateId` over `source`. The current item is bound to **this node's own id**,
  * so templates reference it with `{ kind: 'ref', targetId: <repeat node id> }`.
+ *
+ * `itemAlias` is metadata for humans and resolves nothing. A `source` that evaluates to
+ * `null` fails the evaluation rather than rendering nothing — use
+ * `coalesce(..., literal([]))` where a collection may legitimately be absent.
  */
 export interface RepeatNode extends UIBase {
   kind: 'repeat';
@@ -94,6 +104,20 @@ export interface InputBinding {
   location: Location;
 }
 
+/**
+ * An input's write goes through the same mutation engine and the same transaction
+ * machinery as an action; there is no second write path inside the renderer.
+ *
+ * What governs it depends on what the location is **rooted in**. Rooted in canonical
+ * state, the write is transactional with respect to hard invariants: a value that would
+ * break one is rolled back and the control re-renders with what is actually stored. Rooted
+ * in a `draft` or `ephemeral` state it is not guarded per keystroke, because such a value
+ * is incomplete by definition while it is being filled in.
+ *
+ * Transition constraints apply either way. Binding an input to a protected location does
+ * not bypass anything.
+ */
+
 export type InputHint = 'text' | 'email' | 'number' | 'password' | 'date' | 'checkbox' | 'multiline' | 'select';
 
 /**
@@ -111,7 +135,11 @@ export interface InputOptionsSource {
 export interface InputNode extends UIBase {
   kind: 'input';
   binding: InputBinding;
-  /** Presentation hint only; the runtime infers a control from the field type otherwise. */
+  /**
+   * The 0.2 spelling of control intent, shaped after HTML input types.
+   * `presentation.control` supersedes it and is consulted first; absent both, the runtime
+   * infers a control from the type of the bound location.
+   */
   inputHint?: InputHint;
   options?: InputOptionsSource;
   label?: string;

@@ -15,9 +15,14 @@ turn it into a working browser application whose generated JavaScript nobody rea
 * `doc/spec4.md` — the 0.4 architecture: collection semantics and transactional iteration.
 * `doc/spec4.1.md` — the 0.4.1 hardening release: mutation-path-independent rules,
   presence semantics, strict collection nulls and trustworthy dependency analysis.
-* `doc/spec5.md` — the **0.5 presentation & UX semantic layer: semantic roles, layout and
-  spacing tokens, device classes, themes, value formatting and accessible structure**.
-  Together with spec2–spec4.1 this is the authority on design decisions.
+* `doc/spec5.md` — the 0.5 presentation & UX semantic layer: semantic roles, layout and
+  spacing tokens, device classes, themes, value formatting and accessible structure.
+* `doc/spec5.1.md` — the **agent-optimized documentation overhaul**: `docs/` is a machine-
+  facing operational contract, not a tutorial set.
+
+Together, spec2–spec5 are the authority on design decisions — **except where the
+implementation already differs**. For existing behaviour the implementation is
+authoritative, and `docs/` describes the implementation.
 
 A handful of rules govern almost every decision:
 
@@ -82,6 +87,43 @@ action actually writes:
 ```
 
 There is no linter, formatter, or CI. Match the style of the file you are editing.
+
+## Documentation is part of the contract
+
+`docs/` is the canonical operational contract, written for an unfamiliar coding agent
+rather than for a human learner: rule-oriented, MUST/MUST NOT, tables for edge cases, no
+tutorial padding. `README.md` is the short entry point; `docs/AGENT_REFERENCE.md` plus the
+`.d.ts` declarations are meant to be sufficient on their own.
+
+**One canonical location per semantic rule** (spec5.1 §26):
+
+| Layer | Carries |
+| ----- | ------- |
+| `README.md` | The mental model, the load-bearing invariants, one runnable example, the map. |
+| `docs/AGENT_REFERENCE.md` | The compressed reference, including the truth tables. |
+| `docs/<TOPIC>.md` | The full contract for that topic. |
+| `.d.ts` comments | The local contract of that type. |
+| Package READMEs | Responsibility, main exports, a pointer to `docs/`. Nothing else. |
+
+Do not restate a rule in a second place. If a rule changes, change it where it lives and
+let the others point there.
+
+**`packages/demo/test/documentation.test.ts` fails on drift in either direction**: a
+documented diagnostic code, vocabulary member, imported symbol or called method that no
+longer exists, and an implemented one that is not documented. It also executes the
+presence and collection-null truth tables against the runtime, checks every relative link,
+and asserts the README example is character-identical to `packages/demo/src/minimal.ts` —
+which is compiled and run. Edit one and you must edit the other.
+
+`docs/` ships in the `@cynodia/axiom` tarball: `npm run docs:sync` copies it into
+`packages/axiom/docs/` (generated, git-ignored, removed by `release:clean`), and
+`scripts/verify-packages.mjs` fails the release if any document is missing from the
+tarball. An external consumer must never need repository access to obtain the contract.
+
+**Every declared diagnostic code must be reachable.** An agent should never have to
+discover a code by causing a failure, which is impossible for a code that can never occur.
+Adding a code to `VALIDATION_CODES` or `RUNTIME_DIAGNOSTIC_CODES` means emitting it and
+documenting it.
 
 ## Packaging and release
 

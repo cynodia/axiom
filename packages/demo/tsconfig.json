@@ -20,6 +20,9 @@
     },
     {
       "path": "../agent-api/tsconfig.json"
+    },
+    {
+      "path": "../axiom/tsconfig.json"
     }
   ]
 }

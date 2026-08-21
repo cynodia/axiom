@@ -1,7 +1,7 @@
 import { VALIDATION_CODES } from './diagnostics.js';
 import type { ValidationIssue } from './diagnostics.js';
 import type { NodeId } from './ids.js';
-import { inferLocationType, locationCapabilities } from './infer.js';
+import { inferExpressionType, inferLocationType, locationCapabilities } from './infer.js';
 import type { SemanticContext } from './infer.js';
 import { locationRootStateId } from './location.js';
 import type { Location } from './location.js';
@@ -98,6 +98,19 @@ function walk(location: Location, context: SemanticContext, report: Report): voi
         return;
       }
       if (location.selector.kind !== 'identity') {
+        // An index has to be a number. Type inference is partial, so this rejects only
+        // what is statically certain to be wrong.
+        const indexType = inferExpressionType(location.selector.index, context);
+        const resolvedIndex = indexType?.kind === 'optional' ? indexType.valueType : indexType;
+        const numeric =
+          resolvedIndex === undefined ||
+          (resolvedIndex.kind === 'primitive' && resolvedIndex.primitive === 'number');
+        if (!numeric) {
+          report(
+            VALIDATION_CODES.invalidSelectorType,
+            `An index selector must be a number, but this one is a ${resolvedIndex.kind === 'primitive' ? resolvedIndex.primitive : resolvedIndex.kind} value`,
+          );
+        }
         return;
       }
       const entry = context.getField(location.selector.fieldId);

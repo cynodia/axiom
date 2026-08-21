@@ -1,0 +1,290 @@
+# Anti-patterns
+
+Axiom 0.5.1-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+alternative.
+
+## 1. Field names as entity runtime keys
+
+Runtime entity records are keyed by `FieldId`.
+
+```ts
+// WRONG — caught as INITIAL_VALUE_UNKNOWN_FIELD plus INITIAL_VALUE_MISSING_REQUIRED_FIELD
+initialValue: [{ id: 'order-1', status: 'draft', lines: [] }]
+
+// RIGHT
+initialValue: [{ [F_ORDER_ID]: 'order-1', [F_ORDER_STATUS]: 'draft', [F_ORDER_LINES]: [] }]
+```
+
+This applies to `initialValue`, `hydrateState` arguments, `object` expression entries, and
+every value read back from `getState`.
+
+## 2. Writing derived state
+
+```ts
+// WRONG — rejected by validateGraph (DERIVED_STATE_WRITE) and by the runtime.
+{ kind: 'set', target: stateLocation(STATE_CURRENT_ORDER), value: … }
+
+// RIGHT — address the state the value is actually stored in.
+{ kind: 'set', target: fieldLocation(routedOrder, F_ORDER_STATUS), value: literal('confirmed') }
+```
+
+Derived state is a frozen deep copy. Even if a write were allowed, nothing would observe it.
+
+## 3. Mutating the object an expression returned
+
+```ts
+// WRONG — expressions produce values. Stored state is frozen; this throws or does nothing.
+const order = find(ref(STATE_ORDERS), SCOPE, predicate);
+// …then treating `order` as writable
+
+// RIGHT — a Location names the position.
+{ kind: 'set', target: itemFieldLocation(STATE_ORDERS, F_ORDER_ID, ref(PARAM_ID), F_STATUS), value: … }
+```
+
+A write rebuilds the path from the root state; it never depends on object identity.
+
+## 4. Business rules in UI visibility
+
+```ts
+// WRONG — hiding the control is not a rule. Any other path still writes.
+{ kind: 'button', actionId: ACTION_EDIT, visibleWhen: isDraft }
+
+// RIGHT — a rule that holds on every governed path.
+{
+  kind: 'transition-constraint',
+  entityId: ENTITY_ORDER,
+  previousScopeId: PREVIOUS, proposedScopeId: PROPOSED,
+  expression: binary('or',
+    binary('neq', field(ref(PREVIOUS), F_STATUS), literal('confirmed')),
+    binary('eq', ref(PROPOSED), ref(PREVIOUS))),
+}
+```
+
+Hiding the button on top of that is fine — it is a clarity decision, not the enforcement.
+
+## 5. Business rules in presentation
+
+```ts
+// WRONG — none of these prohibit anything.
+presentation: { responsive: { compact: { hidden: true } } }
+presentation: { role: 'muted' }          // "so it looks unavailable"
+presentation: { uxRole: 'destructive-action' }   // instead of ActionDef.destructive
+
+// RIGHT
+// enforcement  → action guard, ConstraintDef, TransitionConstraintDef
+// intent       → ActionDef.destructive, from which presentation is inferred
+```
+
+```text
+hidden ≠ forbidden.  disabled-looking ≠ prohibited.  destructive role ≠ destructive constraint.
+```
+
+## 6. `null` to mean an empty collection
+
+```ts
+// WRONG — a collection operator over null fails the evaluation.
+{ id: STATE_LINES, valueType: optionalType(collectionType(entityType(ENTITY_LINE))) }
+sum(map(ref(STATE_LINES), LINE, …))
+
+// RIGHT — either a non-optional collection…
+{ id: STATE_LINES, valueType: collectionType(entityType(ENTITY_LINE)), initialValue: [] }
+
+// …or state the absent case where a collection genuinely may be missing.
+sum(map(coalesce(field(ref(CURRENT_ORDER), F_LINES), literal([])), LINE, …))
+```
+
+`[]` is a present, empty collection. `null` is a missing one, and fails.
+
+## 7. `required` to mean "has content"
+
+```ts
+// WRONG — required([]) and required('') are both true.
+call('required', field(ref(ORDER), F_LINES))
+call('required', field(ref(ORDER), F_REFERENCE))
+
+// RIGHT
+binary('gt', call('count', field(ref(ORDER), F_LINES)), literal(0))
+call('non-empty', field(ref(ORDER), F_REFERENCE))
+```
+
+Field-level `required: true` likewise means *present*, not non-blank.
+
+## 8. Assuming a collection is truthy
+
+```ts
+// WRONG — [] is falsy, so this hides the section when there are no lines *and* reads as if
+// it were checking existence.
+{ kind: 'conditional', condition: field(ref(ORDER), F_LINES), … }
+
+// RIGHT — say what is meant.
+{ kind: 'conditional', condition: binary('gt', call('count', lines), literal(0)), … }
+```
+
+## 9. `hydrateState` as the application's write path
+
+```ts
+// WRONG — evaluates no precondition, no constraint, no transition constraint.
+app.hydrateState(STATE_ORDERS, nextOrders);
+
+// RIGHT
+app.invokeAction(ACTION_CONFIRM_ORDER);
+```
+
+`hydrateState` is for hosts, tests and seeding. It is named so that it cannot be mistaken
+for a semantic write. Any state API that bypasses enforcement is documented as doing so;
+do not assume otherwise for any other API.
+
+## 10. `NativeOperation` where a primitive exists
+
+```ts
+// WRONG — opaque to every analysis Axiom offers, and it needs an implementation registered.
+{ kind: 'native', implementationId: 'app.computeTotal', resultTarget: stateLocation(STATE_TOTAL) }
+
+// RIGHT
+{ id: STATE_TOTAL, kind: 'state', derivation: sum(map(lines, LINE, binary('multiply', qty, price))) }
+```
+
+If a native operation is genuinely necessary, **declare its effects** — without
+`declaredEffects`, `getMutationImpact` reports `analysisComplete: false`.
+
+## 11. Recreating CSS in the graph
+
+```ts
+// WRONG — there is no inline style model, and these are not presentation tokens.
+presentation: { style: { display: 'flex', gap: '12px', padding: '8px 16px', color: '#c00' } }
+
+// RIGHT
+presentation: { layout: { kind: 'horizontal', gap: 'medium' }, padding: 'small', role: 'destructive' }
+```
+
+An unknown token is a validation **error**, so this fails loudly rather than being ignored.
+
+## 12. Renderer-specific presentation as the normal path
+
+```ts
+// WRONG as a habit — opaque to analysis, reported as OPAQUE_PRESENTATION.
+presentation: { rendererOverrides: { web: { className: 'card shadow-lg' } } }
+
+// RIGHT
+presentation: { surface: 'raised', padding: 'large' }
+```
+
+The escape hatch exists, is detectable, and is used by none of the acceptance
+applications.
+
+## 13. Formatted strings in canonical state
+
+```ts
+// WRONG — the value is now unusable for arithmetic, sorting or aggregation.
+{ [F_UNIT_PRICE]: 'NOK 1,250.00' }
+
+// RIGHT — store the value, format the display.
+{ [F_UNIT_PRICE]: 1250 }
+presentation: { format: { kind: 'currency', currency: 'NOK' } }
+```
+
+## 14. Duplicating destructive semantics
+
+```ts
+// UNNECESSARY — the action already says it, and presentation is inferred from it.
+action: { destructive: true }
+button: { destructive: true, presentation: { role: 'destructive', uxRole: 'destructive-action' } }
+
+// RIGHT
+action: { destructive: true }
+button: { /* nothing */ }
+```
+
+Declare a fact once, in the layer that owns it.
+
+## 15. Maintaining derived edges or indexes by hand
+
+```ts
+// UNNECESSARY — edges are derived from the current nodes on demand and cannot go stale.
+graph.addEdge(ACTION, STATE, 'writes');
+// …after every change
+
+// RIGHT — nothing. Read graph.semanticEdges() or any getEdges query.
+```
+
+`synchronizeEdges(graph)` materializes derived edges into serialized graph data. No
+correctness property depends on calling it.
+
+## 16. Referring to a repeat item by alias
+
+```ts
+// WRONG — itemAlias resolves nothing; it is human-facing metadata.
+{ kind: 'repeat', itemAlias: 'line', templateId: T, source: lines }
+// …with the template using ref(nodeId('line'))
+
+// RIGHT — the item is bound to the repeat node's own id.
+{ kind: 'field-display', source: ref(UI_LINES_REPEAT), fieldId: F_LINE_QUANTITY }
+```
+
+## 17. Reusing a scope id
+
+```ts
+// WRONG — SCOPE_SHADOWING; the inner binding would hide the outer one.
+map(a, S, filter(b, S, predicate))
+
+// RIGHT — one scope id per iteration site.
+map(a, SCOPE_OUTER, filter(b, SCOPE_INNER, predicate))
+```
+
+A scope id must also not equal the id of a graph node (`SCOPE_COLLIDES_WITH_NODE`).
+
+## 18. An index selector where identity is available
+
+```ts
+// WRONG — positional; removing an earlier item silently retargets this.
+itemLocation(routedLines, indexSelector(literal(0)))
+
+// RIGHT
+itemLocation(routedLines, identitySelector(F_LINE_ID, ref(PARAM_LINE)))
+```
+
+## 19. A warning-severity constraint as a rule
+
+```ts
+// WRONG — warning severity never blocks a write. This is advice.
+{ kind: 'constraint', severity: 'warning', expression: binary('gte', stock, literal(0)) }
+
+// RIGHT — omit severity; error is the default and blocks.
+{ kind: 'constraint', expression: binary('gte', stock, literal(0)) }
+```
+
+## 20. An entity constraint where a transition rule is meant
+
+```ts
+// WRONG — an entity constraint cannot see the previous value, so a rule about *change*
+// written this way forbids the state outright.
+{ kind: 'constraint', entityId: ENTITY_ORDER,
+  expression: binary('neq', field(ref(ENTITY_ORDER), F_STATUS), literal('confirmed')) }
+
+// RIGHT
+{ kind: 'transition-constraint', entityId: ENTITY_ORDER, previousScopeId, proposedScopeId, … }
+```
+
+Also remember that a transition constraint does **not** see a newly inserted instance.
+Govern creation with an action guard or an entity constraint.
+
+## 21. Editing a node without writing it back
+
+```ts
+// WRONG — getNode returns a deep clone.
+graph.getNode<StateDef>(STATE)!.initialValue = 5;
+
+// RIGHT
+const state = graph.getNode<StateDef>(STATE)!;
+graph.updateNode({ ...state, initialValue: 5 });
+```
+
+## 22. Restating what the model already knows
+
+```ts
+// UNNECESSARY — required comes from the field, the label from the field's name, the
+// format from the field's type.
+{ kind: 'input', label: 'Quantity', presentation: { description: 'Required' } }
+
+// RIGHT — declare `required: true` on the FieldDef and let the renderer mark it.
+```

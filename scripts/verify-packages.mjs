@@ -9,6 +9,26 @@ import { publishable, tarballPath, version } from './packages.mjs';
 const MAX_SIZE_BYTES = 2 * 1024 * 1024;
 const COPYRIGHT_HOLDER = 'AskTech AS';
 const FORBIDDEN_PREFIXES = ['file:', 'link:', 'workspace:', '../', './', 'git+', 'http'];
+/**
+ * The facade must carry the operational contract: a consumer of the published package must
+ * never need repository access to obtain it.
+ */
+const REQUIRED_FACADE_DOCS = [
+  'docs/AGENT_REFERENCE.md',
+  'docs/SEMANTIC_CONTRACT.md',
+  'docs/GRAPH_MODEL.md',
+  'docs/EXPRESSIONS.md',
+  'docs/LOCATIONS.md',
+  'docs/STATE.md',
+  'docs/ACTIONS_TRANSACTIONS.md',
+  'docs/CONSTRAINTS.md',
+  'docs/UI.md',
+  'docs/PRESENTATION.md',
+  'docs/RUNTIME.md',
+  'docs/AGENT_API.md',
+  'docs/VALIDATION.md',
+  'docs/ANTI_PATTERNS.md',
+];
 const FORBIDDEN_PATHS = [/^package\/src\//, /^package\/test\//, /^package\/dist-test\//,
   /node_modules/, /\.tsbuildinfo$/, /^package\/tsconfig.*\.json$/];
 
@@ -93,9 +113,13 @@ for (const { name } of publishable) {
     }
   }
 
-  for (const required of ['README.md', 'LICENSE', 'dist/index.js', 'dist/index.d.ts']) {
-    if (!has(required)) {
-      report(name, `is missing ${required}`);
+  const required = ['README.md', 'LICENSE', 'dist/index.js', 'dist/index.d.ts'];
+  if (name === '@cynodia/axiom') {
+    required.push(...REQUIRED_FACADE_DOCS);
+  }
+  for (const file of required) {
+    if (!has(file)) {
+      report(name, `is missing ${file}`);
     }
   }
   if (!files.some((file) => file.endsWith('.d.ts'))) {

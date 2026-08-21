@@ -76,6 +76,10 @@ export const RUNTIME_DIAGNOSTIC_CODES = {
 export type RuntimeDiagnosticCode =
   (typeof RUNTIME_DIAGNOSTIC_CODES)[keyof typeof RUNTIME_DIAGNOSTIC_CODES];
 
+/**
+ * A structured runtime failure. Match on `code` and read `details`; the `message` is for
+ * people and is not a stable contract.
+ */
 export interface RuntimeDiagnostic {
   code: RuntimeDiagnosticCode;
   message: string;
@@ -104,7 +108,11 @@ export interface RouteMatch {
 
 export type NativeImplementation = (inputs: Record<string, unknown>) => unknown;
 
-/** When constraints are evaluated after an input writes to its location. */
+/**
+ * When entity constraints are evaluated after an input writes to its location.
+ * `'deferred'` turns the per-keystroke check off entirely, leaving validity to the next
+ * action. Transition constraints are unaffected by this setting and always apply.
+ */
 export type InputValidationMode = 'immediate' | 'deferred';
 
 export interface AxiomRuntimeOptions {
@@ -120,6 +128,7 @@ export interface AxiomRuntimeOptions {
 export interface AxiomRuntime {
   start(): void;
   render(): void;
+  /** A deep clone of the value. Derived state is recomputed. */
   getState(id: NodeId): unknown;
   /**
    * Replaces a state value outright, for hosts, tests and seeding.
@@ -129,6 +138,11 @@ export interface AxiomRuntime {
    * belongs in actions and input bindings, which are governed.
    */
   hydrateState(id: NodeId, value: unknown): void;
+  /**
+   * Runs an action as a transaction and returns the diagnostics **of that invocation**,
+   * so nothing has to diff global history. Either every mutation commits or every one is
+   * rolled back.
+   */
   invokeAction(id: NodeId, args?: Record<string, unknown>): ActionResult;
   navigate(path: string): void;
   currentRoute(): RouteMatch | null;
@@ -184,7 +198,7 @@ function requireCollection(value: unknown, operator: string): unknown[] {
   if (!Array.isArray(value)) {
     throw new ExpressionEvaluationError(
       `${operator} expects a collection but received ${describeValue(value)}`,
-      { operator, received: value },
+      { collectionOperator: operator, received: value },
     );
   }
   return value;
@@ -414,6 +428,21 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
   }
 
+  /**
+   * Classifies an evaluation failure. The code says what kind of failure it was, so an
+   * agent can distinguish an identifier that did not resolve from a value of the wrong
+   * shape without reading the message.
+   */
+  function evaluationFailureCode(details: Record<string, unknown>): RuntimeDiagnosticCode {
+    if (details.targetId !== undefined) {
+      return RUNTIME_DIAGNOSTIC_CODES.UNRESOLVED_REFERENCE;
+    }
+    if (details.kind !== undefined || details.operator !== undefined || details.function !== undefined) {
+      return RUNTIME_DIAGNOSTIC_CODES.UNSUPPORTED_EXPRESSION;
+    }
+    return RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED;
+  }
+
   /** Turns an evaluation failure into a diagnostic instead of letting it escape. */
   function evaluationFailure(
     error: unknown,
@@ -421,7 +450,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   ): RuntimeDiagnostic {
     if (error instanceof ExpressionEvaluationError) {
       return {
-        code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
+        code: evaluationFailureCode(error.details),
         message: error.message,
         severity: 'error',
         ...context,
@@ -454,7 +483,10 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       return apply();
     } catch (error) {
       const failure: RuntimeDiagnostic = {
-        code: error instanceof LocationResolutionError ? RUNTIME_DIAGNOSTIC_CODES.LOCATION_RESOLUTION_FAILED : 'MUTATION_FAILED',
+        code:
+          error instanceof LocationResolutionError
+            ? RUNTIME_DIAGNOSTIC_CODES.LOCATION_RESOLUTION_FAILED
+            : RUNTIME_DIAGNOSTIC_CODES.MUTATION_FAILED,
         message: error instanceof Error ? error.message : String(error),
         severity: 'error',
         ...(context.sourceNodeId ? { nodeId: context.sourceNodeId } : {}),

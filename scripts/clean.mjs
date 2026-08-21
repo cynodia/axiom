@@ -15,5 +15,7 @@ for (const entry of entries) {
   }
 }
 await rm(releaseDir, { recursive: true, force: true });
+// The facade's docs/ is a generated copy of the repository's docs/.
+await rm(path.join(packagesDir, 'axiom', 'docs'), { recursive: true, force: true });
 
 console.log('Removed build output and previous release artifacts.');

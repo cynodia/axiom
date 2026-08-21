@@ -9,9 +9,12 @@ The domain-independent runtime: the state store, expression evaluation, the muta
 engine, constraint checking, the semantic UI renderer and routing. It takes its whole
 environment through a `HostEnvironment`, so it runs in a browser or headlessly.
 
-The renderer reads presentation that the compiler has already resolved and turns it into
+The renderer reads presentation the compiler has already resolved and turns it into
 semantic class names, landmark and heading elements, and formatted values. It writes no
-styles and computes no lengths — what those classes mean is the theme's business.
+styles and computes no lengths.
+
+Main exports: `createAxiomRuntime`, `createBrowserHost`, `createMemoryHost`,
+`RUNTIME_DIAGNOSTIC_CODES`, `formatValue`, `presentationClassList`.
 
 ## Installation
 
@@ -24,6 +27,13 @@ Most applications should install the facade package instead, which re-exports th
 ```bash
 npm install @cynodia/axiom@alpha
 ```
+
+
+## Documentation
+
+The canonical operational contract lives in the `docs/` directory of the
+[`@cynodia/axiom`](https://www.npmjs.com/package/@cynodia/axiom) package, and in
+[the repository](https://github.com/cynodia/axiom). Start with `docs/AGENT_REFERENCE.md`.
 
 ## License
 

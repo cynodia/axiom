@@ -1,38 +1,57 @@
 # Axiom
 
-An AI-native web application framework.
+AI-native semantic application framework.
 
-An Axiom application is not source code. It is a typed semantic graph of entities,
-fields, state, actions, constraints, routes and UI nodes. A generic compiler normalizes
-that graph and a generic runtime executes it in an unmodified browser. The JavaScript and
-HTML that reach the browser are output, not source, and are never maintained by hand.
+Axiom represents application behavior, state, UI structure and presentation as structured
+semantic data executed by generic runtimes. An application is a typed graph, not source
+files: the JavaScript and HTML that reach a browser are output, and are never edited.
 
-Values are described by expressions; writable positions are described by **locations**.
-Every state change — from an action or from a keystroke in a form — is an addressed,
-validated, transactional mutation, so an agent can answer "if I change this, what exactly
-am I changing, and what does that affect?" from the graph alone.
+**Status: experimental / alpha (0.5.1-alpha.x).** The API may change between alpha
+releases. This documentation describes 0.5.1-alpha.1.
 
-Collections are semantics too: `map`, `sum`, `sort` and `for-each` express projection,
-aggregation, aggregate invariants and atomic multi-record changes as inspectable data
-rather than as callbacks. An action either commits entirely or rolls back entirely,
-iteration included.
+## Canonical mental model
 
-**Presentation is semantics as well.** A graph says `role: 'destructive'`, `uxRole:
-'action-group'`, `gap: 'medium'`, `responsive: { compact: { layout: 'vertical' } }` — never
-a colour, a length or a media query. A theme translates that intent into a visual identity,
-a generic renderer turns it into a polished responsive page, and an agent can ask which
-action a screen presents as primary or which layouts will not survive a phone. Changing the
-theme cannot change behaviour, and a graph with no presentation metadata at all still
-renders as a usable application.
+| Concept | Is |
+| --- | --- |
+| `ApplicationGraph` | The authoritative representation of an application. Everything else is derived from it. |
+| `Expression` | What value is computed. Pure; never writes. |
+| `Location` | Where a writable value lives. An address, not a value. |
+| `StateDef` | A stored or derived application value. |
+| `ActionDef` | A transactional semantic operation. |
+| `ConstraintDef` | An invariant over proposed state. |
+| `TransitionConstraintDef` | An invariant over previous committed state → proposed state. |
+| UI nodes | Semantic interaction structure (view, container, text, repeat, field-display, form, input, button, conditional). |
+| `Presentation` | Semantic UX and presentation intent. Roles and tokens, never CSS. |
+| `Theme` | Translation of semantic presentation into visual design. |
+| Renderer | Platform-specific materialization. Not part of the graph. |
 
-* `doc/spec.md` — the original 0.1 vision and research goals.
-* `doc/spec2.md` — the 0.2 architecture: a domain-independent compiler and runtime.
-* `doc/spec3.md` — the 0.3 architecture: semantic mutation and addressing.
-* `doc/spec4.md` — the 0.4 architecture: collection semantics and transactional iteration.
-* `doc/spec4.1.md` — the 0.4.1 hardening release: mutation-path-independent rules.
-* `doc/spec5.md` — the 0.5 architecture: the presentation and UX semantic layer,
-  implemented here.
-* `CLAUDE.md` — orientation for working in the codebase.
+```text
+ApplicationGraph → validateGraph → compileToIR → runtime (+ theme → renderer) → application
+```
+
+## Load-bearing invariants
+
+An agent authoring or modifying an Axiom application MUST know these. Each is stated in
+full in the linked contract.
+
+1. **Entity runtime values are keyed by `FieldId`, not by field name.** `{ [F_TITLE]: 'Dune' }`, never `{ title: 'Dune' }`.
+2. **Expressions produce values; Locations name writable addresses.** Mutating an object an expression returned changes nothing — stored state is deeply frozen and throws.
+3. **Derived state is read-only.** Writing it is rejected by `validateGraph` and by the runtime.
+4. **An action is a transaction.** Either every mutation commits or every mutation rolls back.
+5. **Operations execute sequentially against provisional transaction state.** Operation N sees the writes of operations < N.
+6. **`for-each` iteration N observes provisional writes from iterations < N.** The collection itself is read once, before the first mutation.
+7. **Constraints are evaluated against proposed state**, per instance of the entity, wherever that instance is stored — including nested inside other entities.
+8. **Transition constraints compare the instance at transaction entry with the instance proposed.** They govern change and removal of instances that already existed; a newly inserted instance has no previous state and is not evaluated.
+9. **Input writes are governed** by entity constraints and transition constraints, through the same engine and transaction as an action. Binding an input to a protected location does not bypass anything.
+10. **`hydrateState` is administrative and bypasses semantic enforcement.** It evaluates no precondition, no constraint and no transition constraint.
+11. **Presentation never authorizes behavior.** `hidden` ≠ forbidden. Enforcement belongs to action guards, constraints and transition constraints.
+12. **`null` and `[]` are semantically distinct.** `null` is a missing collection and fails a collection operator; `[]` is a present, empty collection and behaves normally.
+13. **`required(x)` asks only whether a value exists.** `required([])`, `required('')`, `required(0)` and `required(false)` are all `true`.
+14. **A collection is truthy only when non-empty.** `[]` is falsy in a condition; `[x]` is truthy.
+15. **Business rules MUST NOT be encoded in presentation, visibility or UI structure.**
+16. **`NativeOperation` is an escape hatch.** Use it only where no semantic primitive exists, and declare its effects or dependency analysis reports itself incomplete.
+17. **Edges are derived on demand.** `synchronizeEdges` materializes them but correctness does not depend on calling it.
+18. **A theme changes presentation only.** It cannot change an action, a constraint, a location, state or routing.
 
 ## Installation
 
@@ -40,8 +59,145 @@ renders as a usable application.
 npm install @cynodia/axiom@alpha
 ```
 
-Axiom is experimental; its API may change between alpha releases. See
-[`packages/axiom/README.md`](packages/axiom/README.md) for a minimal application.
+## Minimal complete application
+
+<!-- readme-example:start -->
+```ts
+import {
+  ApplicationGraph,
+  binary,
+  compileToIR,
+  createAxiomRuntime,
+  createMemoryHost,
+  literal,
+  nodeId,
+  primitiveType,
+  ref,
+  stateLocation,
+  validateGraph,
+} from '@cynodia/axiom';
+import type {
+  ActionDef,
+  ButtonNode,
+  ConstraintDef,
+  RouteDef,
+  StateDef,
+  TextNode,
+  ViewNode,
+} from '@cynodia/axiom';
+
+// Ids are branded strings. Nothing ever resolves by name.
+export const COUNT = nodeId('state_count');
+export const INCREMENT = nodeId('action_increment');
+const LIMIT = nodeId('constraint_limit');
+const DISPLAY = nodeId('ui_display');
+const BUTTON = nodeId('ui_increment');
+const VIEW = nodeId('ui_view');
+const ROUTE = nodeId('route_root');
+
+export function createMinimalGraph(): ApplicationGraph {
+  const graph = new ApplicationGraph('counter', 'Counter');
+
+  graph.addNode<StateDef>({
+    id: COUNT,
+    kind: 'state',
+    name: 'count',
+    valueType: primitiveType('number'),
+    initialValue: 0,
+  });
+
+  // A value is an Expression. The position written to is a Location.
+  graph.addNode<ActionDef>({
+    id: INCREMENT,
+    kind: 'action',
+    name: 'increment',
+    operations: [
+      { kind: 'set', target: stateLocation(COUNT), value: binary('add', ref(COUNT), literal(1)) },
+    ],
+  });
+
+  // An invariant over proposed state. Breaking it rolls the whole action back.
+  graph.addNode<ConstraintDef>({
+    id: LIMIT,
+    kind: 'constraint',
+    name: 'The count never exceeds three',
+    message: 'The count never exceeds three.',
+    expression: binary('lte', ref(COUNT), literal(3)),
+  });
+
+  // Presentation is intent: a text role and a value format, not a font size.
+  graph.addNode<TextNode>({
+    id: DISPLAY,
+    kind: 'text',
+    value: ref(COUNT),
+    presentation: { textRole: 'title', format: { kind: 'number' } },
+  });
+  graph.addNode<ButtonNode>({
+    id: BUTTON,
+    kind: 'button',
+    label: 'Add one',
+    actionId: INCREMENT,
+    presentation: { uxRole: 'primary-action', icon: 'add' },
+  });
+  graph.addNode<ViewNode>({ id: VIEW, kind: 'view', name: 'Counter', children: [DISPLAY, BUTTON] });
+  graph.addNode<RouteDef>({ id: ROUTE, kind: 'route', path: '/', viewId: VIEW });
+
+  return graph;
+}
+
+export function runMinimalExample(): number {
+  const graph = createMinimalGraph();
+
+  const validation = validateGraph(graph);
+  if (!validation.valid) {
+    throw new Error(
+      validation.errors.map((problem) => `[${problem.code}] ${problem.message}`).join('\n'),
+    );
+  }
+
+  const host = createMemoryHost({ path: '/' });
+  const app = createAxiomRuntime({ ir: compileToIR(graph), rootElement: host.root, host });
+  app.start();
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    app.invokeAction(INCREMENT);
+  }
+
+  // Three succeeded; the fourth broke the invariant and was rolled back entirely.
+  return app.getState(COUNT) as number;
+}
+```
+<!-- readme-example:end -->
+
+## Documentation map
+
+| Need to understand | Read |
+| --- | --- |
+| Compressed reference for authoring or modifying an app | [`docs/AGENT_REFERENCE.md`](docs/AGENT_REFERENCE.md) |
+| Exact runtime guarantees, stated formally | [`docs/SEMANTIC_CONTRACT.md`](docs/SEMANTIC_CONTRACT.md) |
+| Graph, ids, types, entity value representation | [`docs/GRAPH_MODEL.md`](docs/GRAPH_MODEL.md) |
+| Every expression kind, builtin and scope rule | [`docs/EXPRESSIONS.md`](docs/EXPRESSIONS.md) |
+| Addressing writable positions | [`docs/LOCATIONS.md`](docs/LOCATIONS.md) |
+| Stored, derived, draft and ephemeral state | [`docs/STATE.md`](docs/STATE.md) |
+| Actions, operations, transactions, iteration | [`docs/ACTIONS_TRANSACTIONS.md`](docs/ACTIONS_TRANSACTIONS.md) |
+| Constraints and transition constraints | [`docs/CONSTRAINTS.md`](docs/CONSTRAINTS.md) |
+| Semantic UI nodes and bindings | [`docs/UI.md`](docs/UI.md) |
+| Presentation, UX intent, themes, formatting | [`docs/PRESENTATION.md`](docs/PRESENTATION.md) |
+| Runtime API and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
+| Machine queries and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
+| Validation codes and what rejects a graph | [`docs/VALIDATION.md`](docs/VALIDATION.md) |
+| Mistakes that compile but are wrong | [`docs/ANTI_PATTERNS.md`](docs/ANTI_PATTERNS.md) |
+
+## Packages
+
+`@cynodia/axiom` re-exports all four; installing it is normally enough.
+
+| Package | Responsibility |
+| --- | --- |
+| `@cynodia/axiom-core` | Graph, semantic types, expressions, locations, presentation, themes, validation. |
+| `@cynodia/axiom-compiler` | Validation, normalization into `ApplicationIR`, theme stylesheet, page emission. |
+| `@cynodia/axiom-runtime` | State store, evaluation, mutation engine, constraint checking, renderer, routing. |
+| `@cynodia/axiom-agent-api` | Semantic and presentation queries, mutation impact, transactional transformations. |
 
 ## Working in this repository
 
@@ -49,34 +205,33 @@ Requires Node 22 or newer.
 
 ```bash
 npm install
-npm run build      # compiles every package and writes both demo applications
-npm test           # unit, validation, runtime, agent and architecture tests
+npm run build      # compiles every package and writes the three demo applications
+npm test           # unit, validation, runtime, presentation, agent, architecture, documentation
 
-node packages/cli/dist/index.js inspect  packages/demo/dist/inventory.js --export=createInventoryGraph
-node packages/cli/dist/index.js validate packages/demo/dist/issue-tracker.js --export=createIssueTrackerGraph
-node packages/cli/dist/index.js serve    packages/demo/dist/issue-tracker.js --export=createIssueTrackerGraph
+node packages/cli/dist/index.js inspect  packages/demo/dist/order-system.js --export=createOrderSystemGraph
+node packages/cli/dist/index.js validate packages/demo/dist/order-system.js --export=createOrderSystemGraph
+node packages/cli/dist/index.js serve    packages/demo/dist/order-system.js --export=createOrderSystemGraph
 ```
 
 Three unrelated applications — an issue tracker, an inventory system and an order system —
-are built from graphs alone in `packages/demo`, and run on the same compiler and runtime
-without a line of application-specific framework code. The order system is the acceptance
-fixture: it aggregates requested stock across order lines, refuses a confirmation it cannot
-cover, and reduces stock for every line in one transaction — and in 0.5 it does so through
-a header, navigation, cards, sections, formatted prices, empty states and responsive order
-editing, with no application CSS and no DOM manipulation anywhere in it.
+are built from graphs alone in `packages/demo` and run on the same compiler and runtime
+with no application-specific framework code. The order system is the acceptance fixture for
+both the 0.4 collection semantics and the 0.5 presentation layer.
+
+Specifications, in order: `doc/spec.md`, `doc/spec2.md`, `doc/spec3.md`, `doc/spec4.md`,
+`doc/spec4.1.md`, `doc/spec5.md`, `doc/spec5.1.md`. `CLAUDE.md` orients work in the
+codebase. **The implementation is authoritative over the specifications for existing
+behavior**; where they disagree, the documentation above describes the implementation.
 
 ## Releasing
 
 ```bash
 npm run release:prepare        # build, test, pack, verify, external consumer test
 npm run release:publish:dry-run
-npm run release:publish        # publishes under the "alpha" dist-tag
+npm run release:publish
+npm run release:dist-tag
 ```
-
-Publishing needs an npm one-time password (the script prompts, or pass `--otp=<code>`).
-If a release stops part way through, re-run it with `-- --skip-prepare`: packages already
-on the registry are skipped.
 
 ## License
 
-MIT — Copyright (c) 2026 AskTech AS.
+MIT. Copyright (c) 2026 AskTech AS.

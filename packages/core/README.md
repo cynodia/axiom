@@ -6,13 +6,17 @@ framework.
 **Status: experimental / alpha.** The API may change between alpha releases.
 
 The Application Graph and its semantic model: nodes, fields, structured types,
-expressions, **locations** (addressable writable positions), edge derivation,
-validation and type inference.
+expressions, **locations** (addressable writable positions), edge derivation, validation
+and type inference. It also owns the presentation and UX layer — semantic roles, layout and
+spacing tokens, device classes, value formats and the `Theme` — with presentation
+resolution and validation.
 
-It also owns the presentation and UX layer — semantic roles, layout, spacing and sizing
-tokens, device classes, value formats and the `Theme` — together with presentation
-resolution and validation. Presentation lives here because it is part of the canonical
-graph: it is intent, not styling, and it names no colour, length or CSS property.
+Presentation lives here because it is part of the canonical graph: it is intent, not
+styling, and it names no colour, length or CSS property.
+
+Main exports: `ApplicationGraph`, `TypeRef` builders, expression builders, `Location`
+builders, `Presentation`, `Theme`, `resolvePresentationMap`, `validateGraph`,
+`VALIDATION_CODES`, `ApplicationIR`.
 
 ## Installation
 
@@ -25,6 +29,13 @@ Most applications should install the facade package instead, which re-exports th
 ```bash
 npm install @cynodia/axiom@alpha
 ```
+
+
+## Documentation
+
+The canonical operational contract lives in the `docs/` directory of the
+[`@cynodia/axiom`](https://www.npmjs.com/package/@cynodia/axiom) package, and in
+[the repository](https://github.com/cynodia/axiom). Start with `docs/AGENT_REFERENCE.md`.
 
 ## License
 

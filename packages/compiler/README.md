@@ -9,10 +9,13 @@ Validates an Application Graph, normalizes it into a runtime-ready IR, and emits
 self-contained HTML page with the runtime inlined.
 
 Normalization resolves presentation once — renderer defaults, theme, inheritance, semantic
-inference, node declarations and responsive overrides — and puts the result in the IR,
-still as roles and tokens rather than CSS. `createThemeStylesheet` is the web renderer's
+inference, node declarations and responsive overrides — and puts the result in the IR, still
+as roles and tokens rather than CSS. `createThemeStylesheet` is the web renderer's
 translation of a theme into CSS custom properties and rules, and is the only place in the
 framework that decides a role is a colour.
+
+Main exports: `compileToIR`, `compileToHtml`, `createThemeStylesheet`,
+`GraphValidationError`.
 
 ## Installation
 
@@ -25,6 +28,13 @@ Most applications should install the facade package instead, which re-exports th
 ```bash
 npm install @cynodia/axiom@alpha
 ```
+
+
+## Documentation
+
+The canonical operational contract lives in the `docs/` directory of the
+[`@cynodia/axiom`](https://www.npmjs.com/package/@cynodia/axiom) package, and in
+[the repository](https://github.com/cynodia/axiom). Start with `docs/AGENT_REFERENCE.md`.
 
 ## License
 
