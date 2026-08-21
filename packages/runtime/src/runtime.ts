@@ -11,11 +11,19 @@ import type {
   Location,
   NodeId,
   Operation,
+  ResolvedPresentation,
   StateDef,
   TypeRef,
   UINode,
 } from '@cynodia/axiom-core';
-import type { DomElement, DomEvent, HostEnvironment } from './dom.js';
+import type { ConfirmationRequest, DomElement, DomEvent, HostEnvironment } from './dom.js';
+import { formatValue } from './format.js';
+import {
+  ariaRoleFor,
+  headingTag,
+  landmarkTag,
+  presentationClasses,
+} from './presentation-classes.js';
 import { createMutationEngine } from './mutation/mutation-engine.js';
 import type { MutationContext, MutationLogEntry, MutationResult } from './mutation/mutation-engine.js';
 import { LocationResolutionError, resolveLocation } from './mutation/resolve-location.js';
@@ -211,6 +219,15 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   let transactionCounter = 0;
   const mutationLog: MutationLogEntry[] = [];
   const inputValidation = options.inputValidation ?? 'immediate';
+  const theme = ir.theme;
+  const locale = theme?.locale ?? 'en-US';
+  /** Messages for inputs whose last write was refused, so a control can say so. */
+  const inputErrors = new Map<string, string>();
+
+  /** Presentation, already resolved by the compiler. The renderer decides nothing. */
+  function presentationOf(id: string): ResolvedPresentation | undefined {
+    return (ir.presentation as Record<string, ResolvedPresentation> | undefined)?.[id];
+  }
 
   const statesById = new Map<string, StateDef>(ir.states.map((state) => [state.id, state]));
   const entitiesById = new Map<string, EntityDef>(ir.entities.map((entity) => [entity.id, entity]));
@@ -712,9 +729,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     };
 
     for (const state of ir.states) {
-      // Drafts are incomplete by definition, and derived states are views of data that
-      // is already validated where it is stored.
-      if (state.draft || state.derivation) {
+      // Drafts are incomplete by definition, ephemeral state is not a domain fact at all,
+      // and derived states are views of data already validated where it is stored.
+      if (state.draft || state.ephemeral || state.derivation) {
         continue;
       }
       visit(read(state.id), state.valueType);
@@ -1136,9 +1153,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
 
     if (action.requiresConfirmation) {
-      const message =
-        action.confirmationMessage ?? `Confirm ${action.name ?? action.id}. This cannot be undone.`;
-      if (!host.confirm(message)) {
+      if (!askForConfirmation(action)) {
         return { ok: false, diagnostics: [...collected] };
       }
     }
@@ -1259,18 +1274,51 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     return created;
   }
 
-  function presentationClasses(node: UINode): string {
-    const hints = node.presentation;
-    if (!hints) {
-      return '';
+  /** The semantic classes a node's resolved presentation implies. No styles, no colours. */
+  function nodeClasses(node: UINode, ...base: string[]): string {
+    return presentationClasses(presentationOf(node.id), ...base);
+  }
+
+  /** A semantic icon, drawn with the glyph the theme supplies for it. */
+  function appendIcon(parent: DomElement, resolved: ResolvedPresentation | undefined): boolean {
+    const name = resolved?.icon;
+    if (!name) {
+      return false;
     }
-    return [
-      hints.role ? `axiom-role-${hints.role}` : '',
-      hints.density ? `axiom-density-${hints.density}` : '',
-      hints.emphasis ? `axiom-emphasis-${hints.emphasis}` : '',
-    ]
-      .filter(Boolean)
-      .join(' ');
+    const icon = element('span', 'axiom-icon');
+    icon.setAttribute('aria-hidden', 'true');
+    icon.setAttribute('data-icon', name);
+    icon.textContent = theme?.icons?.[name] ?? '';
+    parent.appendChild(icon);
+    return true;
+  }
+
+  /**
+   * Asks for confirmation. The graph describes what is asked; the host decides how to ask.
+   * A host that can only manage a plain question still gets a sentence to show.
+   */
+  function askForConfirmation(action: ActionDef): boolean {
+    const declared = action.confirmation;
+    const fallback = `Confirm ${action.name ?? action.id}. This cannot be undone.`;
+    const composed = declared
+      ? [declared.title, declared.description].filter(Boolean).join(' — ')
+      : '';
+    const message = action.confirmationMessage ?? (composed || fallback);
+    if (!host.confirmRequest) {
+      return host.confirm(message);
+    }
+    const request: ConfirmationRequest = {
+      actionId: action.id,
+      title: declared?.title ?? action.name ?? action.id,
+      confirmLabel: declared?.confirmLabel ?? 'Confirm',
+      cancelLabel: declared?.cancelLabel ?? 'Cancel',
+      severity: declared?.severity ?? (action.destructive ? 'destructive' : 'informational'),
+      message,
+      ...(declared?.description ?? action.confirmationMessage
+        ? { description: declared?.description ?? action.confirmationMessage }
+        : {}),
+    };
+    return host.confirmRequest(request);
   }
 
   function renderChildren(ids: NodeId[], scope: Scope, parent: DomElement): void {
@@ -1299,14 +1347,41 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
   }
 
-  function resolveInputTag(node: UINode & { kind: 'input' }): {
+  interface ControlDescriptor {
+    /** A tag name, or `radio-group` for the one control made of several elements. */
     tag: string;
     type?: string;
     options?: string[];
-  } {
+    variant?: string;
+  }
+
+  /**
+   * Which control edits this value. Semantic intent wins, then the older HTML-shaped
+   * hint, then the type of the location the input is bound to.
+   */
+  function resolveInputTag(node: UINode & { kind: 'input' }): ControlDescriptor {
     const located = ir.locationTypes[node.id];
     const resolved = located ? unwrapType(located) : null;
+    const enumValues = resolved?.kind === 'enum' ? resolved.values : [];
     const hint = node.inputHint;
+
+    switch (presentationOf(node.id)?.control) {
+      case 'multiline':
+        return { tag: 'textarea', variant: 'multiline' };
+      case 'select':
+        return { tag: 'select', options: enumValues, variant: 'select' };
+      case 'radio-group':
+        return { tag: 'radio-group', options: enumValues, variant: 'radio-group' };
+      case 'switch':
+        return { tag: 'input', type: 'checkbox', variant: 'switch' };
+      case 'checkbox':
+        return { tag: 'input', type: 'checkbox', variant: 'checkbox' };
+      case 'stepper':
+        return { tag: 'input', type: 'number', variant: 'stepper' };
+      default:
+        break;
+    }
+
     if (hint === 'multiline') {
       return { tag: 'textarea' };
     }
@@ -1314,7 +1389,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       return { tag: 'select' };
     }
     if (hint === 'select' || (!hint && resolved?.kind === 'enum')) {
-      return { tag: 'select', options: resolved?.kind === 'enum' ? resolved.values : [] };
+      return { tag: 'select', options: enumValues };
     }
     if (hint === 'checkbox' || (!hint && resolved?.kind === 'primitive' && resolved.primitive === 'boolean')) {
       return { tag: 'input', type: 'checkbox' };
@@ -1398,31 +1473,55 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       return null;
     }
 
+    const presentation = presentationOf(node.id);
+
     switch (node.kind) {
       case 'view': {
-        const container = element('div', `axiom-view ${presentationClasses(node)}`.trim());
+        const container = element('div', nodeClasses(node, 'axiom-view'));
         container.setAttribute('data-node', node.id);
         renderChildren(node.children, scope, container);
         return container;
       }
       case 'container': {
-        const container = element(
-          'div',
-          `axiom-container axiom-layout-${node.layout ?? 'vertical'} ${presentationClasses(node)}`.trim(),
-        );
+        // A UX role that names a region of the page becomes the element that means it, so
+        // the landmark structure an author declared is the one assistive technology sees.
+        const container = element(landmarkTag(presentation?.uxRole) ?? 'div', nodeClasses(node, 'axiom-container'));
         container.setAttribute('data-node', node.id);
+        const ariaRole = ariaRoleFor(presentation?.uxRole);
+        if (ariaRole) {
+          container.setAttribute('role', ariaRole);
+        }
+        if (presentation?.accessibleLabel) {
+          container.setAttribute('aria-label', presentation.accessibleLabel);
+        }
+        appendIcon(container, presentation);
         renderChildren(node.children, scope, container);
         return container;
       }
       case 'text': {
-        const text = element('span', `axiom-text ${presentationClasses(node)}`.trim());
+        const text = element(headingTag(presentation?.textRole) ?? 'span', nodeClasses(node, 'axiom-text'));
         text.setAttribute('data-node', node.id);
-        text.textContent =
-          typeof node.value === 'string' ? node.value : toText(evaluate(node.value, scope));
+        // A status role announces itself whatever kind of node carries it.
+        const textRole = ariaRoleFor(presentation?.uxRole);
+        if (textRole) {
+          text.setAttribute('role', textRole);
+        }
+        if (presentation?.accessibleLabel) {
+          text.setAttribute('aria-label', presentation.accessibleLabel);
+        }
+        const raw = typeof node.value === 'string' ? node.value : evaluate(node.value, scope);
+        const rendered = presentation?.format ? formatValue(raw, presentation.format, locale) : toText(raw);
+        if (appendIcon(text, presentation)) {
+          const value = element('span', 'axiom-text-value');
+          value.textContent = rendered;
+          text.appendChild(value);
+        } else {
+          text.textContent = rendered;
+        }
         return text;
       }
       case 'repeat': {
-        const container = element('div', 'axiom-repeat');
+        const container = element('div', nodeClasses(node, 'axiom-repeat'));
         container.setAttribute('data-node', node.id);
         const source = evaluate(node.source, scope);
         const items = Array.isArray(source) ? source : [];
@@ -1439,7 +1538,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return container;
       }
       case 'field-display': {
-        const container = element('div', 'axiom-field');
+        const container = element('div', nodeClasses(node, 'axiom-field'));
         container.setAttribute('data-node', node.id);
         const field = fieldOf(node.fieldId);
         if (node.label ?? field?.name) {
@@ -1447,21 +1546,30 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           label.textContent = node.label ?? field?.name ?? '';
           container.appendChild(label);
         }
+        appendIcon(container, presentation);
         const value = element('span', 'axiom-field-value');
         const source = evaluate(node.source, scope);
-        value.textContent = isRecord(source) ? toText(source[node.fieldId]) : '';
+        // The stored value is untouched; only what is shown is formatted.
+        value.textContent = isRecord(source)
+          ? formatValue(source[node.fieldId], presentation?.format, locale)
+          : '';
         container.appendChild(value);
         return container;
       }
       case 'form': {
-        const form = element('form', 'axiom-form');
+        const form = element('form', nodeClasses(node, 'axiom-form'));
         form.setAttribute('data-node', node.id);
         renderChildren(node.children, scope, form);
         if (node.submitActionId) {
-          const submit = element('button', 'axiom-submit');
+          const actions = element('div', 'axiom-container axiom-ux-action-group axiom-layout-horizontal axiom-gap-small axiom-align-center axiom-justify-end axiom-wrap axiom-width-fill');
+          const submit = element(
+            'button',
+            'axiom-submit axiom-button axiom-role-primary axiom-emphasis-strong axiom-ux-primary-action',
+          );
           submit.setAttribute('type', 'submit');
           submit.textContent = node.submitLabel ?? 'Submit';
-          form.appendChild(submit);
+          actions.appendChild(submit);
+          form.appendChild(actions);
           const actionId = node.submitActionId;
           form.addEventListener('submit', (event: DomEvent) => {
             event.preventDefault?.();
@@ -1471,25 +1579,86 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return form;
       }
       case 'input': {
-        const wrapper = element('label', 'axiom-input');
+        const descriptor = resolveInputTag(node);
+        const grouped = descriptor.tag === 'radio-group';
+        const controlId = `axiom-control-${node.id}`;
+        const required = ir.locationRequired?.[node.id] === true;
+        const wrapper = element(grouped ? 'div' : 'label', nodeClasses(node, 'axiom-input'));
         wrapper.setAttribute('data-node', node.id);
-        if (node.label) {
-          const label = element('span', 'axiom-input-label');
-          label.textContent = node.label;
+        if (grouped) {
+          wrapper.setAttribute('role', 'group');
+        } else {
+          // The label is the element, and it names the control by id as well, so the
+          // association survives however the two are laid out.
+          wrapper.setAttribute('for', controlId);
+        }
+        const labelText = node.label ?? presentation?.accessibleLabel;
+        if (labelText) {
+          const label = element('span', 'axiom-input-label axiom-text-label');
+          label.textContent = labelText;
+          if (required) {
+            const marker = element('span', 'axiom-required-marker');
+            marker.setAttribute('aria-hidden', 'true');
+            marker.textContent = '*';
+            label.appendChild(marker);
+          }
           wrapper.appendChild(label);
         }
-        const descriptor = resolveInputTag(node);
-        const control = element(descriptor.tag, 'axiom-control');
-        control.setAttribute('data-node', node.id);
-        if (descriptor.type) {
-          control.setAttribute('type', descriptor.type);
-        }
-        if (node.placeholder) {
-          control.setAttribute('placeholder', node.placeholder);
-        }
+
         const current = readLocation(node.binding.location, scope);
-        if (descriptor.type === 'checkbox') {
+        const describedBy: string[] = [];
+        const control = element(grouped ? 'div' : descriptor.tag, grouped ? 'axiom-radio-group' : 'axiom-control');
+        control.setAttribute('data-node', node.id);
+        if (descriptor.variant) {
+          control.setAttribute('data-control', descriptor.variant);
+        }
+        if (!grouped) {
+          control.setAttribute('id', controlId);
+          if (descriptor.type) {
+            control.setAttribute('type', descriptor.type);
+          }
+          if (node.placeholder) {
+            control.setAttribute('placeholder', node.placeholder);
+          }
+          if (required) {
+            control.setAttribute('aria-required', 'true');
+          }
+          if (!labelText && presentation?.accessibleLabel) {
+            control.setAttribute('aria-label', presentation.accessibleLabel);
+          }
+        }
+        if (grouped) {
+          wrapper.setAttribute('data-control', descriptor.variant ?? 'radio-group');
+        }
+        if (descriptor.variant === 'switch') {
+          control.setAttribute('role', 'switch');
+        }
+
+        const radios: DomElement[] = [];
+        if (grouped) {
+          for (const choice of optionChoices(node, scope, descriptor.options ?? [])) {
+            const option = element('label', 'axiom-radio-option');
+            const radio = element('input', 'axiom-radio');
+            radios.push(radio);
+            radio.setAttribute('type', 'radio');
+            radio.setAttribute('name', controlId);
+            radio.setAttribute('value', choice.value);
+            radio.value = choice.value;
+            if (toText(current) === choice.value) {
+              radio.checked = true;
+              radio.setAttribute('checked', 'checked');
+            }
+            const caption = element('span');
+            caption.textContent = choice.label;
+            option.appendChild(radio);
+            option.appendChild(caption);
+            control.appendChild(option);
+          }
+        } else if (descriptor.type === 'checkbox') {
           control.checked = Boolean(current);
+          if (Boolean(current)) {
+            control.setAttribute('checked', 'checked');
+          }
         } else if (descriptor.tag === 'select') {
           for (const choice of optionChoices(node, scope, descriptor.options ?? [])) {
             const option = element('option');
@@ -1517,7 +1686,13 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           const next = coerceInputValue(node.id, source.value ?? '', source.checked);
           const rootStateId = ir.locationRoots[node.id];
           const rootState = rootStateId === undefined ? undefined : statesById.get(rootStateId);
-          const guarded = inputValidation === 'immediate' && rootState !== undefined && rootState.draft !== true;
+          // A draft is incomplete while it is filled in, and ephemeral presentation state
+          // is not a domain fact at all; neither is guarded per keystroke.
+          const guarded =
+            inputValidation === 'immediate' &&
+            rootState !== undefined &&
+            rootState.draft !== true &&
+            rootState.ephemeral !== true;
           const before = guarded ? countViolations(hardViolations()) : null;
 
           const transaction = transactions.begin();
@@ -1535,6 +1710,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
 
           if (failures.length > 0) {
             settle(transaction, 'rolled-back');
+            inputErrors.set(node.id, failures[0].message);
             failures.forEach(report);
           } else {
             // A transition rule always applies: it compares against the state this
@@ -1545,6 +1721,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
             ];
             if (rejected.length > 0) {
               settle(transaction, 'rolled-back');
+              inputErrors.set(node.id, rejected[0].message);
               rejected.forEach((diagnostic) =>
                 report({ ...diagnostic, details: { ...diagnostic.details, source: 'input', nodeId: node.id } }),
               );
@@ -1557,6 +1734,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
               });
             } else {
               settle(transaction, 'committed');
+              inputErrors.delete(node.id);
             }
           }
 
@@ -1564,24 +1742,57 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           focusedCaret = typeof source.selectionStart === 'number' ? source.selectionStart : null;
           renderApplication();
         };
-        control.addEventListener('input', apply);
-        control.addEventListener('change', apply);
-        control.addEventListener('focus', () => {
-          focusedNodeId = node.id;
-        });
+        // A radio group's listeners live on its radios; everything else is one control.
+        for (const target of grouped ? radios : [control]) {
+          target.addEventListener('input', apply);
+          target.addEventListener('change', apply);
+          target.addEventListener('focus', () => {
+            focusedNodeId = node.id;
+          });
+        }
         inputElements.set(node.id, control);
         wrapper.appendChild(control);
+
+        if (presentation?.description) {
+          const help = element('span', 'axiom-input-description axiom-text-caption');
+          help.setAttribute('id', `${controlId}-description`);
+          help.textContent = presentation.description;
+          describedBy.push(`${controlId}-description`);
+          wrapper.appendChild(help);
+        }
+        const rejection = inputErrors.get(node.id);
+        if (rejection) {
+          // The refusal is related to the control it refused, not left floating.
+          const error = element('span', 'axiom-input-description axiom-role-destructive axiom-text-caption');
+          error.setAttribute('id', `${controlId}-error`);
+          error.setAttribute('role', 'alert');
+          error.textContent = rejection;
+          describedBy.push(`${controlId}-error`);
+          wrapper.appendChild(error);
+          if (!grouped) {
+            control.setAttribute('aria-invalid', 'true');
+          }
+        }
+        if (describedBy.length > 0 && !grouped) {
+          control.setAttribute('aria-describedby', describedBy.join(' '));
+        }
         return wrapper;
       }
       case 'button': {
-        const button = element(
-          'button',
-          `axiom-button ${node.destructive ? 'axiom-destructive' : ''} ${presentationClasses(node)}`.trim(),
-        );
+        const button = element('button', nodeClasses(node, 'axiom-button'));
         button.setAttribute('data-node', node.id);
         button.setAttribute('type', 'button');
-        button.textContent =
-          typeof node.label === 'string' ? node.label : toText(evaluate(node.label, scope));
+        const label = typeof node.label === 'string' ? node.label : toText(evaluate(node.label, scope));
+        if (appendIcon(button, presentation)) {
+          const caption = element('span', 'axiom-button-label');
+          caption.textContent = label;
+          button.appendChild(caption);
+        } else {
+          button.textContent = label;
+        }
+        if (presentation?.accessibleLabel) {
+          button.setAttribute('aria-label', presentation.accessibleLabel);
+        }
         button.addEventListener('click', (event: DomEvent) => {
           event.preventDefault?.();
           const args: Record<string, unknown> = {};
@@ -1593,7 +1804,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return button;
       }
       case 'conditional': {
-        const container = element('div', 'axiom-conditional');
+        const container = element('div', nodeClasses(node, 'axiom-conditional'));
         container.setAttribute('data-node', node.id);
         const branch = toBoolean(evaluate(node.condition, scope)) ? node.whenTrue : node.whenFalse ?? [];
         renderChildren(branch, scope, container);

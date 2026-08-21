@@ -9,6 +9,10 @@ The domain-independent runtime: the state store, expression evaluation, the muta
 engine, constraint checking, the semantic UI renderer and routing. It takes its whole
 environment through a `HostEnvironment`, so it runs in a browser or headlessly.
 
+The renderer reads presentation that the compiler has already resolved and turns it into
+semantic class names, landmark and heading elements, and formatted values. It writes no
+styles and computes no lengths — what those classes mean is the theme's business.
+
 ## Installation
 
 ```bash

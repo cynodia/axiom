@@ -87,7 +87,8 @@ test('confirming an order reduces stock, sets the status and keeps the total', (
   assert.equal(stockOf(app, 'product-a'), 8);
   assert.equal(order(app)[ids.F_ORDER_STATUS], 'confirmed');
   assert.equal(app.getState(ids.STATE_ORDER_TOTAL), 200);
-  assert.match(textOf(host.root), /Order total: 200/);
+  // Section 60: the value stays a number; only what is shown is formatted.
+  assert.match(textOf(host.root), /Order total NOK\s?200\.00/);
 
   const committed = app.getMutationLog().filter((entry) => entry.outcome === 'committed');
   assert.ok(

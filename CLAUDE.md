@@ -13,11 +13,13 @@ turn it into a working browser application whose generated JavaScript nobody rea
 * `doc/spec2.md` — the 0.2 architecture: domain-independent compiler and runtime.
 * `doc/spec3.md` — the 0.3 architecture: semantic mutation and addressing.
 * `doc/spec4.md` — the 0.4 architecture: collection semantics and transactional iteration.
-* `doc/spec4.1.md` — the **0.4.1 hardening release: mutation-path-independent rules,
-  presence semantics, strict collection nulls and trustworthy dependency analysis**.
-  Together with spec2–spec4 this is the authority on design decisions.
+* `doc/spec4.1.md` — the 0.4.1 hardening release: mutation-path-independent rules,
+  presence semantics, strict collection nulls and trustworthy dependency analysis.
+* `doc/spec5.md` — the **0.5 presentation & UX semantic layer: semantic roles, layout and
+  spacing tokens, device classes, themes, value formatting and accessible structure**.
+  Together with spec2–spec4.1 this is the authority on design decisions.
 
-Two rules govern almost every decision:
+A handful of rules govern almost every decision:
 
 > **Domain independence** (spec2 §2.4) — `core`, `compiler`, `runtime` and `agent-api`
 > must contain no knowledge of any application domain. A new application is a new graph,
@@ -40,9 +42,19 @@ Two rules govern almost every decision:
 > holds, every governed write path must be unable to violate it. Correctness may never
 > depend on an author remembering "do not bind an input to that location".
 
-Both are enforced by tests, not convention: `packages/core/test/architecture.test.ts`
-scans framework sources for application vocabulary, and `packages/runtime/test/store.test.ts`
-checks that state writes stay confined to the mutation subsystem.
+> **Presentation is intent, not CSS** (spec5 §3) — the graph says `role: 'destructive'`,
+> `gap: 'medium'`, `responsive: { compact: … }`. It never says a colour, a length, a media
+> query or a CSS property, and `PresentationHints` must not become a bag of them. A theme
+> is the only place concrete values live, and a theme can never change behaviour.
+
+> **Presentation does not authorize behaviour** (spec5 §75) — hidden is not prohibited. A
+> rule belongs in a precondition or a transition constraint; no UX metadata may stand in
+> for one.
+
+These are enforced by tests, not convention: `packages/core/test/architecture.test.ts`
+scans framework sources for application vocabulary, `packages/runtime/test/store.test.ts`
+checks that state writes stay confined to the mutation subsystem, and
+`packages/compiler/test/presentation.test.ts` checks that no CSS reaches the IR.
 
 ## Commands
 
@@ -148,13 +160,13 @@ and tests resolve to source. Directory names stay short; npm names are scoped.
 
 | Directory   | npm name | Owns |
 | ----------- | -------- | ---- |
-| `core`      | `@cynodia/axiom-core` | `ApplicationGraph`, node and field definitions, `TypeRef`, expressions, **locations**, edge kinds, validation, type inference, edge derivation, the IR contract. No dependencies. |
-| `agent-api` | `@cynodia/axiom-agent-api` | Semantic queries, mutation impact, transactions, transformations, change sets. |
-| `compiler`  | `@cynodia/axiom-compiler` | Validation + normalization into `ApplicationIR`, and page emission. |
-| `runtime`   | `@cynodia/axiom-runtime` | State store, expression evaluation, the mutation subsystem, constraint checking, UI rendering, routing. |
+| `core`      | `@cynodia/axiom-core` | `ApplicationGraph`, node and field definitions, `TypeRef`, expressions, **locations**, edge kinds, validation, type inference, edge derivation, the IR contract, **presentation, themes and presentation resolution**. No dependencies. |
+| `agent-api` | `@cynodia/axiom-agent-api` | Semantic queries, mutation impact, transactions, transformations, change sets, presentation and UX queries. |
+| `compiler`  | `@cynodia/axiom-compiler` | Validation + normalization into `ApplicationIR`, presentation resolution, the theme stylesheet, and page emission. |
+| `runtime`   | `@cynodia/axiom-runtime` | State store, expression evaluation, the mutation subsystem, constraint checking, UI rendering, value formatting, routing. |
 | `axiom`     | `@cynodia/axiom` | The published facade: re-exports the four packages above. Application authors install only this. |
 | `cli`       | *(private)* | Graph loading, `inspect` / `validate` / `build` / `serve`. |
-| `demo`      | *(private)* | Two applications: `issue-tracker.ts` and `inventory.ts`. |
+| `demo`      | *(private)* | Three applications: `issue-tracker.ts`, `inventory.ts` and `order-system.ts`. |
 
 Dependency direction is `core ← runtime ← compiler ← cli/demo`, with `agent-api` on
 `core` alone. `ApplicationIR` lives in **core** rather than the compiler because it is the
@@ -213,6 +225,11 @@ inside it (`locationExpressions()`) are read dependencies, and the fields it wri
 **Nodes.** `entity`, `state`, `action`, `constraint`, `route`, plus the nine UI kinds
 (`view`, `container`, `text`, `repeat`, `field-display`, `form`, `input`, `button`,
 `conditional`). All of them live in the same graph and are discriminated by `kind`.
+
+**Presentation is metadata on a UI node**, not a node kind of its own: `UIBase.presentation`
+carries roles, layout, tokens, device classes, value formats and icons. 0.5 added no UI node
+kinds, because a role on an existing node is more inspectable than a new one — see
+**The presentation layer** below.
 
 **Behaviour is data.** An `ActionDef` has parameters, guards (a condition paired with the
 failure it reports — prefer these to the older positional `preconditions`/`failureModes`
@@ -305,6 +322,12 @@ another entity is validated where it actually lives, not only at the top level.
 are skipped by instance validation, otherwise a half-filled form would fail every
 invariant and roll back every action.
 
+**Ephemeral state.** `StateDef.ephemeral: true` marks state that is a UI fact rather than a
+domain fact — which panel is expanded, which tab is selected. Like a draft it is skipped by
+instance validation and unguarded per keystroke; unlike a draft it may not be persisted.
+It changes what a state *is*, never what is permitted: a write that reaches domain state is
+governed exactly as before.
+
 **Derived state is read-only and copied.** A state with a `derivation` is recomputed on
 demand and handed out as a frozen deep copy. Writing to it is rejected by the validator
 and by the runtime. This is deliberate: it makes the aliasing the 0.2 runtime relied on
@@ -364,7 +387,57 @@ then inlines that source, the IR as JSON, and a two-line bootstrap into one page
 in the browser, so `source.ts` now throws `UnbundledDependencyError` at build time if it
 finds one. When the runtime needs something core computes, resolve it during compilation
 and put it in the IR instead — `ApplicationIR.locationTypes` exists for exactly that
-reason. Adding a module under `mutation/` means adding it to `RUNTIME_MODULES`.
+reason — `ApplicationIR.presentation` and `ApplicationIR.theme` exist for the same one.
+Adding any runtime module means adding it to `RUNTIME_MODULES`, in dependency order.
+
+## The presentation layer
+
+`packages/core/src/presentation.ts` holds the vocabulary, `theme.ts` the translation layer,
+`resolve-presentation.ts` the algorithm and `validate-presentation.ts` the findings. The
+web renderer's half is `compiler/src/stylesheet.ts` plus `runtime/src/presentation-classes.ts`.
+
+**Presentation is attached to UI nodes as `presentation?: Presentation`** and is entirely
+optional. Every value in it is a closed vocabulary — `PRESENTATION_ROLES`, `UX_ROLES`,
+`SPACING_TOKENS`, `TEXT_ROLES`, `SURFACE_ROLES`, `LAYOUT_KINDS`, `DEVICE_CLASSES` and the
+rest are exported arrays — and a token outside the vocabulary is a validation **error**,
+not a silently ignored value. Adding a token means adding it to the array, the resolver,
+the stylesheet and `collections`-style enumeration tests, in that order.
+
+**Resolution has six layers and they are ordered** (spec5 §40):
+
+```
+renderer defaults → theme → inherited → semantic inference → node → responsive
+```
+
+`ResolvedPresentation.origins` records which layer decided each property, which is how the
+order is tested rather than asserted in prose. `density` is the *only* property that
+inherits (`INHERITED_PROPERTIES`); do not add more without a reason the spec supports.
+
+**Semantic inference is where node kinds and UX roles earn their keep.** A form is a raised
+surface, a `toolbar` is a horizontal wrapping centred group, a button bound to a
+`destructive` action is destructive, a button that submits its form is the primary action.
+This is what keeps authoring compact — annotate where intent differs from the default, not
+on every node. It also means a 0.4 graph gains all of it without being edited.
+
+**The IR carries resolved presentation, still semantic.** `ApplicationIR.presentation` is
+roles, tokens and device classes — never CSS. `packages/compiler/test/presentation.test.ts`
+asserts that no colour, length or CSS property appears in it, because that is what keeps a
+second renderer possible. Resolve *into* the IR, translate to CSS only in `stylesheet.ts`.
+
+**The renderer emits class names and nothing else.** No inline styles, no computed lengths.
+`presentationClassList` is the whole vocabulary of what reaches the DOM, and every class it
+can emit has a rule in the generated sheet. Landmark elements and heading levels come from
+UX roles and text roles, so accessibility cannot drift away from the declared structure.
+
+**Themes are data and cannot change behaviour.** `graph.setTheme(partial)` merges over
+`DEFAULT_THEME`; `graph.theme` is the completed one. A theme change must leave actions,
+constraints, transition constraints, locations, state, routing and every `uiNode` byte-for-byte
+identical — there are tests for exactly that in compiler and demo.
+
+**Backward compatibility is a tested property.** `role: 'danger'` and `density: 'normal'`
+are 0.2 spellings and are normalized, `ContainerNode.layout` is still read, and stripping
+every presentation declaration from the order system leaves a working application. Do not
+break any of those without a spec change.
 
 ## Where the tests live, and why
 
@@ -382,11 +455,20 @@ package they exercise:
   `OPERATION_KINDS` and executes every one, which is how "no silent semantic failure" is
   kept true as the vocabulary grows — add a construct without implementing it and that
   test fails.
-- `agent-api` — queries, field-level dependencies, mutation impact, transactions.
+- `agent-api` — queries, field-level dependencies, mutation impact, transactions, and the
+  presentation and UX queries and transformations.
 - `demo` — the applications end to end, and the acceptance scenarios from spec2 §45/§46,
-  spec3 §51/§52 and spec4 §30–§35. `order-system.ts` is the 0.4 acceptance fixture:
-  projection, aggregation, aggregate guards and atomic multi-record confirmation, with no
-  native operations anywhere in it.
+  spec3 §51/§52, spec4 §30–§35 and spec5 §56–§61. `order-system.ts` is the acceptance
+  fixture: projection, aggregation, aggregate guards and atomic multi-record confirmation
+  with no native operations anywhere in it, *and* the presentation fixture —
+  `order-system-presentation.test.ts` checks it has a header, navigation, sections,
+  surfaces, formatted values, empty states, confirmation affordances and responsive order
+  editing, with no application CSS, no escape hatch and no callback in the graph.
+
+Presentation itself is tested in `core/test/presentation.test.ts` (resolution, precedence,
+inference, themes), `core/test/presentation-validation.test.ts` (the deliberate mistakes of
+spec5 §61) and `compiler/test/presentation.test.ts` (IR normalization, the class
+vocabulary, formatting, accessible structure, the generated stylesheet).
 
 `@cynodia/axiom-runtime` exports `createMemoryHost()` and an in-memory DOM. That is deliberate
 framework code, not test-only scaffolding: the runtime takes its whole environment through
@@ -414,8 +496,21 @@ a `HostEnvironment`, so it can be driven headlessly without a browser or jsdom.
 - **Iteration scopes are ordinary `NodeId`s**, not a distinct branded type. Misuse is
   caught by validation instead: a scope may not shadow an enclosing one, and may not take
   the id of a graph node.
-- **No typed handles or higher-level authoring API yet** (spec4 §21–§23), and no semantic
-  value formatting (§24). Graphs are still built by calling `addNode` with explicit ids.
+- **No typed handles or higher-level authoring API yet** (spec4 §21–§23). Graphs are still
+  built by calling `addNode` with explicit ids.
+- **No loading or async presentation states** (spec5 §78). The action model is synchronous,
+  and the spec says not to invent an asynchronous lifecycle to decorate. When actions gain
+  one, `idle` / `pending` / `success` / `failure` belong here.
+- **`stack` is a tight vertical column, not overlapping children** (spec5 §10). It is the
+  0.2 meaning of `ContainerNode.layout: 'stack'`, kept because no use case needs overlap.
+- **Presentation resolution is not incremental.** `resolvePresentationMap` walks every UI
+  node, and `AgentAPI` recomputes it per call rather than caching, because a transaction
+  mutates the graph underneath it. Correct, and not fast.
+- **Only `density` inherits.** Spacing context and text-role defaults are listed as
+  candidates in spec5 §39 and are deliberately not implemented.
+- **The renderer's escape hatch is a class name only** (`rendererOverrides.web.className`).
+  There is no raw-CSS channel in the graph, and adding one would need spec5 §51's opacity
+  marking to stay true.
 - **Change sets are in memory** and per `AgentAPI` instance. There is no semantic version
   control and no on-disk graph format — graphs are still TypeScript builder functions,
   which remains a concession to human authoring.

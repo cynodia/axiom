@@ -12,6 +12,8 @@ const RUNTIME_MODULES = [
   './mutation/transaction.js',
   './mutation/resolve-location.js',
   './mutation/mutation-engine.js',
+  './format.js',
+  './presentation-classes.js',
   './runtime.js',
 ];
 

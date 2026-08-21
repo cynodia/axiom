@@ -12,6 +12,8 @@ import type { FieldIndexEntry } from './graph.js';
 import type { UINode } from './ui.js';
 import type { AnyNode } from './types.js';
 import type { TypeRef } from './type-ref.js';
+import type { ResolvedPresentation } from './presentation.js';
+import type { Theme } from './theme.js';
 
 export interface RouteSegment {
   kind: 'static' | 'parameter';
@@ -59,4 +61,20 @@ export interface ApplicationIR {
    * to canonical application state from a write to a draft.
    */
   locationRoots: Record<NodeId, NodeId>;
+  /**
+   * Whether the field each input addresses is declared required, resolved here so a
+   * renderer can mark it without re-deriving the model.
+   */
+  locationRequired: Record<NodeId, boolean>;
+  /** The application's visual identity, completed against the default theme. */
+  theme: Theme;
+  /**
+   * Presentation with every question already answered, per UI node: renderer defaults,
+   * theme, inheritance, semantic inference, node declaration and responsive overrides all
+   * resolved. A renderer reads this and needs to know nothing about how it was decided.
+   *
+   * It is deliberately still semantic — roles, tokens and device classes, not CSS — so a
+   * second renderer remains possible.
+   */
+  presentation: Record<NodeId, ResolvedPresentation>;
 }

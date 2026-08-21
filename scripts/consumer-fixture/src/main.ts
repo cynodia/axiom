@@ -4,11 +4,14 @@
  */
 import assert from 'node:assert/strict';
 import {
+  AgentAPI,
+  DEFAULT_THEME,
   RUNTIME_DIAGNOSTIC_CODES,
   compileToHtml,
   compileToIR,
   createAxiomRuntime,
   createMemoryHost,
+  createThemeStylesheet,
   findByNodeId,
   textOf,
   validateGraph,
@@ -18,8 +21,11 @@ import {
   ACTION_DECREMENT,
   ACTION_INCREMENT,
   STATE_COUNT,
+  UI_CONTROLS,
   UI_DECREMENT,
+  UI_DISPLAY,
   UI_INCREMENT,
+  UI_TITLE,
   createCounterGraph,
 } from './counter.js';
 import {
@@ -58,7 +64,7 @@ step('the compiler normalizes it into an IR');
 const host = createMemoryHost({ path: '/' });
 const app = createAxiomRuntime({ ir, rootElement: host.root, host });
 app.start();
-assert.match(textOf(host.root), /Count: 0/);
+assert.match(textOf(host.root), /Count 0/);
 step('the runtime renders it headlessly');
 
 const button = (id: string): MemoryElement => {
@@ -70,7 +76,7 @@ const button = (id: string): MemoryElement => {
 button(UI_INCREMENT).dispatch('click');
 button(UI_INCREMENT).dispatch('click');
 assert.equal(app.getState(STATE_COUNT), 2);
-assert.match(textOf(host.root), /Count: 2/);
+assert.match(textOf(host.root), /Count 2/);
 step('clicking a button runs an action and updates the view');
 
 button(UI_DECREMENT).dispatch('click');
@@ -98,6 +104,56 @@ assert.match(page, /<!DOCTYPE html>/);
 assert.match(page, /createAxiomRuntime/);
 assert.doesNotMatch(page, /^import /m, 'the emitted page resolves no modules');
 step('the compiler emits a self-contained page');
+
+// ------------------------------------------------- presentation and UX intent
+
+assert.equal(ir.theme.id, DEFAULT_THEME.id, 'a graph that declares no theme gets the default one');
+assert.equal(ir.presentation[UI_INCREMENT].role, 'primary');
+assert.equal(ir.presentation[UI_CONTROLS].uxRole, 'toolbar');
+assert.equal(ir.presentation[UI_CONTROLS].layout.kind, 'horizontal', 'implied by the role, not declared');
+assert.equal(ir.presentation[UI_CONTROLS].responsive.compact?.layout?.kind, 'vertical');
+step('presentation intent is normalized into the IR');
+
+const titleElement = findByNodeId(host.root, UI_TITLE)[0];
+assert.ok(titleElement);
+assert.equal(titleElement.tagName, 'h1', 'a text role becomes a real heading');
+const controls = findByNodeId(host.root, UI_CONTROLS)[0];
+assert.ok(controls);
+const controlClasses = (controls.getAttribute('class') ?? '').split(' ');
+assert.ok(controlClasses.includes('axiom-ux-toolbar'));
+assert.ok(controlClasses.includes('axiom-layout-horizontal'));
+assert.ok(controlClasses.includes('axiom-compact-layout-vertical'));
+assert.equal(controls.getAttribute('role'), 'toolbar');
+step('the renderer emits semantic classes and accessible structure');
+
+const stylesheet = createThemeStylesheet(ir.theme);
+assert.match(stylesheet, /--axiom-color-accent/);
+assert.match(stylesheet, /\.axiom-ux-empty-state/);
+assert.doesNotMatch(stylesheet, /count/i, 'the stylesheet knows nothing about the application');
+step('a theme becomes a stylesheet, and the graph never sees CSS');
+
+const agent = new AgentAPI(graph);
+assert.deepEqual(
+  agent.getPrimaryActions(nodeIdOf(graph)).map((action) => action.name),
+  ['increment'],
+);
+assert.equal(agent.getUxRole(UI_CONTROLS), 'toolbar');
+step('an agent can inspect UX intent');
+
+const restyled = agent.transact(
+  (transaction) => transaction.setTheme({ appearance: 'dark', defaults: { density: 'compact' } }),
+  { reason: 'Use a denser dark identity' },
+);
+assert.equal(restyled.committed, true);
+assert.equal(restyled.change?.operations.length, 1, 'an application-wide restyle is one change');
+assert.equal(new AgentAPI(graph).resolvePresentation(UI_CONTROLS)?.density, 'compact');
+assert.equal(compileToIR(graph).theme.appearance, 'dark');
+step('an agent restyles the whole application by changing the theme');
+
+assert.equal(app.getState(STATE_COUNT), 1, 'and the application behaves exactly as before');
+step('changing the theme changed no behaviour');
+
+assert.match(textOf(findByNodeId(host.root, UI_DISPLAY)[0]!), /1/);
 
 // --------------------------------------------------- collection semantics
 
@@ -175,3 +231,10 @@ assert.equal(stockOf('bolt'), 1, 'a change the rule allows still goes through');
 step('the same input still works for a change the rule permits');
 
 console.log('\nExternal consumer smoke test passed.');
+
+/** The counter's only view, found through the graph rather than hard-coded. */
+function nodeIdOf(target: ReturnType<typeof createCounterGraph>) {
+  const [view] = target.getNodesByKind('view');
+  assert.ok(view);
+  return view.id;
+}

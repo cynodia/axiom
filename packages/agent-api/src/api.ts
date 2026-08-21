@@ -1,6 +1,6 @@
 import { validateGraph } from '@cynodia/axiom-core';
 import type { ApplicationGraph, ValidationResult } from '@cynodia/axiom-core';
-import { GraphQueries } from './queries.js';
+import { PresentationQueries } from './presentation-queries.js';
 import { Transaction } from './transaction.js';
 import type { ChangeSet } from './changes.js';
 
@@ -8,7 +8,7 @@ import type { ChangeSet } from './changes.js';
  * The machine-facing interface to an application. Agents query semantics and apply
  * structural transformations; they never edit generated code.
  */
-export class AgentAPI extends GraphQueries {
+export class AgentAPI extends PresentationQueries {
   private readonly changeLog: ChangeSet[] = [];
 
   constructor(graph: ApplicationGraph) {

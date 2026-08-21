@@ -1,7 +1,7 @@
 import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
 import type { Location } from './location.js';
-import type { PresentationHints } from './nodes.js';
+import type { Presentation } from './presentation.js';
 
 export type UINodeKind =
   | 'view'
@@ -31,7 +31,8 @@ export interface UIBase {
   kind: UINodeKind;
   name?: string;
   visibleWhen?: Expression;
-  presentation?: PresentationHints;
+  /** Presentation and UX intent. Entirely optional; defaults do the rest. */
+  presentation?: Presentation;
   metadata?: Record<string, unknown>;
 }
 
@@ -43,6 +44,12 @@ export interface ViewNode extends UIBase {
 
 export interface ContainerNode extends UIBase {
   kind: 'container';
+  /**
+   * The 0.2 spelling of layout intent. `presentation.layout` supersedes it and can say
+   * considerably more; this is read as a fallback so 0.4 graphs render unchanged.
+   *
+   * @deprecated Use `presentation.layout`.
+   */
   layout?: 'vertical' | 'horizontal' | 'stack';
   children: NodeId[];
 }
@@ -117,6 +124,10 @@ export interface ButtonNode extends UIBase {
   actionId: NodeId;
   /** Keyed by action parameter id. */
   arguments?: Record<string, Expression>;
+  /**
+   * Declares destructive intent at the control. The bound action's own `destructive`
+   * flag is enough on its own — presentation is inferred from it.
+   */
   destructive?: boolean;
 }
 

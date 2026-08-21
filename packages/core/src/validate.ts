@@ -32,6 +32,8 @@ import type { SemanticContext } from './infer.js';
 import { locationExpressions } from './location.js';
 import type { Location } from './location.js';
 import { validateLocation } from './validate-location.js';
+import { resolvePresentationMap } from './resolve-presentation.js';
+import { validatePresentation } from './validate-presentation.js';
 
 
 
@@ -120,6 +122,17 @@ export function validateGraph(graph: ApplicationGraph): ValidationResult {
   validateRoutes(context);
   reportUnreachableUiNodes(context);
 
+  // Presentation is validated against the same graph, with the theme completed. Only an
+  // unknown token is an error here; UX findings are advice.
+  const allNodes = [...nodes.values()];
+  const presentation = validatePresentation(
+    allNodes,
+    graph.declaredTheme,
+    resolvePresentationMap(allNodes, graph.theme),
+  );
+  errors.push(...presentation.errors);
+  warnings.push(...presentation.warnings);
+
   return { valid: errors.length === 0, errors, warnings };
 }
 
@@ -177,6 +190,14 @@ function validateState(state: StateDef, context: Context): void {
   }
   if (state.derivation) {
     validateExpression(state.derivation, state.id, context, new Set());
+  }
+  if (state.ephemeral && state.persistence) {
+    context.errors.push({
+      code: VALIDATION_CODES.ephemeralStatePersisted,
+      message: `State ${state.id} is ephemeral presentation state and cannot be persisted`,
+      nodeId: state.id,
+      details: { persistence: state.persistence.kind },
+    });
   }
   if (state.persistence?.kind === 'remote' && !context.nodes.has(state.persistence.sourceId)) {
     context.errors.push({

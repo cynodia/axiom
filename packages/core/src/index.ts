@@ -1,6 +1,8 @@
 export * from './ids.js';
 export * from './diagnostics.js';
 export * from './location.js';
+export * from './presentation.js';
+export * from './theme.js';
 export * from './type-ref.js';
 export * from './expressions.js';
 export * from './nodes.js';
@@ -10,6 +12,8 @@ export * from './graph.js';
 export * from './infer.js';
 export * from './context.js';
 export * from './validate-location.js';
+export * from './resolve-presentation.js';
 export * from './validate.js';
+export * from './validate-presentation.js';
 export * from './derive-edges.js';
 export * from './ir.js';

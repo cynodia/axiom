@@ -566,14 +566,39 @@ test('state marked for local storage is persisted and restored', () => {
   );
 });
 
+/**
+ * The renderer's element vocabulary is fixed and generic. It grew in 0.5 to include the
+ * landmark and heading elements a semantic UX role implies — those are ordinary HTML, and
+ * emitting them is what keeps the generated document accessible — but nothing in it is
+ * derived from what the application is about.
+ */
+const RENDERED_ELEMENTS = [
+  'div',
+  'span',
+  'form',
+  'label',
+  'input',
+  'select',
+  'option',
+  'textarea',
+  'button',
+  // Landmarks and headings, chosen by UX role and text role.
+  'header',
+  'footer',
+  'nav',
+  'main',
+  'aside',
+  'section',
+  'h1',
+  'h2',
+  'h3',
+];
+
 test('the runtime renders only generic element types', () => {
   const { host } = createApp();
   const tags = new Set(findAll(host.root, () => true).map((element) => element.tagName));
   for (const tag of tags) {
-    assert.ok(
-      ['div', 'span', 'form', 'label', 'input', 'select', 'option', 'textarea', 'button'].includes(tag),
-      `unexpected element <${tag}>`,
-    );
+    assert.ok(RENDERED_ELEMENTS.includes(tag), `unexpected element <${tag}>`);
   }
   assert.ok(findByTag(host.root, 'button').length > 0);
 });

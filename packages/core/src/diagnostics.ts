@@ -53,4 +53,22 @@ export const VALIDATION_CODES = {
   initialValueInvalidEntity: 'INITIAL_VALUE_INVALID_ENTITY',
   scopeShadowing: 'SCOPE_SHADOWING',
   scopeCollidesWithNode: 'SCOPE_COLLIDES_WITH_NODE',
+  ephemeralStatePersisted: 'EPHEMERAL_STATE_PERSISTED',
+
+  // Presentation and UX. Everything here is a warning except an unknown token, which the
+  // renderer genuinely cannot act on.
+  unknownPresentationToken: 'UNKNOWN_PRESENTATION_TOKEN',
+  presentationSemanticConflict: 'PRESENTATION_SEMANTIC_CONFLICT',
+  multiplePrimaryActions: 'MULTIPLE_PRIMARY_ACTIONS',
+  formWithoutPrimaryAction: 'FORM_WITHOUT_PRIMARY_ACTION',
+  destructiveActionPresentedAsSuccess: 'DESTRUCTIVE_ACTION_PRESENTED_AS_SUCCESS',
+  destructiveActionUnmarked: 'DESTRUCTIVE_ACTION_UNMARKED',
+  excessiveHorizontalActions: 'EXCESSIVE_HORIZONTAL_ACTIONS',
+  emptyStateWithoutRecoveryAction: 'EMPTY_STATE_WITHOUT_RECOVERY_ACTION',
+  rigidHorizontalLayout: 'RIGID_HORIZONTAL_LAYOUT',
+  conflictingSizing: 'CONFLICTING_SIZING',
+  interactiveElementMissingLabel: 'INTERACTIVE_ELEMENT_MISSING_LABEL',
+  formInputMissingLabel: 'FORM_INPUT_MISSING_LABEL',
+  invalidHeadingStructure: 'INVALID_HEADING_STRUCTURE',
+  opaquePresentation: 'OPAQUE_PRESENTATION',
 } as const;

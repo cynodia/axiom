@@ -1,7 +1,9 @@
 import {
   actionGuards,
   inferLocationType,
+  locationFieldIds,
   locationRootStateId,
+  resolvePresentationMap,
   semanticContextFromGraph,
   validateGraph,
 } from '@cynodia/axiom-core';
@@ -14,6 +16,7 @@ import type {
   EntityDef,
   FieldId,
   NodeId,
+  ResolvedPresentation,
   RouteDef,
   RouteSegment,
   StateDef,
@@ -137,6 +140,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
   const semantics = semanticContextFromGraph(graph);
   const locationTypes: Record<NodeId, TypeRef> = {};
   const locationRoots: Record<NodeId, NodeId> = {};
+  const locationRequired: Record<NodeId, boolean> = {};
   for (const node of Object.values(uiNodes)) {
     if (node.kind !== 'input') {
       continue;
@@ -146,7 +150,22 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
       locationTypes[node.id] = resolved;
     }
     locationRoots[node.id] = locationRootStateId(node.binding.location);
+    // Whether a value is required is already in the model; a renderer should not re-derive it.
+    const addressed = locationFieldIds(node.binding.location)[0];
+    locationRequired[node.id] = addressed
+      ? graph.getField(addressed)?.field.required === true
+      : resolved !== undefined && resolved.kind !== 'optional';
   }
+
+  // Presentation is normalized here, once: renderer defaults, theme, inheritance,
+  // semantic inference, node declarations and responsive overrides are all decided before
+  // a renderer sees them. What lands in the IR is still semantic — roles and tokens, not
+  // CSS — so a second renderer stays possible.
+  const theme = graph.theme;
+  const presentation: Record<NodeId, ResolvedPresentation> = resolvePresentationMap(
+    graph.listNodes(),
+    theme,
+  );
 
   return {
     id: graph.id,
@@ -164,6 +183,9 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
     edges: graph.semanticEdges(),
     locationTypes,
     locationRoots,
+    locationRequired,
+    theme,
+    presentation,
   };
 }
 

@@ -8,6 +8,12 @@ framework.
 Validates an Application Graph, normalizes it into a runtime-ready IR, and emits a
 self-contained HTML page with the runtime inlined.
 
+Normalization resolves presentation once — renderer defaults, theme, inheritance, semantic
+inference, node declarations and responsive overrides — and puts the result in the IR,
+still as roles and tokens rather than CSS. `createThemeStylesheet` is the web renderer's
+translation of a theme into CSS custom properties and rules, and is the only place in the
+framework that decides a role is a colour.
+
 ## Installation
 
 ```bash

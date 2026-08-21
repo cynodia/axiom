@@ -29,6 +29,8 @@ import type {
 export const STATE_COUNT = nodeId('state_count');
 export const ACTION_INCREMENT = nodeId('action_increment');
 export const ACTION_DECREMENT = nodeId('action_decrement');
+export const UI_TITLE = nodeId('ui_title');
+export const UI_COUNT_LABEL = nodeId('ui_count_label');
 export const UI_DISPLAY = nodeId('ui_display');
 export const UI_INCREMENT = nodeId('ui_increment');
 export const UI_DECREMENT = nodeId('ui_decrement');
@@ -80,10 +82,29 @@ export function createCounterGraph(): ApplicationGraph {
   });
 
   graph.addNode<TextNode>({
+    id: UI_TITLE,
+    kind: 'text',
+    value: 'Counter',
+    // Presentation is intent: a text role, not a font size.
+    presentation: { textRole: 'display' },
+  });
+
+  graph.addNode<TextNode>({
+    id: UI_COUNT_LABEL,
+    kind: 'text',
+    value: 'Count',
+    presentation: { textRole: 'label' },
+  });
+
+  graph.addNode<TextNode>({
     id: UI_DISPLAY,
     kind: 'text',
-    value: call('concat', literal('Count: '), call('to-string', ref(STATE_COUNT))),
-    presentation: { emphasis: 'strong' },
+    value: ref(STATE_COUNT),
+    presentation: {
+      textRole: 'title',
+      emphasis: 'strong',
+      format: { kind: 'number', grouping: true },
+    },
   });
 
   graph.addNode<ButtonNode>({
@@ -91,6 +112,7 @@ export function createCounterGraph(): ApplicationGraph {
     kind: 'button',
     label: 'Add one',
     actionId: ACTION_INCREMENT,
+    presentation: { uxRole: 'primary-action', icon: 'add' },
   });
 
   graph.addNode<ButtonNode>({
@@ -98,20 +120,26 @@ export function createCounterGraph(): ApplicationGraph {
     kind: 'button',
     label: 'Take one',
     actionId: ACTION_DECREMENT,
+    presentation: { uxRole: 'secondary-action' },
   });
 
   graph.addNode<ContainerNode>({
     id: UI_CONTROLS,
     kind: 'container',
-    layout: 'horizontal',
+    name: 'CounterControls',
     children: [UI_INCREMENT, UI_DECREMENT],
+    // A UX role carries a whole layout, and a device class says what changes when narrow.
+    presentation: {
+      uxRole: 'toolbar',
+      responsive: { compact: { layout: 'vertical' } },
+    },
   });
 
   graph.addNode<ViewNode>({
     id: UI_VIEW,
     kind: 'view',
     name: 'CounterView',
-    children: [UI_DISPLAY, UI_CONTROLS],
+    children: [UI_TITLE, UI_COUNT_LABEL, UI_DISPLAY, UI_CONTROLS],
   });
 
   graph.addNode<RouteDef>({ id: ROUTE_ROOT, kind: 'route', path: '/', viewId: UI_VIEW });

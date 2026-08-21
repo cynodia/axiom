@@ -9,6 +9,7 @@ import type {
 } from './nodes.js';
 import type { NodeId } from './ids.js';
 import type { UINode, UINodeKind } from './ui.js';
+import type { ThemeInput } from './theme.js';
 
 export type SemanticNodeKind =
   | 'entity'
@@ -42,5 +43,7 @@ export interface ApplicationGraphData {
   version: string;
   nodes: Record<NodeId, AnyNode>;
   edges: Record<string, GraphEdge>;
+  /** Visual identity. Presentation only: a theme can never change behaviour. */
+  theme?: ThemeInput;
   metadata?: Record<string, unknown>;
 }

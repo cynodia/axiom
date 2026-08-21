@@ -2,13 +2,7 @@ import type { Expression } from './expressions.js';
 import type { CollectionItemLocation, Location } from './location.js';
 import type { EdgeId, FieldId, NodeId } from './ids.js';
 import type { TypeRef } from './type-ref.js';
-
-/** Minimal, optional presentation hints. Styling is not a 0.2 research objective. */
-export interface PresentationHints {
-  role?: 'primary' | 'secondary' | 'danger';
-  density?: 'compact' | 'normal';
-  emphasis?: 'normal' | 'strong';
-}
+import type { ConfirmationPresentation } from './presentation.js';
 
 export interface NodeBase {
   id: NodeId;
@@ -56,6 +50,16 @@ export interface StateDef extends NodeBase {
    * definition, so instance validation skips them until an action commits the value.
    */
   draft?: boolean;
+  /**
+   * Marks ephemeral presentation state — which panel is expanded, which tab is selected,
+   * whether a dialog is open. It is not canonical domain state: instance validation skips
+   * it, and it may not be persisted. Marking it says so in the graph instead of leaving an
+   * agent to guess which states are domain facts.
+   *
+   * It changes what a state *is*, never what is permitted: a write reaching domain state
+   * is governed exactly as before.
+   */
+  ephemeral?: boolean;
   persistence?: StatePersistence;
 }
 
@@ -90,6 +94,8 @@ export interface ActionDef extends NodeBase {
   destructive?: boolean;
   requiresConfirmation?: boolean;
   confirmationMessage?: string;
+  /** What the confirmation says, when a plain message is not enough. */
+  confirmation?: ConfirmationPresentation;
 }
 
 /**

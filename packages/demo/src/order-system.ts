@@ -125,6 +125,28 @@ const UI_LINE_QUANTITY_INPUT = nodeId('ui_line_quantity_input');
 const UI_CONFIRM_BUTTON = nodeId('ui_confirm_button');
 const UI_ORDER_MISSING = nodeId('ui_order_missing');
 
+// 0.5 presentation structure. None of these nodes carry business semantics: they say how
+// the same application is organized and what each part means as UX.
+const UI_APP_HEADER = nodeId('ui_app_header');
+const UI_APP_TITLE = nodeId('ui_app_title');
+const UI_APP_NAV = nodeId('ui_app_nav');
+const UI_NAV_ORDERS = nodeId('ui_nav_orders');
+const UI_ORDERS_CONTENT = nodeId('ui_orders_content');
+const UI_ORDERS_EMPTY_BOX = nodeId('ui_orders_empty_box');
+const UI_ORDERS_EMPTY_ACTION = nodeId('ui_orders_empty_action');
+const UI_ORDER_HEADER = nodeId('ui_order_header');
+const UI_ORDER_HEADER_NAV = nodeId('ui_order_header_nav');
+const UI_ORDER_TITLE = nodeId('ui_order_title');
+const UI_ORDER_FORMS = nodeId('ui_order_forms');
+const UI_LINES_SECTION = nodeId('ui_lines_section');
+const UI_LINES_HEADING = nodeId('ui_lines_heading');
+const UI_ORDER_TOTAL_ROW = nodeId('ui_order_total_row');
+const UI_ORDER_TOTAL_LABEL = nodeId('ui_order_total_label');
+const UI_ORDER_ACTIONS = nodeId('ui_order_actions');
+const UI_LINES_EMPTY_BOX = nodeId('ui_lines_empty_box');
+const UI_LINES_EMPTY_ACTION = nodeId('ui_lines_empty_action');
+const UI_ORDER_MISSING_BOX = nodeId('ui_order_missing_box');
+
 const CONSTRAINT_QUANTITY = nodeId('constraint_line_quantity');
 const CONSTRAINT_STOCK = nodeId('constraint_product_stock');
 const TRANSITION_ORDER_SEALED = nodeId('transition_order_sealed');
@@ -393,6 +415,15 @@ export function createOrderSystemGraph(): ApplicationGraph {
     id: ACTION_REMOVE_LINE,
     kind: 'action',
     name: 'removeLine',
+    destructive: true,
+    requiresConfirmation: true,
+    // §77: what the confirmation says, described rather than drawn.
+    confirmation: {
+      title: 'Remove this line?',
+      description: 'The line is removed from the order. The order total changes with it.',
+      confirmLabel: 'Remove line',
+      severity: 'destructive',
+    },
     preconditions: [isDraft],
     failureModes: [{ code: 'not-draft', message: 'Only a draft order can be changed.' }],
     parameters: [{ id: PARAM_REMOVE_LINE, name: 'lineId', valueType: primitiveType('string'), required: true }],
@@ -424,6 +455,13 @@ export function createOrderSystemGraph(): ApplicationGraph {
     id: ACTION_CONFIRM_ORDER,
     kind: 'action',
     name: 'confirmOrder',
+    requiresConfirmation: true,
+    confirmation: {
+      title: 'Confirm this order?',
+      description: 'Confirming reduces stock for every line and seals the order against further change.',
+      confirmLabel: 'Confirm order',
+      severity: 'warning',
+    },
     preconditions: [
       isDraft,
       binary('gt', call('count', currentLines), literal(0)),
@@ -530,25 +568,71 @@ export function createOrderSystemGraph(): ApplicationGraph {
     expression: binary('gte', field(ref(ENTITY_PRODUCT), F_PRODUCT_STOCK), literal(0)),
   });
 
+  // ------------------------------------------------------- shared application shell
+
+  /**
+   * The 0.5 presentation layer. Every declaration below is semantic intent — a role, a
+   * token, a device class — and there is no application CSS, no DOM manipulation and no
+   * callback anywhere in it. The business semantics above are untouched.
+   */
+  graph.addNode<TextNode>({
+    id: UI_APP_TITLE,
+    kind: 'text',
+    name: 'ApplicationTitle',
+    value: 'Order System',
+    // The one page-level heading; view titles sit below it and sections below those.
+    presentation: { textRole: 'display' },
+  });
+  graph.addNode<ButtonNode>({
+    id: UI_NAV_ORDERS,
+    kind: 'button',
+    label: 'Orders',
+    actionId: ACTION_OPEN_ORDERS,
+    presentation: { uxRole: 'navigation-action', icon: 'menu' },
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_APP_NAV,
+    kind: 'container',
+    name: 'ApplicationNavigation',
+    children: [UI_NAV_ORDERS],
+    presentation: { uxRole: 'navigation-group', sizing: { width: 'content' } },
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_APP_HEADER,
+    kind: 'container',
+    name: 'ApplicationHeader',
+    children: [UI_APP_TITLE, UI_APP_NAV],
+    // A toolbar-like header: horizontal where there is room, stacked where there is not.
+    presentation: {
+      uxRole: 'header-region',
+      responsive: { compact: { layout: { kind: 'vertical', align: 'start' }, gap: 'small' } },
+    },
+  });
+
   // ---------------------------------------------------------------- order list
 
   graph.addNode<TextNode>({
     id: UI_ORDERS_TITLE,
     kind: 'text',
     value: 'Orders',
-    presentation: { emphasis: 'strong' },
+    presentation: { textRole: 'title' },
   });
   graph.addNode<FieldDisplayNode>({
     id: UI_ROW_ID,
     kind: 'field-display',
     source: ref(UI_ORDERS_REPEAT),
     fieldId: F_ORDER_ID,
+    label: 'Order',
+    presentation: { sizing: { width: 'fill' } },
   });
   graph.addNode<FieldDisplayNode>({
     id: UI_ROW_STATUS,
     kind: 'field-display',
     source: ref(UI_ORDERS_REPEAT),
     fieldId: F_ORDER_STATUS,
+    label: 'Status',
+    // A status reads better as a badge than as a bare word.
+    presentation: { treatment: 'pill', role: 'informational' },
   });
   graph.addNode<ButtonNode>({
     id: UI_ROW_OPEN,
@@ -556,27 +640,61 @@ export function createOrderSystemGraph(): ApplicationGraph {
     label: 'Open',
     actionId: ACTION_OPEN_ORDER,
     arguments: { [PARAM_OPEN_ORDER]: field(ref(UI_ORDERS_REPEAT), F_ORDER_ID) },
+    presentation: { uxRole: 'navigation-action', icon: 'navigation-forward' },
   });
   graph.addNode<ContainerNode>({
     id: UI_ORDER_ROW,
     kind: 'container',
-    layout: 'horizontal',
+    name: 'OrderRow',
     children: [UI_ROW_ID, UI_ROW_STATUS, UI_ROW_OPEN],
+    presentation: {
+      layout: { kind: 'horizontal', gap: 'medium', align: 'center', justify: 'between' },
+      surface: 'base',
+      padding: 'medium',
+      responsive: { compact: { layout: { kind: 'vertical', align: 'start' }, gap: 'xsmall' } },
+    },
   });
-  graph.addNode<TextNode>({ id: UI_ORDERS_EMPTY, kind: 'text', value: 'There are no orders yet.' });
+
+  graph.addNode<TextNode>({
+    id: UI_ORDERS_EMPTY,
+    kind: 'text',
+    value: 'There are no orders yet.',
+  });
+  graph.addNode<ButtonNode>({
+    id: UI_ORDERS_EMPTY_ACTION,
+    kind: 'button',
+    label: 'Reload orders',
+    actionId: ACTION_OPEN_ORDERS,
+    presentation: { icon: 'refresh' },
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_ORDERS_EMPTY_BOX,
+    kind: 'container',
+    name: 'NoOrders',
+    children: [UI_ORDERS_EMPTY, UI_ORDERS_EMPTY_ACTION],
+    presentation: { uxRole: 'empty-state' },
+  });
   graph.addNode<RepeatNode>({
     id: UI_ORDERS_REPEAT,
     kind: 'repeat',
     itemAlias: 'order',
     templateId: UI_ORDER_ROW,
-    emptyTemplateId: UI_ORDERS_EMPTY,
+    emptyTemplateId: UI_ORDERS_EMPTY_BOX,
     source: ref(STATE_ORDERS),
+    presentation: { gap: 'small' },
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_ORDERS_CONTENT,
+    kind: 'container',
+    name: 'OrderListContent',
+    children: [UI_ORDERS_TITLE, UI_ORDERS_REPEAT],
+    presentation: { uxRole: 'content-region' },
   });
   graph.addNode<ViewNode>({
     id: UI_ORDERS_VIEW,
     kind: 'view',
     name: 'OrderList',
-    children: [UI_ORDERS_TITLE, UI_ORDERS_REPEAT],
+    children: [UI_APP_HEADER, UI_ORDERS_CONTENT],
   });
 
   // -------------------------------------------------------------- order detail
@@ -586,7 +704,20 @@ export function createOrderSystemGraph(): ApplicationGraph {
     kind: 'button',
     label: 'Back to orders',
     actionId: ACTION_OPEN_ORDERS,
-    presentation: { role: 'secondary' },
+    presentation: { uxRole: 'navigation-action', icon: 'navigation-back' },
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_ORDER_HEADER_NAV,
+    kind: 'container',
+    name: 'OrderNavigation',
+    children: [UI_ORDER_BACK],
+    presentation: { uxRole: 'navigation-group', sizing: { width: 'content' } },
+  });
+  graph.addNode<TextNode>({
+    id: UI_ORDER_TITLE,
+    kind: 'text',
+    value: 'Order',
+    presentation: { textRole: 'title' },
   });
   graph.addNode<FieldDisplayNode>({
     id: UI_ORDER_STATUS,
@@ -594,12 +725,46 @@ export function createOrderSystemGraph(): ApplicationGraph {
     source: currentOrder,
     fieldId: F_ORDER_STATUS,
     label: 'Status',
+    presentation: { treatment: 'pill', role: 'informational', sizing: { width: 'content' } },
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_ORDER_HEADER,
+    kind: 'container',
+    name: 'OrderHeader',
+    children: [UI_ORDER_HEADER_NAV, UI_ORDER_TITLE, UI_ORDER_STATUS],
+    presentation: {
+      uxRole: 'header-region',
+      responsive: { compact: { layout: { kind: 'vertical', align: 'start' }, gap: 'small' } },
+    },
+  });
+
+  graph.addNode<TextNode>({
+    id: UI_ORDER_TOTAL_LABEL,
+    kind: 'text',
+    value: 'Order total',
+    presentation: { textRole: 'label' },
   });
   graph.addNode<TextNode>({
     id: UI_ORDER_TOTAL,
     kind: 'text',
-    value: call('concat', literal('Order total: '), call('to-string', ref(STATE_ORDER_TOTAL))),
-    presentation: { emphasis: 'strong' },
+    // The value stays a number. Only what is shown is formatted.
+    value: ref(STATE_ORDER_TOTAL),
+    presentation: {
+      textRole: 'heading',
+      emphasis: 'strong',
+      format: { kind: 'currency', currency: 'NOK' },
+    },
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_ORDER_TOTAL_ROW,
+    kind: 'container',
+    name: 'OrderTotal',
+    children: [UI_ORDER_TOTAL_LABEL, UI_ORDER_TOTAL],
+    presentation: {
+      layout: { kind: 'horizontal', gap: 'small', align: 'center', justify: 'between' },
+      surface: 'inset',
+      padding: { horizontal: 'medium', vertical: 'small' },
+    },
   });
 
   graph.addNode<InputNode>({
@@ -613,10 +778,12 @@ export function createOrderSystemGraph(): ApplicationGraph {
       valueFieldId: F_CUSTOMER_ID,
       labelFieldId: F_CUSTOMER_NAME,
     },
+    presentation: { description: 'Who the order is for. Only a draft order can change it.' },
   });
   graph.addNode<FormNode>({
     id: UI_CUSTOMER_FORM,
     kind: 'form',
+    name: 'CustomerForm',
     target: ref(STATE_DRAFT_CUSTOMER),
     children: [UI_CUSTOMER_INPUT],
     submitActionId: ACTION_SET_CUSTOMER,
@@ -628,6 +795,8 @@ export function createOrderSystemGraph(): ApplicationGraph {
     kind: 'field-display',
     source: ref(UI_LINES_REPEAT),
     fieldId: F_LINE_PRODUCT,
+    label: 'Product',
+    presentation: { sizing: { width: 'fill' } },
   });
   graph.addNode<InputNode>({
     id: UI_LINE_QUANTITY,
@@ -643,35 +812,66 @@ export function createOrderSystemGraph(): ApplicationGraph {
         F_LINE_QUANTITY,
       ),
     },
+    presentation: { control: 'stepper', sizing: { width: 'narrow' } },
   });
   graph.addNode<FieldDisplayNode>({
     id: UI_LINE_PRICE,
     kind: 'field-display',
     source: ref(UI_LINES_REPEAT),
     fieldId: F_LINE_UNIT_PRICE,
+    label: 'Unit price',
+    presentation: { format: { kind: 'currency', currency: 'NOK' } },
   });
   graph.addNode<ButtonNode>({
     id: UI_LINE_REMOVE,
     kind: 'button',
     label: 'Remove',
-    destructive: true,
+    // No presentation role is declared: the action is destructive, so the control is too.
     actionId: ACTION_REMOVE_LINE,
     arguments: { [PARAM_REMOVE_LINE]: field(ref(UI_LINES_REPEAT), F_LINE_ID) },
+    presentation: { icon: 'delete' },
   });
   graph.addNode<ContainerNode>({
     id: UI_LINE_ROW,
     kind: 'container',
-    layout: 'horizontal',
+    name: 'OrderLineRow',
     children: [UI_LINE_PRODUCT, UI_LINE_QUANTITY, UI_LINE_PRICE, UI_LINE_REMOVE],
+    presentation: {
+      layout: { kind: 'horizontal', gap: 'medium', align: 'center' },
+      surface: 'base',
+      padding: 'medium',
+      // Editing an order stays usable on a phone without a breakpoint being named.
+      responsive: { compact: { layout: { kind: 'vertical', align: 'stretch' }, gap: 'small' } },
+    },
   });
-  graph.addNode<TextNode>({ id: UI_LINES_EMPTY, kind: 'text', value: 'This order has no lines.' });
+
+  graph.addNode<TextNode>({
+    id: UI_LINES_EMPTY,
+    kind: 'text',
+    value: 'This order has no lines.',
+  });
+  graph.addNode<ButtonNode>({
+    id: UI_LINES_EMPTY_ACTION,
+    kind: 'button',
+    label: 'Add the first line',
+    actionId: ACTION_ADD_LINE,
+    presentation: { icon: 'add' },
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_LINES_EMPTY_BOX,
+    kind: 'container',
+    name: 'NoOrderLines',
+    children: [UI_LINES_EMPTY, UI_LINES_EMPTY_ACTION],
+    presentation: { uxRole: 'empty-state' },
+  });
   graph.addNode<RepeatNode>({
     id: UI_LINES_REPEAT,
     kind: 'repeat',
     itemAlias: 'line',
     templateId: UI_LINE_ROW,
-    emptyTemplateId: UI_LINES_EMPTY,
+    emptyTemplateId: UI_LINES_EMPTY_BOX,
     source: currentLines,
+    presentation: { gap: 'small' },
   });
 
   graph.addNode<InputNode>({
@@ -691,14 +891,40 @@ export function createOrderSystemGraph(): ApplicationGraph {
     kind: 'input',
     label: 'Quantity',
     binding: { location: fieldLocation(stateLocation(STATE_DRAFT_LINE), F_LINE_QUANTITY) },
+    presentation: { control: 'stepper' },
   });
   graph.addNode<FormNode>({
     id: UI_LINE_FORM,
     kind: 'form',
+    name: 'AddLineForm',
     target: ref(STATE_DRAFT_LINE),
     children: [UI_LINE_PRODUCT_INPUT, UI_LINE_QUANTITY_INPUT],
     submitActionId: ACTION_ADD_LINE,
     submitLabel: 'Add line',
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_ORDER_FORMS,
+    kind: 'container',
+    name: 'OrderEditors',
+    children: [UI_CUSTOMER_FORM, UI_LINE_FORM],
+    // As many columns of at least this width as fit, and one when nothing else does.
+    presentation: {
+      layout: { kind: 'grid', gap: 'medium', columns: { mode: 'adaptive', minimum: 'medium' } },
+    },
+  });
+
+  graph.addNode<TextNode>({
+    id: UI_LINES_HEADING,
+    kind: 'text',
+    value: 'Order lines',
+    presentation: { textRole: 'heading' },
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_LINES_SECTION,
+    kind: 'container',
+    name: 'OrderLines',
+    children: [UI_LINES_HEADING, UI_LINES_REPEAT, UI_ORDER_TOTAL_ROW],
+    presentation: { uxRole: 'form-section', surface: 'raised', padding: 'large', gap: 'medium' },
   });
 
   graph.addNode<ButtonNode>({
@@ -707,35 +933,44 @@ export function createOrderSystemGraph(): ApplicationGraph {
     label: 'Confirm order',
     actionId: ACTION_CONFIRM_ORDER,
     visibleWhen: isDraft,
+    presentation: { uxRole: 'primary-action', icon: 'save' },
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_ORDER_ACTIONS,
+    kind: 'container',
+    name: 'OrderActions',
+    children: [UI_CONFIRM_BUTTON],
+    presentation: { uxRole: 'action-group' },
   });
 
   graph.addNode<ContainerNode>({
     id: UI_ORDER_BODY,
     kind: 'container',
-    layout: 'vertical',
-    children: [
-      UI_ORDER_BACK,
-      UI_ORDER_STATUS,
-      UI_CUSTOMER_FORM,
-      UI_LINES_REPEAT,
-      UI_LINE_FORM,
-      UI_ORDER_TOTAL,
-      UI_CONFIRM_BUTTON,
-    ],
+    name: 'OrderDetailContent',
+    children: [UI_ORDER_HEADER, UI_ORDER_FORMS, UI_LINES_SECTION, UI_ORDER_ACTIONS],
+    presentation: { uxRole: 'content-region' },
   });
+
   graph.addNode<TextNode>({ id: UI_ORDER_MISSING, kind: 'text', value: 'That order no longer exists.' });
+  graph.addNode<ContainerNode>({
+    id: UI_ORDER_MISSING_BOX,
+    kind: 'container',
+    name: 'OrderMissing',
+    children: [UI_ORDER_MISSING],
+    presentation: { uxRole: 'error-state' },
+  });
   graph.addNode<ConditionalNode>({
     id: UI_ORDER_CONDITIONAL,
     kind: 'conditional',
     condition: call('required', currentOrder),
     whenTrue: [UI_ORDER_BODY],
-    whenFalse: [UI_ORDER_MISSING],
+    whenFalse: [UI_ORDER_MISSING_BOX],
   });
   graph.addNode<ViewNode>({
     id: UI_ORDER_VIEW,
     kind: 'view',
     name: 'OrderDetail',
-    children: [UI_ORDER_CONDITIONAL],
+    children: [UI_APP_HEADER, UI_ORDER_CONDITIONAL],
   });
 
   graph.addNode<RouteDef>({ id: ROUTE_ORDERS, kind: 'route', path: '/', viewId: UI_ORDERS_VIEW });
@@ -788,4 +1023,29 @@ export const orderSystemIds = {
   UI_CONFIRM_BUTTON,
   UI_LINE_REMOVE,
   UI_ORDER_TOTAL,
+  UI_APP_HEADER,
+  UI_ORDER_HEADER,
+  UI_ORDER_FORMS,
+  UI_LINES_SECTION,
+  UI_ORDER_ACTIONS,
+  UI_ORDERS_EMPTY_BOX,
+  UI_LINES_EMPTY_BOX,
+  UI_ORDER_MISSING_BOX,
+  UI_LINE_PRICE,
+  UI_ROW_STATUS,
+  UI_CUSTOMER_FORM,
+  UI_CUSTOMER_INPUT,
+  UI_ORDERS_VIEW,
+  UI_ORDER_VIEW,
+  UI_ORDERS_REPEAT,
+  UI_LINES_REPEAT,
+  UI_LINE_ROW,
+  UI_ORDER_ROW,
+  UI_APP_NAV,
+  UI_APP_TITLE,
+  UI_ORDER_TITLE,
+  UI_LINES_HEADING,
+  UI_ORDERS_TITLE,
+  UI_ORDER_STATUS,
+  ACTION_OPEN_ORDERS,
 } as const;

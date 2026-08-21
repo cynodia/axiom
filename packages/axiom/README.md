@@ -216,6 +216,203 @@ required(false)→ true
 Use `is-empty` / `non-empty` for collections and strings, and `coalesce` to fall back on
 absence — which means falling back *to* an empty collection now works.
 
+## Presentation and UX intent
+
+Four things are kept apart on purpose:
+
+| | Describes | Lives in |
+| --- | --- | --- |
+| **UI semantics** | What exists — views, containers, text, repeats, forms, inputs, buttons. | The graph |
+| **Presentation semantics** | What it *means* and how it is organized — roles, layout, spacing, sizing, device classes. | The graph |
+| **Theme** | What those meanings look like — colours, type scale, spacing values, radii, breakpoints. | The graph's `theme` |
+| **Renderer** | How any of it reaches a screen — CSS, classes, media queries, DOM. | The framework |
+
+An application says `role: 'destructive'`, not `color: '#c62a20'`. There is no inline style
+model, no CSS property model, and no way to store a function anywhere in the graph.
+
+```ts
+graph.addNode<ContainerNode>({
+  id: ACTIONS,
+  kind: 'container',
+  children: [CANCEL, SAVE],
+  presentation: {
+    uxRole: 'action-group',
+    responsive: { compact: { layout: 'vertical' } },
+  },
+});
+```
+
+`uxRole: 'action-group'` is high-information: it already implies a horizontal, wrapping,
+centre-aligned, end-justified group. You annotate where intent differs from the default,
+not on every node.
+
+### Resolution order
+
+Every resolved property is decided by exactly one layer, lowest first:
+
+```text
+renderer defaults  →  theme  →  inherited  →  semantic inference  →  node  →  responsive
+```
+
+`resolvePresentation` records which layer won, so precedence is inspectable rather than
+folklore:
+
+```ts
+const agent = new AgentAPI(graph);
+agent.resolvePresentation(DELETE_BUTTON);
+// { role: 'destructive', uxRole: 'destructive-action', density: 'comfortable', … ,
+//   origins: { role: 'inferred', density: 'theme', 'layout.kind': 'inferred' } }
+```
+
+**Inheritance is deliberately narrow.** Only `density` cascades from a parent
+(`INHERITED_PROPERTIES`). Nothing else does — a container with `emphasis: 'strong'` does
+not make its whole subtree bold.
+
+**Semantic inference** means presentation is derived from what the application already
+says, rather than declared twice:
+
+```ts
+graph.addNode<ActionDef>({ id: DELETE, kind: 'action', destructive: true, operations: [...] });
+graph.addNode<ButtonNode>({ id: BUTTON, kind: 'button', label: 'Delete', actionId: DELETE });
+// The button is presented as destructive. It declares no role at all.
+```
+
+A button that submits its enclosing form becomes the primary action the same way. An
+explicit `presentation.role` always wins; a contradiction — a destructive action presented
+as a success — is reported as `DESTRUCTIVE_ACTION_PRESENTED_AS_SUCCESS`.
+
+### Responsive behaviour without breakpoints
+
+Presentation names device classes — `compact`, `regular`, `wide` — never pixels. The
+renderer owns the breakpoints (`theme.responsive`), and provides sensible behaviour with no
+configuration at all: rows wrap, fixed grids give up columns, bounded widths stop being
+bounded, and controls go full width on a narrow screen.
+
+```ts
+presentation: {
+  layout: { kind: 'grid', gap: 'medium', columns: { mode: 'adaptive', minimum: 'medium' } },
+  responsive: { compact: { padding: 'small' } },
+}
+```
+
+### Vocabulary
+
+Everything below is a closed set. A token outside it is a validation **error**, because a
+renderer cannot act on a value it does not know.
+
+| | Values |
+| --- | --- |
+| `role` | `primary` `secondary` `tertiary` `destructive` `success` `warning` `informational` `muted` |
+| `uxRole` | `primary-action` `secondary-action` `destructive-action` `navigation-action` `form-section` `action-group` `navigation-group` `empty-state` `error-state` `warning-state` `success-state` `informational-state` `toolbar` `sidebar` `content-region` `header-region` `footer-region` |
+| `emphasis` | `subtle` `normal` `strong` |
+| `density` | `compact` `comfortable` `spacious` |
+| `textRole` | `body` `caption` `label` `heading` `title` `display` |
+| `surface` | `transparent` `base` `subtle` `raised` `inset` |
+| `layout.kind` | `vertical` `horizontal` `grid` `stack` |
+| `gap`, `padding` | `none` `xsmall` `small` `medium` `large` `xlarge` |
+| `sizing.width` | `fit` `fill` `content` `narrow` `medium` `wide` |
+| `align`, `justify` | `start` `center` `end` `stretch` (+ `between` for `justify`) |
+| `treatment` | `plain` `badge` `pill` |
+| `control` | `default` `switch` `checkbox` `radio-group` `select` `multiline` `stepper` |
+| `icon` | `add` `delete` `edit` `save` `close` `warning` `success` `error` `information` `navigation-back` `navigation-forward` `menu` `search` `refresh` `settings` `more` |
+
+### Value formatting
+
+Formatting is presentation. The stored value never changes, and there is no way to supply
+a function:
+
+```ts
+presentation: { format: { kind: 'currency', currency: 'NOK' } }   // 1250 → "NOK 1,250.00"
+presentation: { format: { kind: 'percentage', decimals: 1 } }     // 0.421 → "42.1%"
+presentation: { format: { kind: 'boolean', trueLabel: 'Read', falseLabel: 'Unread' } }
+```
+
+A display of a boolean, date or datetime field is formatted by inference, without being
+asked. A value a format cannot describe falls back to its plain text rather than inventing
+a plausible result.
+
+### Theme
+
+A theme is the one place concrete values belong, and it is plain serializable data. Declare
+only what differs:
+
+```ts
+graph.setTheme({ appearance: 'dark', defaults: { density: 'compact' }, spacing: { medium: 8 } });
+```
+
+Light, dark and system appearances need no second graph. `DEFAULT_THEME` is a neutral,
+accessible, responsive theme intended for business applications, and
+`createThemeStylesheet(theme)` is the web renderer's translation of it into CSS custom
+properties and rules.
+
+**A theme cannot change behaviour.** Actions, constraints, transition constraints,
+locations, state and routing are untouched by it — which is why "use a denser enterprise
+identity" is one `setTheme` call rather than an edit to every node.
+
+### Accessibility
+
+Semantic roles produce accessible structure, so the two cannot drift apart:
+
+- `header-region`, `navigation-group`, `content-region`, `footer-region`, `sidebar` and
+  `form-section` become `<header>`, `<nav>`, `<main>`, `<footer>`, `<aside>`, `<section>`.
+- `textRole` `display` / `title` / `heading` become `<h1>` / `<h2>` / `<h3>`.
+- `error-state` announces itself as an alert; the other status roles as a status.
+- An input's label names its control by id, a required field is marked from the model's own
+  `required`, help text is related with `aria-describedby`, and a refused write is
+  announced next to the control it was refused on with `aria-invalid`.
+
+Validation reports what it can determine reliably — `FORM_INPUT_MISSING_LABEL`,
+`INTERACTIVE_ELEMENT_MISSING_LABEL`, `INVALID_HEADING_STRUCTURE`,
+`DESTRUCTIVE_ACTION_UNMARKED` — and nothing speculative.
+
+### UX findings
+
+Presentation validation reports what a stylesheet could never tell you. All of it is
+warnings; none of it stops an application from compiling:
+
+```text
+MULTIPLE_PRIMARY_ACTIONS          FORM_WITHOUT_PRIMARY_ACTION
+DESTRUCTIVE_ACTION_PRESENTED_AS_SUCCESS   DESTRUCTIVE_ACTION_UNMARKED
+EMPTY_STATE_WITHOUT_RECOVERY_ACTION       EXCESSIVE_HORIZONTAL_ACTIONS
+RIGID_HORIZONTAL_LAYOUT           CONFLICTING_SIZING
+PRESENTATION_SEMANTIC_CONFLICT    OPAQUE_PRESENTATION
+```
+
+And it is queryable, which is the point:
+
+```ts
+agent.getPrimaryActions(VIEW);          // which action is the emphasised one here?
+agent.getDestructiveActions(VIEW);      // which controls are dangerous?
+agent.getFormsWithoutPrimaryAction();   // where is the hierarchy missing?
+agent.getFormStructure(FORM);           // sections, required controls, action groups
+agent.getResponsiveBehavior(ROW);       // what happens on a phone?
+agent.findNodesByUxRole('empty-state'); // where are the empty states?
+agent.getPresentationWarnings(VIEW);    // what is wrong with this screen?
+```
+
+### Presentation state
+
+`StateDef.ephemeral: true` marks state that is a UI fact rather than a domain fact — which
+panel is expanded, which tab is selected. Instance validation skips it and it may not be
+persisted, and an agent can tell it from domain state with `getEphemeralStates()`.
+
+Presentation never authorizes anything. Hiding a control is not the same as prohibiting an
+operation: a rule belongs in a precondition or a transition constraint, and a governed
+write is checked whether or not any control for it is visible.
+
+### The escape hatch
+
+`rendererOverrides` attaches renderer-specific presentation, and is explicitly the thing
+semantic analysis does not understand:
+
+```ts
+presentation: { rendererOverrides: { web: { className: 'legacy-panel' } } }
+```
+
+It is keyed by renderer, it makes the node `opaque` in resolved presentation, it is
+reported as `OPAQUE_PRESENTATION`, and `AgentAPI.getOpaquePresentationNodes()` lists every
+node using it. Ordinary applications need none of it, and the acceptance fixtures use none.
+
 ## Diagnostics
 
 Failures are structured. Match on `code` rather than reading the message:

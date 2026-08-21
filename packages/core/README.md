@@ -9,6 +9,11 @@ The Application Graph and its semantic model: nodes, fields, structured types,
 expressions, **locations** (addressable writable positions), edge derivation,
 validation and type inference.
 
+It also owns the presentation and UX layer — semantic roles, layout, spacing and sizing
+tokens, device classes, value formats and the `Theme` — together with presentation
+resolution and validation. Presentation lives here because it is part of the canonical
+graph: it is intent, not styling, and it names no colour, length or CSS property.
+
 ## Installation
 
 ```bash

@@ -32,6 +32,22 @@ export interface StorageAdapter {
   write(key: string, value: string): void;
 }
 
+/**
+ * A confirmation, described rather than drawn. A host may present it however its platform
+ * presents such things; nothing here is browser-specific, and the graph never constructs
+ * dialog markup.
+ */
+export interface ConfirmationRequest {
+  actionId: string;
+  title: string;
+  description?: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  severity: 'informational' | 'warning' | 'destructive';
+  /** A single line for hosts that can only ask a plain question. */
+  message: string;
+}
+
 /** Everything the runtime needs from its environment, so nothing is read from globals. */
 export interface HostEnvironment {
   document: DomDocument;
@@ -39,6 +55,8 @@ export interface HostEnvironment {
   pushPath(path: string): void;
   onPathChange(listener: () => void): void;
   confirm(message: string): boolean;
+  /** Preferred over `confirm` when the host can present a structured confirmation. */
+  confirmRequest?(request: ConfirmationRequest): boolean;
   now(): string;
   uuid(): string;
   storage?: StorageAdapter;

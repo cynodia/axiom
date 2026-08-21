@@ -17,10 +17,20 @@ aggregation, aggregate invariants and atomic multi-record changes as inspectable
 rather than as callbacks. An action either commits entirely or rolls back entirely,
 iteration included.
 
+**Presentation is semantics as well.** A graph says `role: 'destructive'`, `uxRole:
+'action-group'`, `gap: 'medium'`, `responsive: { compact: { layout: 'vertical' } }` — never
+a colour, a length or a media query. A theme translates that intent into a visual identity,
+a generic renderer turns it into a polished responsive page, and an agent can ask which
+action a screen presents as primary or which layouts will not survive a phone. Changing the
+theme cannot change behaviour, and a graph with no presentation metadata at all still
+renders as a usable application.
+
 * `doc/spec.md` — the original 0.1 vision and research goals.
 * `doc/spec2.md` — the 0.2 architecture: a domain-independent compiler and runtime.
 * `doc/spec3.md` — the 0.3 architecture: semantic mutation and addressing.
-* `doc/spec4.md` — the 0.4 architecture: collection semantics and transactional iteration,
+* `doc/spec4.md` — the 0.4 architecture: collection semantics and transactional iteration.
+* `doc/spec4.1.md` — the 0.4.1 hardening release: mutation-path-independent rules.
+* `doc/spec5.md` — the 0.5 architecture: the presentation and UX semantic layer,
   implemented here.
 * `CLAUDE.md` — orientation for working in the codebase.
 
@@ -49,9 +59,11 @@ node packages/cli/dist/index.js serve    packages/demo/dist/issue-tracker.js --e
 
 Three unrelated applications — an issue tracker, an inventory system and an order system —
 are built from graphs alone in `packages/demo`, and run on the same compiler and runtime
-without a line of application-specific framework code. The order system is the 0.4
-acceptance fixture: it aggregates requested stock across order lines, refuses a
-confirmation it cannot cover, and reduces stock for every line in one transaction.
+without a line of application-specific framework code. The order system is the acceptance
+fixture: it aggregates requested stock across order lines, refuses a confirmation it cannot
+cover, and reduces stock for every line in one transaction — and in 0.5 it does so through
+a header, navigation, cards, sections, formatted prices, empty states and responsive order
+editing, with no application CSS and no DOM manipulation anywhere in it.
 
 ## Releasing
 

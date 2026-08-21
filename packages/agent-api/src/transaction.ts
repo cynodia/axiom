@@ -2,6 +2,7 @@ import {
   ApplicationGraph,
   createFieldId,
   createNodeId,
+  isUINode,
   randomHex,
   synchronizeEdges,
   validateGraph,
@@ -13,6 +14,8 @@ import type {
   ConditionalNode,
   ConstraintDef,
   ContainerNode,
+  Density,
+  DeviceClass,
   EdgeId,
   EdgeKind,
   EntityDef,
@@ -24,15 +27,20 @@ import type {
   InputNode,
   Location,
   NodeId,
+  Presentation,
   RepeatNode,
+  ResponsiveOverride,
   RouteDef,
   StateDef,
   TextNode,
+  ThemeInput,
   UINode,
+  UxRole,
   ValidationResult,
+  ValueFormat,
   ViewNode,
 } from '@cynodia/axiom-core';
-import { GraphQueries } from './queries.js';
+import { PresentationQueries } from './presentation-queries.js';
 import type { ChangeSet, GraphChange } from './changes.js';
 
 export class TransactionError extends Error {
@@ -51,7 +59,7 @@ type UIInput<T extends UINode> = Omit<T, 'id' | 'kind'> & { id?: NodeId };
  * A staged set of graph transformations. Every change is applied to a private copy, so
  * the graph an agent (or a runtime) can observe is unchanged until `commit()` succeeds.
  */
-export class Transaction extends GraphQueries {
+export class Transaction extends PresentationQueries {
   private readonly operations: GraphChange[] = [];
   private settled = false;
 
@@ -257,6 +265,77 @@ export class Transaction extends GraphQueries {
     return updated;
   }
 
+  // ------------------------------------------------------- presentation and theme
+
+  /**
+   * Replaces a node's presentation intent outright.
+   *
+   * "Make this form more compact" is one of these calls, not seventeen edited style
+   * declarations — and because the result is still semantic data, the next agent can read
+   * back what was intended rather than infer it from CSS.
+   */
+  setPresentation(nodeId: NodeId, presentation: Presentation | undefined): void {
+    const node = this.requireUiNode(nodeId);
+    if (presentation === undefined) {
+      delete node.presentation;
+    } else {
+      node.presentation = structuredClone(presentation);
+    }
+    this.updateNode(node);
+  }
+
+  /** Merges presentation intent, leaving whatever the node already said in place. */
+  mergePresentation(nodeId: NodeId, patch: Presentation): void {
+    const node = this.requireUiNode(nodeId);
+    node.presentation = { ...(node.presentation ?? {}), ...structuredClone(patch) };
+    this.updateNode(node);
+  }
+
+  setUxRole(nodeId: NodeId, uxRole: UxRole | undefined): void {
+    this.mergePresentation(nodeId, { uxRole } as Presentation);
+  }
+
+  setDensity(nodeId: NodeId, density: Density): void {
+    this.mergePresentation(nodeId, { density });
+  }
+
+  setValueFormat(nodeId: NodeId, format: ValueFormat | undefined): void {
+    this.mergePresentation(nodeId, { format } as Presentation);
+  }
+
+  /** States what a node does on one class of display. */
+  setResponsiveBehavior(nodeId: NodeId, device: DeviceClass, override: ResponsiveOverride | undefined): void {
+    const node = this.requireUiNode(nodeId);
+    const responsive = { ...(node.presentation?.responsive ?? {}) };
+    if (override === undefined) {
+      delete responsive[device];
+    } else {
+      responsive[device] = structuredClone(override);
+    }
+    node.presentation = { ...(node.presentation ?? {}), responsive };
+    this.updateNode(node);
+  }
+
+  /**
+   * Replaces the theme. An application-wide visual change belongs here rather than in the
+   * UI nodes: a theme cannot alter an action, a constraint, a location or a route.
+   */
+  setTheme(theme: ThemeInput | undefined): void {
+    const before = this.graph.declaredTheme;
+    this.graph.setTheme(theme);
+    this.operations.push({
+      kind: 'set-theme',
+      ...(before ? { before } : {}),
+      ...(theme ? { after: structuredClone(theme) } : {}),
+    });
+  }
+
+  /** Changes part of the theme, keeping the rest of what the application declared. */
+  mergeTheme(patch: ThemeInput): void {
+    const before = this.graph.declaredTheme ?? {};
+    this.setTheme(mergeThemeInput(before, patch));
+  }
+
   appendChild(parentId: NodeId, childId: NodeId, position?: number): void {
     const parent = this.graph.getNode(parentId);
     if (!parent || !('children' in parent) || !Array.isArray((parent as { children: NodeId[] }).children)) {
@@ -372,6 +451,14 @@ export class Transaction extends GraphQueries {
     return this.addNode<T>({ ...node, id } as T);
   }
 
+  private requireUiNode(id: NodeId): UINode {
+    const node = this.graph.getNode(id);
+    if (!node || !isUINode(node)) {
+      throw new TransactionError(`${id} is not a UI node`);
+    }
+    return node;
+  }
+
   private requireNode<T extends AnyNode>(id: NodeId, kind: T['kind']): T {
     const node = this.graph.getNode<T>(id);
     if (!node || node.kind !== kind) {
@@ -379,4 +466,23 @@ export class Transaction extends GraphQueries {
     }
     return node;
   }
+}
+
+/** Deep merge of two partial themes, so a patch never has to restate whole tables. */
+function mergeThemeInput(base: ThemeInput, patch: ThemeInput): ThemeInput {
+  const isPlain = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+  const merge = (left: unknown, right: unknown): unknown => {
+    if (!isPlain(right)) {
+      return right === undefined ? left : right;
+    }
+    const result: Record<string, unknown> = isPlain(left) ? { ...left } : {};
+    for (const [key, value] of Object.entries(right)) {
+      if (value !== undefined) {
+        result[key] = merge(result[key], value);
+      }
+    }
+    return result;
+  };
+  return merge(structuredClone(base), structuredClone(patch)) as ThemeInput;
 }

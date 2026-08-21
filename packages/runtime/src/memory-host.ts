@@ -1,4 +1,12 @@
-import type { DomDocument, DomElement, DomEvent, DomListener, HostEnvironment, StorageAdapter } from './dom.js';
+import type {
+  ConfirmationRequest,
+  DomDocument,
+  DomElement,
+  DomEvent,
+  DomListener,
+  HostEnvironment,
+  StorageAdapter,
+} from './dom.js';
 
 /**
  * An in-memory DOM and host. The runtime never touches browser globals directly, so the
@@ -75,6 +83,8 @@ export interface MemoryHost extends HostEnvironment {
   path: string;
   reports: string[];
   confirmations: string[];
+  /** The structured confirmations asked for, so a test can assert what was presented. */
+  confirmationRequests: ConfirmationRequest[];
   storage?: StorageAdapter;
 }
 
@@ -89,6 +99,7 @@ export function createMemoryHost(options: MemoryHostOptions = {}): MemoryHost {
     path: options.path ?? '/',
     reports: [],
     confirmations: [],
+    confirmationRequests: [],
     document: new MemoryDocument(),
     getPath: () => host.path,
     pushPath: (next: string) => {
@@ -100,6 +111,10 @@ export function createMemoryHost(options: MemoryHostOptions = {}): MemoryHost {
     confirm: (message: string) => {
       host.confirmations.push(message);
       return typeof confirmResult === 'function' ? confirmResult() : confirmResult;
+    },
+    confirmRequest: (request: ConfirmationRequest) => {
+      host.confirmationRequests.push(request);
+      return host.confirm(request.message);
     },
     now: () => {
       counter += 1;

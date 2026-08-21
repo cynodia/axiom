@@ -3,6 +3,8 @@ import { createEdgeId, createNodeId } from './ids.js';
 import type { EdgeId, FieldId, NodeId } from './ids.js';
 import type { EdgeKind, EntityDef, FieldDef, GraphEdge } from './nodes.js';
 import type { AnyNode, ApplicationGraphData, NodeInput, NodeKind, NodeOfKind } from './types.js';
+import { resolveTheme } from './theme.js';
+import type { Theme, ThemeInput } from './theme.js';
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -36,7 +38,7 @@ export class ApplicationGraph {
     incoming: Map<NodeId, GraphEdge[]>;
   };
 
-  constructor(id: string, name: string, version = '0.4.1') {
+  constructor(id: string, name: string, version = '0.5.0') {
     this.data = { id, name, version, nodes: {}, edges: {} };
   }
 
@@ -50,6 +52,28 @@ export class ApplicationGraph {
 
   get version(): string {
     return this.data.version;
+  }
+
+  /**
+   * The application's visual identity, completed against the default theme. A theme is
+   * presentation only: changing it cannot change an action, a constraint or a route.
+   */
+  get theme(): Theme {
+    return resolveTheme(this.data.theme);
+  }
+
+  /** Exactly what the application declared, before defaults were filled in. */
+  get declaredTheme(): ThemeInput | undefined {
+    return this.data.theme ? structuredClone(this.data.theme) : undefined;
+  }
+
+  setTheme(theme: ThemeInput | undefined): void {
+    if (theme === undefined) {
+      delete this.data.theme;
+    } else {
+      this.data.theme = structuredClone(theme);
+    }
+    this.revision += 1;
   }
 
   addNode<T extends AnyNode>(node: NodeInput<T>): NodeId {
