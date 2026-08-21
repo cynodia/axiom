@@ -1,3 +1,4 @@
+import { deriveEdges } from './derive-edges.js';
 import { createEdgeId, createNodeId } from './ids.js';
 import type { EdgeId, FieldId, NodeId } from './ids.js';
 import type { EdgeKind, EntityDef, FieldDef, GraphEdge } from './nodes.js';
@@ -26,8 +27,16 @@ export class ApplicationGraph {
   private outgoing = new Map<NodeId, GraphEdge[]>();
   private incoming = new Map<NodeId, GraphEdge[]>();
   private fieldIndex = new Map<FieldId, FieldIndexEntry>();
+  /** Bumped by every change, so the derived edge index can never serve stale data. */
+  private revision = 0;
+  private semanticIndex?: {
+    revision: number;
+    edges: GraphEdge[];
+    outgoing: Map<NodeId, GraphEdge[]>;
+    incoming: Map<NodeId, GraphEdge[]>;
+  };
 
-  constructor(id: string, name: string, version = '0.3.0') {
+  constructor(id: string, name: string, version = '0.4.0') {
     this.data = { id, name, version, nodes: {}, edges: {} };
   }
 
@@ -50,6 +59,7 @@ export class ApplicationGraph {
     }
     this.data.nodes[id] = clone({ ...node, id } as unknown as AnyNode);
     this.indexNodeFields(this.data.nodes[id]);
+    this.revision += 1;
     return id;
   }
 
@@ -68,6 +78,7 @@ export class ApplicationGraph {
     }
     this.data.nodes[node.id] = clone(node);
     this.rebuildFieldIndex();
+    this.revision += 1;
   }
 
   removeNode(id: NodeId): boolean {
@@ -81,6 +92,7 @@ export class ApplicationGraph {
       }
     }
     this.rebuildIndexes();
+    this.revision += 1;
     return true;
   }
 
@@ -126,6 +138,7 @@ export class ApplicationGraph {
     const edge: GraphEdge = { id, from, to, kind, ...(options.metadata ? { metadata: options.metadata } : {}) };
     this.data.edges[id] = edge;
     this.indexEdge(edge);
+    this.revision += 1;
     return id;
   }
 
@@ -135,6 +148,7 @@ export class ApplicationGraph {
     }
     delete this.data.edges[id];
     this.rebuildEdgeIndexes();
+    this.revision += 1;
     return true;
   }
 
@@ -152,11 +166,46 @@ export class ApplicationGraph {
   }
 
   getOutgoingEdges(nodeId: NodeId, query: EdgeQuery = {}): GraphEdge[] {
-    return filterEdges(this.outgoing.get(nodeId) ?? [], query).map((edge) => clone(edge));
+    return filterEdges(this.index().outgoing.get(nodeId) ?? [], query).map((edge) => clone(edge));
   }
 
   getIncomingEdges(nodeId: NodeId, query: EdgeQuery = {}): GraphEdge[] {
-    return filterEdges(this.incoming.get(nodeId) ?? [], query).map((edge) => clone(edge));
+    return filterEdges(this.index().incoming.get(nodeId) ?? [], query).map((edge) => clone(edge));
+  }
+
+  /**
+   * Every relationship the current nodes imply, derived on demand. Edges cannot fall out
+   * of step with the nodes they describe, so nothing has to remember to resynchronize
+   * them after a change.
+   */
+  semanticEdges(): GraphEdge[] {
+    return this.index().edges.map((edge) => clone(edge));
+  }
+
+  private index(): NonNullable<ApplicationGraph['semanticIndex']> {
+    if (this.semanticIndex?.revision === this.revision) {
+      return this.semanticIndex;
+    }
+
+    const byKey = new Map<string, GraphEdge>();
+    for (const edge of deriveEdges(Object.values(this.data.nodes))) {
+      byKey.set(`${edge.from}|${edge.to}|${edge.kind}`, edge);
+    }
+    // An edge written into the graph by hand wins over the derived one it duplicates.
+    for (const edge of Object.values(this.data.edges)) {
+      byKey.set(`${edge.from}|${edge.to}|${edge.kind}`, edge);
+    }
+
+    const edges = [...byKey.values()];
+    const outgoing = new Map<NodeId, GraphEdge[]>();
+    const incoming = new Map<NodeId, GraphEdge[]>();
+    for (const edge of edges) {
+      outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge]);
+      incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge]);
+    }
+
+    this.semanticIndex = { revision: this.revision, edges, outgoing, incoming };
+    return this.semanticIndex;
   }
 
   toJSON(): ApplicationGraphData {
@@ -170,6 +219,7 @@ export class ApplicationGraph {
   restore(input: string | ApplicationGraphData): void {
     this.data = typeof input === 'string' ? (JSON.parse(input) as ApplicationGraphData) : clone(input);
     this.rebuildIndexes();
+    this.revision += 1;
   }
 
   static deserialize(input: string | ApplicationGraphData): ApplicationGraph {

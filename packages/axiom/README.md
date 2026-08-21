@@ -90,6 +90,78 @@ console.log(app.getState(COUNT)); // 1
 const page = compileToHtml(graph);
 ```
 
+## Actions are transactions
+
+This is the guarantee the framework is built around:
+
+> An Axiom action executes as a semantic transaction. Its mutations are applied
+> provisionally, the relevant constraints are evaluated against the resulting **proposed
+> state**, and either the complete action commits or every one of its state mutations is
+> rolled back.
+
+That includes iteration. If an action reduces stock for twenty order lines and the
+seventeenth breaks an invariant, the first sixteen do not survive — you never write
+rollback logic yourself, and `runtime.getMutationLog()` shows every attempted write with
+its `outcome` of `committed` or `rolled-back`.
+
+## Collections
+
+Values are described by expressions, writable positions by **locations**. Collections add
+projection, aggregation and ordering to the first, and iteration to the second.
+
+```ts
+import { binary, field, filter, forEach, map, ref, sum } from '@cynodia/axiom';
+
+// An order total: project each line to its amount, then sum the projection.
+const orderTotal = sum(
+  map(ref(LINES), LINE, binary('multiply', field(ref(LINE), QUANTITY), field(ref(LINE), PRICE))),
+);
+
+// How much of one product this order asks for, across every line that mentions it.
+const requested = sum(
+  map(
+    filter(ref(LINES), LINE, binary('eq', field(ref(LINE), PRODUCT), field(ref(P), PRODUCT_ID))),
+    LINE,
+    field(ref(LINE), QUANTITY),
+  ),
+);
+
+// Reduce the stock of every product the order mentions — one mutation per line, one
+// transaction for the action.
+const confirm = forEach(ref(LINES), LINE, [
+  {
+    kind: 'set',
+    target: fieldLocation(
+      itemLocation(stateLocation(PRODUCTS), identitySelector(PRODUCT_ID, field(ref(LINE), PRODUCT))),
+      STOCK,
+    ),
+    value: binary('subtract', currentStock, field(ref(LINE), QUANTITY)),
+  },
+]);
+```
+
+None of this is a callback. `map`, `sort`, `filter`, `find` and `for-each` are data: they
+serialize, they validate, and an agent can ask what they read and write.
+
+## Diagnostics
+
+Failures are structured. Match on `code` rather than reading the message:
+
+```ts
+import { RUNTIME_DIAGNOSTIC_CODES } from '@cynodia/axiom';
+
+const result = app.invokeAction(CONFIRM_ORDER);
+if (!result.ok) {
+  const stock = result.diagnostics.find(
+    (diagnostic) => diagnostic.code === RUNTIME_DIAGNOSTIC_CODES.PRECONDITION_FAILED,
+  );
+  console.log(stock?.details); // { preconditionIndex: 2, failureMode: 'insufficient-stock' }
+}
+```
+
+`result.diagnostics` belongs to that invocation. `app.diagnostics()` keeps the history and
+`app.clearDiagnostics()` empties it.
+
 ## What is in the box
 
 `@cynodia/axiom` re-exports the framework packages, which can also be installed

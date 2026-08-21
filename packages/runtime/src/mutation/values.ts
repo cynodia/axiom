@@ -5,8 +5,12 @@
  * throws in strict mode, which is what keeps "no implicit object mutation" an enforced
  * invariant rather than a convention.
  */
+/**
+ * A structured clone, not a JSON round trip: a JSON round trip turns values like NaN into
+ * null, which would silently disguise a failed computation as an absent one.
+ */
 export function cloneValue<T>(value: T): T {
-  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
+  return value === undefined ? value : (structuredClone(value) as T);
 }
 
 export function deepFreeze<T>(value: T): T {

@@ -88,9 +88,23 @@ export type Operation =
   | SetOperation
   | InsertOperation
   | RemoveOperation
+  | ForEachOperation
   | InvokeOperation
   | NavigateOperation
   | NativeOperation;
+
+export type OperationKind = Operation['kind'];
+
+/** Every operation kind the runtime is required to execute. */
+export const OPERATION_KINDS: readonly OperationKind[] = [
+  'set',
+  'insert',
+  'remove',
+  'for-each',
+  'invoke',
+  'navigate',
+  'native',
+];
 
 /** Every mutation is a set, an insert or a remove against an addressed Location. */
 export type MutationOperation = SetOperation | InsertOperation | RemoveOperation;
@@ -114,8 +128,32 @@ export interface RemoveOperation {
   target: CollectionItemLocation;
 }
 
+/**
+ * Performs a set of mutations once per member of a collection. The iteration is not a
+ * transaction of its own: it runs inside the action's transaction, so a failure in any
+ * iteration rolls the whole action back.
+ *
+ * `scopeId` introduces an iteration scope. Nested expressions refer to the current member
+ * as `ref(scopeId)`, and nested locations may use it to address the canonical record the
+ * member points at.
+ */
+export interface ForEachOperation {
+  kind: 'for-each';
+  collection: Expression;
+  scopeId: NodeId;
+  operations: MutationOperation[];
+}
+
 export function isMutationOperation(operation: Operation): operation is MutationOperation {
   return operation.kind === 'set' || operation.kind === 'insert' || operation.kind === 'remove';
+}
+
+export function forEach(
+  collection: Expression,
+  scopeId: NodeId,
+  operations: MutationOperation[],
+): ForEachOperation {
+  return { kind: 'for-each', collection, scopeId, operations };
 }
 
 export interface InvokeOperation {

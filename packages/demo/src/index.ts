@@ -4,9 +4,11 @@ import { compileToHtml } from '@cynodia/axiom-compiler';
 import type { ApplicationGraph } from '@cynodia/axiom-core';
 import { createIssueTrackerGraph } from './issue-tracker.js';
 import { createInventoryGraph } from './inventory.js';
+import { createOrderSystemGraph } from './order-system.js';
 
 export { createIssueTrackerGraph, issueTrackerIds } from './issue-tracker.js';
 export { createInventoryGraph, inventoryIds } from './inventory.js';
+export { createOrderSystemGraph, orderSystemIds } from './order-system.js';
 
 export interface DemoApplication {
   slug: string;
@@ -17,6 +19,7 @@ export interface DemoApplication {
 export const demoApplications: DemoApplication[] = [
   { slug: 'issue-tracker', createGraph: createIssueTrackerGraph },
   { slug: 'inventory', createGraph: createInventoryGraph },
+  { slug: 'order-system', createGraph: createOrderSystemGraph },
 ];
 
 export async function buildDemos(): Promise<string[]> {

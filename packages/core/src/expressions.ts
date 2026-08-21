@@ -15,7 +15,26 @@ export type Expression =
   | UnaryExpression
   | CallExpression
   | FilterExpression
-  | FindExpression;
+  | FindExpression
+  | MapExpression
+  | SortExpression;
+
+export type ExpressionKind = Expression['kind'];
+
+/** Every expression kind the runtime is required to evaluate. */
+export const EXPRESSION_KINDS: readonly ExpressionKind[] = [
+  'literal',
+  'ref',
+  'field',
+  'object',
+  'binary',
+  'unary',
+  'call',
+  'filter',
+  'find',
+  'map',
+  'sort',
+];
 
 export type LiteralPrimitive = string | number | boolean | null;
 
@@ -82,7 +101,11 @@ export interface UnaryExpression {
   operand: Expression;
 }
 
-/** The built-in function vocabulary. Deliberately small and domain-neutral. */
+/**
+ * The built-in function vocabulary. Deliberately small and domain-neutral. Every entry
+ * must be implemented by the runtime: a function that is declared here but unevaluated
+ * would be a construct that typechecks, validates and then does nothing.
+ */
 export type BuiltinFunction =
   | 'required'
   | 'is-empty'
@@ -97,6 +120,25 @@ export type BuiltinFunction =
   | 'to-string'
   | 'now'
   | 'uuid';
+
+export const BUILTIN_FUNCTIONS: readonly BuiltinFunction[] = [
+  'required',
+  'is-empty',
+  'length',
+  'contains',
+  'concat',
+  'coalesce',
+  'one-of',
+  'count',
+  'sum',
+  'lowercase',
+  'to-string',
+  'now',
+  'uuid',
+];
+
+/** Functions that reduce a collection of numbers to a number. */
+export const AGGREGATE_FUNCTIONS: readonly BuiltinFunction[] = ['sum'];
 
 export interface CallExpression {
   kind: 'call';
@@ -118,6 +160,27 @@ export interface FindExpression {
   source: Expression;
   scopeId: NodeId;
   predicate: Expression;
+}
+
+/**
+ * Projects every member of a collection. `scopeId` introduces an iteration scope, so the
+ * projection refers to the current member as `ref(scopeId)` — the same way a `repeat`
+ * node's template refers to its item. Collection<A> projected by A → B is Collection<B>.
+ */
+export interface MapExpression {
+  kind: 'map';
+  source: Expression;
+  scopeId: NodeId;
+  projection: Expression;
+}
+
+/** Orders a collection by a projected key. Deterministic for strings and numbers. */
+export interface SortExpression {
+  kind: 'sort';
+  source: Expression;
+  scopeId: NodeId;
+  by: Expression;
+  direction?: 'asc' | 'desc';
 }
 
 export function literal(value: LiteralValue): LiteralExpression {
@@ -142,6 +205,40 @@ export function unary(operator: UnaryOperator, operand: Expression): UnaryExpres
 
 export function call(fn: BuiltinFunction, ...args: Expression[]): CallExpression {
   return { kind: 'call', function: fn, arguments: args };
+}
+
+export function object(entries: ObjectEntry[], entityId?: NodeId): ObjectExpression {
+  return { kind: 'object', ...(entityId ? { entityId } : {}), entries };
+}
+
+export function filter(source: Expression, scopeId: NodeId, predicate: Expression): FilterExpression {
+  return { kind: 'filter', source, scopeId, predicate };
+}
+
+export function find(source: Expression, scopeId: NodeId, predicate: Expression): FindExpression {
+  return { kind: 'find', source, scopeId, predicate };
+}
+
+export function map(source: Expression, scopeId: NodeId, projection: Expression): MapExpression {
+  return { kind: 'map', source, scopeId, projection };
+}
+
+export function sort(
+  source: Expression,
+  scopeId: NodeId,
+  by: Expression,
+  direction: 'asc' | 'desc' = 'asc',
+): SortExpression {
+  return { kind: 'sort', source, scopeId, by, direction };
+}
+
+/** Sums a collection of numbers. An empty collection sums to zero. */
+export function sum(source: Expression): CallExpression {
+  return call('sum', source);
+}
+
+export function count(source: Expression): CallExpression {
+  return call('count', source);
 }
 
 /** Visits every sub-expression, parents before children. */
@@ -172,6 +269,14 @@ export function walkExpression(expression: Expression, visit: (node: Expression)
     case 'find':
       walkExpression(expression.source, visit);
       walkExpression(expression.predicate, visit);
+      return;
+    case 'map':
+      walkExpression(expression.source, visit);
+      walkExpression(expression.projection, visit);
+      return;
+    case 'sort':
+      walkExpression(expression.source, visit);
+      walkExpression(expression.by, visit);
       return;
     default:
   }

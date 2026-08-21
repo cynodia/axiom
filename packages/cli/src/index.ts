@@ -169,7 +169,7 @@ function inspect(graph: ApplicationGraph): string {
   }
 
   const uiCount = graph.listNodes().filter((node) => !SECTIONS.some(([, kind]) => kind === node.kind)).length;
-  lines.push(`UI nodes: ${uiCount}`, `Edges: ${graph.listEdges().length}`);
+  lines.push(`UI nodes: ${uiCount}`, `Edges: ${graph.semanticEdges().length}`);
   return lines.join('\n');
 }
 

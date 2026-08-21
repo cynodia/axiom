@@ -438,11 +438,15 @@ export function createInventoryGraph(): ApplicationGraph {
     id: ACTION_ISSUE_STOCK,
     kind: 'action',
     name: 'issueStock',
+    // One failure mode per precondition, in the same order.
     preconditions: [
       binary('gt', draftQuantity, literal(0)),
       binary('gte', field(currentProduct, F_PRODUCT_QUANTITY), draftQuantity),
     ],
-    failureModes: [{ code: 'insufficient-stock', message: 'There is not enough stock on hand.' }],
+    failureModes: [
+      { code: 'quantity-invalid', message: 'Issued quantity must be greater than zero.' },
+      { code: 'insufficient-stock', message: 'There is not enough stock on hand.' },
+    ],
     operations: [
       {
         kind: 'set',

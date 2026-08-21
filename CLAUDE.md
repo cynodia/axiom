@@ -11,8 +11,9 @@ turn it into a working browser application whose generated JavaScript nobody rea
 
 * `doc/spec.md` — the 0.1 vision, research goals and metrics.
 * `doc/spec2.md` — the 0.2 architecture: domain-independent compiler and runtime.
-* `doc/spec3.md` — the **0.3 architecture: semantic mutation and addressing**. Together
-  with spec2 this is the authority on design decisions.
+* `doc/spec3.md` — the 0.3 architecture: semantic mutation and addressing.
+* `doc/spec4.md` — the **0.4 architecture: collection semantics and transactional
+  iteration**. Together with spec2 and spec3 this is the authority on design decisions.
 
 Two rules govern almost every decision:
 
@@ -23,6 +24,15 @@ Two rules govern almost every decision:
 > **Addressed mutation** (spec3 §3) — no application state may be changed by mutating the
 > JavaScript object some expression happened to return. Expressions produce values;
 > **locations** name writable positions.
+
+> **No silent semantic failure** (spec4 §4) — a construct that is publicly declared,
+> typechecks and passes `validateGraph` must have defined runtime behaviour. If the
+> runtime cannot execute something, validation has to reject it. A construct that
+> validates and then quietly does nothing is a release-blocking defect.
+
+> **Expressive power arrives as structure** (spec4 §41) — when Axiom gains capability, it
+> gains an inspectable semantic node, never a callback. No `formatter: fn`, no
+> `validator: fn`, no stored closures. The graph stays serializable and analyzable.
 
 Both are enforced by tests, not convention: `packages/core/test/architecture.test.ts`
 scans framework sources for application vocabulary, and `packages/runtime/test/store.test.ts`
@@ -140,11 +150,19 @@ optional | enum` (`core/type-ref.ts`), with builders `primitiveType()`, `entityT
 `collectionType()`, `optionalType()`, `enumType()`.
 
 **Expressions are trees, not text** (`core/expressions.ts`): `literal`, `ref`, `field`,
-`object`, `binary`, `unary`, `call`, `filter`, `find`. A `ref` resolves an **id** against
-the scope chain, in order: action parameters → iteration scopes → route parameters →
-state. The iteration scope for a `repeat` is the repeat node's own id, and for
-`filter`/`find` it is the expression's `scopeId`. Evaluation is pure: it never changes
+`object`, `binary`, `unary`, `call`, `filter`, `find`, `map`, `sort`. Every kind has a
+builder — never hand-write the discriminated union. A `ref` resolves an **id** against the
+scope chain, in order: action parameters → iteration scopes → route parameters → state.
+The iteration scope for a `repeat` is the repeat node's own id; for `filter`, `find`,
+`map` and `sort` it is the expression's `scopeId`. Evaluation is pure: it never changes
 state.
+
+**Collections project, aggregate and order.** `map(source, scopeId, projection)` takes
+`Collection<A>` to `Collection<B>`; `sum` reduces `Collection<number>` to a number (an
+empty collection sums to zero); `sort(source, scopeId, by, direction)` orders by a
+projected key. They compose — `sum(map(filter(…), …))` is the shape most aggregate rules
+take — and type inference follows the composition, so an aggregation over something that
+is statically not numeric is rejected before it ever runs.
 
 **Locations name writable positions** (`core/location.ts`): `state`, `field` (a field of
 another location), and `collection-item` (an item of a collection location, selected by
@@ -161,9 +179,22 @@ inside it (`locationExpressions()`) are read dependencies, and the fields it wri
 
 **Behaviour is data.** An `ActionDef` has parameters, preconditions, operations,
 postconditions and failure modes. Operations are `set`, `insert`, `remove` (the three
-mutations, each addressing a `Location`), plus `invoke`, `navigate` and `native`. An
-action runs as a transaction: mutations apply, then schema conformance and constraints are
-checked, and **every mutation rolls back together** if anything fails.
+mutations, each addressing a `Location`), `for-each`, plus `invoke`, `navigate` and
+`native`. An action runs as a transaction: mutations apply, constraints are then evaluated
+against the **proposed state**, and **every mutation rolls back together** if anything
+fails. That is public contract now (spec4 §36), not incidental behaviour.
+
+**`for-each` iterates without opening a transaction of its own.** Its nested operations
+are mutations only, they run in the action's transaction, and its members are read once
+before any of them are mutated. A failure in the seventeenth iteration unwinds the first
+sixteen with it. Locations inside the iteration may use `ref(scopeId)` to address the
+canonical record the current member points at — which is how one action reduces stock
+across many records without ever aliasing an object.
+
+**Failure modes line up with preconditions by position.** `failureModes[2]` is the message
+for the third precondition; a refusal reports `details.preconditionIndex` and
+`details.failureMode`, so a refusal says which condition failed rather than always naming
+the first.
 
 **Inputs write to a location too.** `InputNode.binding` is `{ location }` — no expression,
 no field id. An input change goes through the same mutation engine and transaction as an
@@ -178,26 +209,41 @@ it has to be valid. This is spec3 §38's two editing patterns made enforceable r
 advisory, and which one an application uses is visible in the graph: look at what the
 input's location is rooted in.
 
-**Edges are derived, not hand written.** `synchronizeEdges(graph)` recomputes every
-structural edge from the node definitions and marks them `metadata.derived`. Write edges
-carry `metadata.fieldIds`, so `writes Product.name` is distinguishable from
-`writes Product.stockQuantity`. Call it after building or transforming a graph;
-`Transaction.validate()` does it for you. Hand-added edges without the marker survive.
+**Edges cannot go stale.** `graph.semanticEdges()` and every `getEdges` query derive
+relationships from the current nodes on demand, cached against a revision counter that
+every mutation bumps. Nothing has to remember to resynchronize anything, and an AgentAPI
+answer can never disagree with the graph. `synchronizeEdges(graph)` still exists to
+*materialize* those edges into serialized graph data, but correctness no longer depends on
+calling it. Write edges carry `metadata.fieldIds`, and reads are attributed through
+iteration scopes — projecting a field inside a `map` is recorded as a read of that field
+of the state the members came from.
 
 **Graph reads are deep clones.** Mutating a node you fetched changes nothing — write it
 back with `updateNode`.
 
 **Validation is not optional.** `validateGraph` resolves every reference — nodes, fields,
 edges, expressions, locations, UI children, route targets — and `compileToIR` throws
-`GraphValidationError` rather than compiling an invalid graph. Location validation
-additionally rejects writes to derived state, fields that don't belong to the addressed
-entity, selectors on non-collections, and obviously incompatible assignments.
+`GraphValidationError` rather than compiling an invalid graph. It also rejects writes to
+derived state, fields that don't belong to the addressed entity, selectors and iterations
+over non-collections, aggregations over non-numeric collections, and obviously
+incompatible assignments.
+
+**Seed data is checked against its type, recursively.** `initialValue` is walked against
+its `TypeRef` down through collections and nested entities. Records are keyed by **field
+id**, so data keyed by field *name* is caught (`INITIAL_VALUE_UNKNOWN_FIELD` plus
+`INITIAL_VALUE_MISSING_REQUIRED_FIELD`) rather than surfacing later as an inexplicably
+empty UI. Diagnostics carry a `path` such as `state_orders[2].field_lines[0]` and
+structured `details`.
 
 **Three layers of correctness**, don't confuse them:
 1. `validateGraph` — is the graph structurally sound? (authoring time)
 2. Schema conformance — do instances satisfy `required` and their `TypeRef`? (runtime)
 3. `ConstraintDef` — declared invariants, evaluated per instance of `entityId` with that
    instance bound to the entity's id. (runtime)
+
+Layers 2 and 3 apply to **every canonical occurrence** of an entity, found by walking
+state values against their declared types. An entity nested inside a collection inside
+another entity is validated where it actually lives, not only at the top level.
 
 **Draft state.** `StateDef.draft: true` marks work in progress. Draft and derived states
 are skipped by instance validation, otherwise a half-filled form would fail every
@@ -236,7 +282,17 @@ Three properties hold the design together:
 `system` / `native`), the node that caused it, its transaction id, the resolved path
 (`state_products → [product-1] → field_product_name`), and its `outcome` once the
 surrounding transaction settles. Rejected attempts stay in the log as `rolled-back`.
-Only the outermost transaction decides an outcome; a nested one shares its parent's fate.
+Only the outermost transaction decides an outcome; a nested one shares its parent's fate —
+so the log never suggests that early iterations of a failed `for-each` committed.
+
+**Diagnostics are structured.** `RUNTIME_DIAGNOSTIC_CODES` is public vocabulary; a
+`RuntimeDiagnostic` carries `code`, `severity`, and where relevant `actionId`,
+`constraintId`, `stateId`, `transactionId` and `details`. `invokeAction` returns the
+diagnostics **of that invocation** — no diffing global history — while `diagnostics()` and
+`clearDiagnostics()` manage the running log.
+
+Values are cloned with `structuredClone`, not a JSON round trip: a JSON round trip turns
+`NaN` into `null`, which would disguise a failed computation as an absent value.
 
 ## How the browser page is produced
 
@@ -262,11 +318,17 @@ package they exercise:
 - `runtime` — the store's freezing and snapshot behaviour, location resolution, the
   memory host, the browser bundle's shape, and the mutation-confinement check.
 - `compiler` — normalization and page emission, **plus the runtime behaviour tests**
-  (`runtime.test.ts`, `mutation.test.ts`): `compileToIR` is the only IR producer, and the
-  compiler is the lowest package that can see both it and the runtime.
+  (`runtime.test.ts`, `mutation.test.ts`, `collections.test.ts`): `compileToIR` is the only
+  IR producer, and the compiler is the lowest package that can see both it and the runtime.
+  `collections.test.ts` enumerates `BUILTIN_FUNCTIONS`, `EXPRESSION_KINDS` and
+  `OPERATION_KINDS` and executes every one, which is how "no silent semantic failure" is
+  kept true as the vocabulary grows — add a construct without implementing it and that
+  test fails.
 - `agent-api` — queries, field-level dependencies, mutation impact, transactions.
-- `demo` — both applications end to end, and the acceptance scenarios from spec2 §45/§46
-  and spec3 §51/§52.
+- `demo` — the applications end to end, and the acceptance scenarios from spec2 §45/§46,
+  spec3 §51/§52 and spec4 §30–§35. `order-system.ts` is the 0.4 acceptance fixture:
+  projection, aggregation, aggregate guards and atomic multi-record confirmation, with no
+  native operations anywhere in it.
 
 `@cynodia/axiom-runtime` exports `createMemoryHost()` and an in-memory DOM. That is deliberate
 framework code, not test-only scaffolding: the runtime takes its whole environment through
@@ -277,8 +339,12 @@ a `HostEnvironment`, so it can be driven headlessly without a browser or jsdom.
 - **Rendering is full re-render.** Every state change rebuilds the view and restores focus
   and caret position by node id. `MutationResult.affectedLocations` is recorded but not yet
   used for fine-grained updates.
-- **Invariants are re-evaluated in full** after every action. Constraint read dependencies
-  are in the graph, so selective evaluation is possible but unimplemented.
+- **Invariants are re-evaluated in full** after every action, over every instance found by
+  walking state. Constraint read dependencies are in the graph, so selective evaluation is
+  possible but unimplemented.
+- **`for-each` contains mutations only** — no nested iteration, navigation or invocation.
+- **A malformed aggregation yields `NaN`** and a diagnostic. Comparisons against `NaN` are
+  false, so a guard fails closed rather than passing on a value it could not compute.
 - **`inputValidation: 'deferred'`** turns off the per-keystroke invariant check entirely,
   leaving validity to the next action. `'immediate'` is the default.
 - **Warning-severity constraints never block a write.** Only error severity — the default
@@ -287,8 +353,10 @@ a `HostEnvironment`, so it can be driven headlessly without a browser or jsdom.
   validates and does nothing). `memory` and `local-storage` work.
 - **Type inference is deliberately partial** (spec3 §22): it rejects obvious mismatches and
   stays silent wherever a type depends on an iteration scope.
-- **No aggregation over a projection** (no `map`/`sum`) and no conditional expression.
-  Applications express a branch with two actions or a `conditional` UI node.
+- **No conditional expression.** Applications express a branch with two actions or a
+  `conditional` UI node.
+- **No typed handles or higher-level authoring API yet** (spec4 §21–§23), and no semantic
+  value formatting (§24). Graphs are still built by calling `addNode` with explicit ids.
 - **Change sets are in memory** and per `AgentAPI` instance. There is no semantic version
   control and no on-disk graph format — graphs are still TypeScript builder functions,
   which remains a concession to human authoring.

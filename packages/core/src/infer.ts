@@ -3,7 +3,7 @@ import type { FieldId, NodeId } from './ids.js';
 import type { EntityDef, StateDef } from './nodes.js';
 import type { FieldIndexEntry } from './graph.js';
 import type { Location } from './location.js';
-import { entityType, optionalType, primitiveType } from './type-ref.js';
+import { collectionType, entityType, optionalType, primitiveType } from './type-ref.js';
 import type { TypeRef } from './type-ref.js';
 
 /**
@@ -77,14 +77,34 @@ function rootState(location: Location, context: SemanticContext): StateDef | und
   }
 }
 
+/** The member type of a collection, ignoring optionality. */
+export function itemTypeOf(type: TypeRef | undefined): TypeRef | undefined {
+  const resolved = unwrap(type);
+  return resolved?.kind === 'collection' ? resolved.itemType : undefined;
+}
+
+/** Types bound by enclosing iteration scopes, keyed by scope id. */
+export type ScopeTypes = ReadonlyMap<NodeId, TypeRef>;
+
+function withScope(scope: ScopeTypes | undefined, id: NodeId, type: TypeRef | undefined): ScopeTypes {
+  const next = new Map(scope);
+  if (type) {
+    next.set(id, type);
+  } else {
+    next.delete(id);
+  }
+  return next;
+}
+
 /**
- * A best-effort type for an expression. Returns undefined wherever the type depends on
- * an iteration scope or another value only known at run time — 0.3 deliberately stops
- * short of a complete static type checker.
+ * A best-effort type for an expression. Returns undefined wherever the type cannot be
+ * determined statically — 0.4 deliberately stops short of a complete type checker, but
+ * iteration scopes are tracked so that projections and aggregations can be checked.
  */
 export function inferExpressionType(
   expression: Expression,
   context: SemanticContext,
+  scope?: ScopeTypes,
 ): TypeRef | undefined {
   switch (expression.kind) {
     case 'literal': {
@@ -101,6 +121,10 @@ export function inferExpressionType(
       return undefined;
     }
     case 'ref': {
+      const scoped = scope?.get(expression.targetId);
+      if (scoped) {
+        return scoped;
+      }
       const state = context.getState(expression.targetId);
       if (state) {
         return state.valueType;
@@ -112,7 +136,7 @@ export function inferExpressionType(
       return context.getParameterType?.(expression.targetId);
     }
     case 'field': {
-      const source = unwrap(inferExpressionType(expression.source, context));
+      const source = unwrap(inferExpressionType(expression.source, context, scope));
       if (source?.kind === 'entity') {
         const entity = context.getEntity(source.entityId);
         return entity?.fields.find((candidate) => candidate.id === expression.fieldId)?.valueType;
@@ -136,6 +160,7 @@ export function inferExpressionType(
           return primitiveType('boolean');
         case 'length':
         case 'count':
+        case 'sum':
           return primitiveType('number');
         case 'concat':
         case 'lowercase':
@@ -148,13 +173,44 @@ export function inferExpressionType(
           return undefined;
       }
     case 'filter':
-      return inferExpressionType(expression.source, context);
+    case 'sort':
+      return inferExpressionType(expression.source, context, scope);
     case 'find': {
-      const source = unwrap(inferExpressionType(expression.source, context));
-      return source?.kind === 'collection' ? optionalType(source.itemType) : undefined;
+      const item = itemTypeOf(inferExpressionType(expression.source, context, scope));
+      return item ? optionalType(item) : undefined;
+    }
+    case 'map': {
+      const item = itemTypeOf(inferExpressionType(expression.source, context, scope));
+      const projected = inferExpressionType(
+        expression.projection,
+        context,
+        withScope(scope, expression.scopeId, item),
+      );
+      return projected ? collectionType(projected) : undefined;
     }
     default:
       return undefined;
+  }
+}
+
+/** The scope bindings an expression introduces for its own sub-expressions. */
+export function scopeForExpression(
+  expression: Expression,
+  context: SemanticContext,
+  scope?: ScopeTypes,
+): ScopeTypes {
+  switch (expression.kind) {
+    case 'filter':
+    case 'find':
+    case 'map':
+    case 'sort':
+      return withScope(
+        scope,
+        expression.scopeId,
+        itemTypeOf(inferExpressionType(expression.source, context, scope)),
+      );
+    default:
+      return scope ?? new Map();
   }
 }
 
@@ -192,6 +248,22 @@ export function isObviouslyIncompatible(target: TypeRef | undefined, value: Type
     return isObviouslyIncompatible(wanted.itemType, given.itemType);
   }
   return false;
+}
+
+/** True when a type is a collection whose members are clearly not numbers. */
+export function isNonNumericCollection(type: TypeRef | undefined): boolean {
+  const resolved = unwrap(type);
+  if (!resolved) {
+    return false;
+  }
+  if (resolved.kind !== 'collection') {
+    return true;
+  }
+  const item = unwrap(resolved.itemType);
+  if (!item) {
+    return false;
+  }
+  return !(item.kind === 'primitive' && item.primitive === 'number');
 }
 
 /** Renders a location for people. The stored representation stays id-based. */

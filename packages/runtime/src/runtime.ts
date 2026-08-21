@@ -33,12 +33,51 @@ import {
   valuesEqual,
 } from './mutation/values.js';
 
+/**
+ * The diagnostics a runtime can report. Agents match on the code rather than parsing the
+ * message, so this vocabulary is part of the public contract.
+ */
+export const RUNTIME_DIAGNOSTIC_CODES = {
+  ACTION_NOT_FOUND: 'ACTION_NOT_FOUND',
+  PARAMETER_MISSING: 'PARAMETER_MISSING',
+  PRECONDITION_FAILED: 'PRECONDITION_FAILED',
+  POSTCONDITION_FAILED: 'POSTCONDITION_FAILED',
+  CONSTRAINT_VIOLATION: 'CONSTRAINT_VIOLATION',
+  REQUIRED_FIELD_MISSING: 'REQUIRED_FIELD_MISSING',
+  ENUM_VALUE_INVALID: 'ENUM_VALUE_INVALID',
+  TYPE_MISMATCH: 'TYPE_MISMATCH',
+  EXPRESSION_EVALUATION_FAILED: 'EXPRESSION_EVALUATION_FAILED',
+  UNRESOLVED_REFERENCE: 'UNRESOLVED_REFERENCE',
+  LOCATION_RESOLUTION_FAILED: 'LOCATION_RESOLUTION_FAILED',
+  MUTATION_FAILED: 'MUTATION_FAILED',
+  DERIVED_STATE_WRITE: 'DERIVED_STATE_WRITE',
+  UNKNOWN_STATE: 'UNKNOWN_STATE',
+  UNSUPPORTED_EXPRESSION: 'UNSUPPORTED_EXPRESSION',
+  UNSUPPORTED_OPERATION: 'UNSUPPORTED_OPERATION',
+  ROUTE_NOT_FOUND: 'ROUTE_NOT_FOUND',
+  NATIVE_OPERATION_MISSING: 'NATIVE_OPERATION_MISSING',
+  UI_NODE_MISSING: 'UI_NODE_MISSING',
+  UNSUPPORTED_UI_NODE: 'UNSUPPORTED_UI_NODE',
+  INPUT_REJECTED: 'INPUT_REJECTED',
+  PERSISTED_STATE_UNREADABLE: 'PERSISTED_STATE_UNREADABLE',
+} as const;
+
+export type RuntimeDiagnosticCode =
+  (typeof RUNTIME_DIAGNOSTIC_CODES)[keyof typeof RUNTIME_DIAGNOSTIC_CODES];
+
 export interface RuntimeDiagnostic {
-  code: string;
+  code: RuntimeDiagnosticCode;
   message: string;
   severity: 'error' | 'warning';
   nodeId?: NodeId;
   fieldId?: FieldId;
+  actionId?: NodeId;
+  constraintId?: NodeId;
+  stateId?: NodeId;
+  location?: Location;
+  transactionId?: string;
+  /** Structured context, so an agent never has to read the message. */
+  details?: Record<string, unknown>;
 }
 
 export interface ActionResult {
@@ -75,7 +114,9 @@ export interface AxiomRuntime {
   invokeAction(id: NodeId, args?: Record<string, unknown>): ActionResult;
   navigate(path: string): void;
   currentRoute(): RouteMatch | null;
+  /** Every diagnostic reported so far. Per-invocation results carry their own. */
   diagnostics(): RuntimeDiagnostic[];
+  clearDiagnostics(): void;
   /** Every mutation this runtime has applied, in order, with its semantic location. */
   getMutationLog(): MutationLogEntry[];
   registerNativeOperation(implementationId: string, implementation: NativeImplementation): void;
@@ -116,6 +157,20 @@ function defaultForType(type: TypeRef): unknown {
   }
 }
 
+/** A short, structured description of a runtime value, for diagnostics. */
+function describeValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return 'nothing';
+  }
+  if (Array.isArray(value)) {
+    return `a collection of ${value.length}`;
+  }
+  if (typeof value === 'object') {
+    return 'a record';
+  }
+  return `${typeof value} ${JSON.stringify(value)}`;
+}
+
 export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   const { ir, rootElement, host } = options;
   const store = createStateStore();
@@ -146,10 +201,26 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
   }
 
+  /** Diagnostics reported while the current invocation runs, if one is collecting. */
+  let collector: RuntimeDiagnostic[] | null = null;
+
   function report(diagnostic: RuntimeDiagnostic): void {
     diagnostics.push(diagnostic);
+    collector?.push(diagnostic);
     if (diagnostic.severity === 'error') {
       host.report?.(`${diagnostic.code}: ${diagnostic.message}`);
+    }
+  }
+
+  /** Runs `body` while gathering every diagnostic it reports. */
+  function collecting<T>(body: (collected: RuntimeDiagnostic[]) => T): T {
+    const previous = collector;
+    const collected: RuntimeDiagnostic[] = [];
+    collector = collected;
+    try {
+      return body(collected);
+    } finally {
+      collector = previous;
     }
   }
 
@@ -176,7 +247,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
             continue;
           } catch {
             report({
-              code: 'PERSISTED_STATE_UNREADABLE',
+              code: RUNTIME_DIAGNOSTIC_CODES.PERSISTED_STATE_UNREADABLE,
               message: `Stored value for ${state.id} could not be parsed; falling back to the initial value`,
               severity: 'warning',
               nodeId: state.id,
@@ -224,7 +295,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   function writeState(stateId: string, value: unknown): void {
     if (!statesById.has(stateId)) {
       report({
-        code: 'UNKNOWN_STATE',
+        code: RUNTIME_DIAGNOSTIC_CODES.UNKNOWN_STATE,
         message: `Cannot write to unknown state ${stateId}`,
         severity: 'error',
         nodeId: stateId as NodeId,
@@ -233,7 +304,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
     if (statesById.get(stateId)?.derivation) {
       report({
-        code: 'DERIVED_STATE_WRITE',
+        code: RUNTIME_DIAGNOSTIC_CODES.DERIVED_STATE_WRITE,
         message: `${stateId} is derived state and cannot be written to`,
         severity: 'error',
         nodeId: stateId as NodeId,
@@ -305,7 +376,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       return apply();
     } catch (error) {
       const failure: RuntimeDiagnostic = {
-        code: error instanceof LocationResolutionError ? 'LOCATION_UNRESOLVED' : 'MUTATION_FAILED',
+        code: error instanceof LocationResolutionError ? RUNTIME_DIAGNOSTIC_CODES.LOCATION_RESOLUTION_FAILED : 'MUTATION_FAILED',
         message: error instanceof Error ? error.message : String(error),
         severity: 'error',
         ...(context.sourceNodeId ? { nodeId: context.sourceNodeId } : {}),
@@ -359,7 +430,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           return readState(expression.targetId);
         }
         report({
-          code: 'UNRESOLVED_REFERENCE',
+          code: RUNTIME_DIAGNOSTIC_CODES.UNRESOLVED_REFERENCE,
           message: `Reference ${expression.targetId} could not be resolved`,
           severity: 'error',
           nodeId: expression.targetId,
@@ -398,6 +469,35 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           toBoolean(evaluate(expression.predicate, childScope(scope, expression.scopeId, item))),
         );
       }
+      case 'map': {
+        const source = evaluate(expression.source, scope);
+        if (!Array.isArray(source)) {
+          report({
+            code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
+            message: `map expects a collection but received ${describeValue(source)}`,
+            severity: 'error',
+          });
+          return [];
+        }
+        return source.map((item) =>
+          evaluate(expression.projection, childScope(scope, expression.scopeId, item)),
+        );
+      }
+      case 'sort': {
+        const source = evaluate(expression.source, scope);
+        if (!Array.isArray(source)) {
+          report({
+            code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
+            message: `sort expects a collection but received ${describeValue(source)}`,
+            severity: 'error',
+          });
+          return [];
+        }
+        const direction = expression.direction === 'desc' ? -1 : 1;
+        const key = (item: unknown): unknown =>
+          evaluate(expression.by, childScope(scope, expression.scopeId, item));
+        return [...source].sort((left, right) => direction * compareValues(key(left), key(right)));
+      }
       case 'find': {
         const source = evaluate(expression.source, scope);
         if (!Array.isArray(source)) {
@@ -410,7 +510,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       }
       default:
         report({
-          code: 'UNKNOWN_EXPRESSION',
+          code: RUNTIME_DIAGNOSTIC_CODES.UNSUPPORTED_EXPRESSION,
           message: `Unknown expression kind "${(expression as { kind: string }).kind}"`,
           severity: 'error',
         });
@@ -456,7 +556,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return divisor === 0 ? null : Number(left ?? 0) / divisor;
       }
       default:
-        report({ code: 'UNKNOWN_OPERATOR', message: `Unknown operator "${operator}"`, severity: 'error' });
+        report({ code: RUNTIME_DIAGNOSTIC_CODES.UNSUPPORTED_EXPRESSION, message: `Unknown operator "${operator}"`, severity: 'error' });
         return null;
     }
   }
@@ -472,6 +572,34 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return Array.isArray(values[0]) ? values[0].length : toText(values[0]).length;
       case 'count':
         return Array.isArray(values[0]) ? values[0].length : 0;
+      case 'sum': {
+        // An aggregation that cannot be computed must not quietly produce a value that
+        // makes a guard pass. It reports, and yields a number no comparison accepts.
+        const source = values[0];
+        if (!Array.isArray(source)) {
+          report({
+            code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
+            message: `sum expects a collection of numbers but received ${describeValue(source)}`,
+            severity: 'error',
+            details: { received: source },
+          });
+          return Number.NaN;
+        }
+        let total = 0;
+        for (const member of source) {
+          if (typeof member !== 'number' || !Number.isFinite(member)) {
+            report({
+              code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
+              message: `sum encountered ${describeValue(member)} where a number was required`,
+              severity: 'error',
+              details: { member },
+            });
+            return Number.NaN;
+          }
+          total += member;
+        }
+        return total;
+      }
       case 'contains': {
         const [haystack, needle] = values;
         if (Array.isArray(haystack)) {
@@ -494,7 +622,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       case 'uuid':
         return host.uuid();
       default:
-        report({ code: 'UNKNOWN_FUNCTION', message: `Unknown function "${fn}"`, severity: 'error' });
+        report({ code: RUNTIME_DIAGNOSTIC_CODES.UNSUPPORTED_EXPRESSION, message: `Unknown function "${fn}"`, severity: 'error' });
         return null;
     }
   }
@@ -510,32 +638,55 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     return resolved.kind === 'entity' ? resolved.entityId : null;
   }
 
-  function instancesOf(entityId: string): unknown[] {
-    const instances: unknown[] = [];
+  /**
+   * Every canonical occurrence of every entity, found by walking state values against
+   * their declared types. Entities nested inside collections and inside other entities
+   * are reached recursively, so their constraints apply wherever they actually live.
+   */
+  function collectInstances(): Map<string, unknown[]> {
+    const found = new Map<string, unknown[]>();
+
+    const visit = (value: unknown, type: TypeRef): void => {
+      const resolved = unwrapType(type);
+      if (resolved.kind === 'collection') {
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            visit(item, resolved.itemType);
+          }
+        }
+        return;
+      }
+      if (resolved.kind !== 'entity' || !isRecord(value)) {
+        return;
+      }
+      const instances = found.get(resolved.entityId) ?? [];
+      instances.push(value);
+      found.set(resolved.entityId, instances);
+      for (const field of entitiesById.get(resolved.entityId)?.fields ?? []) {
+        visit(value[field.id], field.valueType);
+      }
+    };
+
     for (const state of ir.states) {
       // Drafts are incomplete by definition, and derived states are views of data that
       // is already validated where it is stored.
       if (state.draft || state.derivation) {
         continue;
       }
-      if (collectionEntityId(state) !== entityId) {
-        continue;
-      }
-      const value = readState(state.id);
-      if (Array.isArray(value)) {
-        instances.push(...value);
-      } else if (isRecord(value)) {
-        instances.push(value);
-      }
+      visit(readState(state.id), state.valueType);
     }
-    return instances;
+    return found;
+  }
+
+  function instancesOf(entityId: string): unknown[] {
+    return collectInstances().get(entityId) ?? [];
   }
 
   function checkFieldValue(field: FieldDef, value: unknown, entityId: string): RuntimeDiagnostic | null {
     if (!isPresent(value)) {
       if (field.required) {
         return {
-          code: 'REQUIRED_FIELD_MISSING',
+          code: RUNTIME_DIAGNOSTIC_CODES.REQUIRED_FIELD_MISSING,
           message: `${field.name ?? field.id} is required`,
           severity: 'error',
           nodeId: entityId as NodeId,
@@ -547,7 +698,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     const resolved = unwrapType(field.valueType);
     if (resolved.kind === 'enum' && !resolved.values.includes(toText(value))) {
       return {
-        code: 'ENUM_VALUE_INVALID',
+        code: RUNTIME_DIAGNOSTIC_CODES.ENUM_VALUE_INVALID,
         message: `${field.name ?? field.id} must be one of: ${resolved.values.join(', ')}`,
         severity: 'error',
         nodeId: entityId as NodeId,
@@ -556,7 +707,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
     if (resolved.kind === 'primitive' && resolved.primitive === 'number' && typeof value !== 'number') {
       return {
-        code: 'TYPE_MISMATCH',
+        code: RUNTIME_DIAGNOSTIC_CODES.TYPE_MISMATCH,
         message: `${field.name ?? field.id} must be a number`,
         severity: 'error',
         nodeId: entityId as NodeId,
@@ -565,7 +716,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
     if (resolved.kind === 'primitive' && resolved.primitive === 'boolean' && typeof value !== 'boolean') {
       return {
-        code: 'TYPE_MISMATCH',
+        code: RUNTIME_DIAGNOSTIC_CODES.TYPE_MISMATCH,
         message: `${field.name ?? field.id} must be a boolean`,
         severity: 'error',
         nodeId: entityId as NodeId,
@@ -575,11 +726,16 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     return null;
   }
 
-  /** Schema conformance plus declared constraints, evaluated over live instances. */
+  /**
+   * Schema conformance plus declared constraints, evaluated over every canonical instance
+   * — including instances nested inside collections and inside other entities.
+   */
   function evaluateInvariants(): RuntimeDiagnostic[] {
     const failures: RuntimeDiagnostic[] = [];
+    const instances = collectInstances();
+
     for (const entity of ir.entities) {
-      for (const instance of instancesOf(entity.id)) {
+      for (const instance of instances.get(entity.id) ?? []) {
         if (!isRecord(instance)) {
           continue;
         }
@@ -592,7 +748,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       }
     }
     for (const constraint of ir.constraints) {
-      failures.push(...evaluateConstraint(constraint));
+      failures.push(...evaluateConstraint(constraint, instances));
     }
     return failures;
   }
@@ -639,15 +795,24 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     return introduced;
   }
 
-  function evaluateConstraint(constraint: ConstraintDef): RuntimeDiagnostic[] {
+  /**
+   * An entity-scoped constraint is evaluated once per instance, with `ref(entityId)`
+   * bound to the instance under validation.
+   */
+  function evaluateConstraint(
+    constraint: ConstraintDef,
+    instances: Map<string, unknown[]>,
+  ): RuntimeDiagnostic[] {
     const severity = constraint.severity ?? 'error';
     const failures: RuntimeDiagnostic[] = [];
-    const record = (): void => {
+    const record = (instance?: unknown): void => {
       failures.push({
-        code: 'CONSTRAINT_VIOLATION',
+        code: RUNTIME_DIAGNOSTIC_CODES.CONSTRAINT_VIOLATION,
         message: constraint.message ?? `Constraint ${constraint.name ?? constraint.id} failed`,
         severity,
         nodeId: constraint.id,
+        constraintId: constraint.id,
+        ...(constraint.entityId ? { details: { entityId: constraint.entityId, instance } } : {}),
       });
     };
 
@@ -657,10 +822,10 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       }
       return failures;
     }
-    for (const instance of instancesOf(constraint.entityId)) {
+    for (const instance of instances.get(constraint.entityId) ?? []) {
       const scope = childScope(rootScope(), constraint.entityId, instance);
       if (!toBoolean(evaluate(constraint.expression, scope))) {
-        record();
+        record(instance);
       }
     }
     return failures;
@@ -680,6 +845,29 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       case 'remove':
         mutate(() => mutations.apply(operation, scope, context), context, result);
         return;
+      case 'for-each': {
+        // The members are read once, before any of them are mutated, so the iteration
+        // walks the collection as it stood when the operation began. Nothing here opens
+        // a transaction: these mutations belong to the action's own transaction, and a
+        // failure in any iteration rolls back every iteration with it.
+        const members = evaluate(operation.collection, scope);
+        if (!Array.isArray(members)) {
+          result.push({
+            code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
+            message: `for-each expects a collection but received ${describeValue(members)}`,
+            severity: 'error',
+            ...(context.sourceNodeId ? { actionId: context.sourceNodeId } : {}),
+          });
+          return;
+        }
+        for (const member of members) {
+          const iteration = childScope(scope, operation.scopeId, member);
+          for (const nested of operation.operations ?? []) {
+            executeOperation(nested, iteration, context, result);
+          }
+        }
+        return;
+      }
       case 'invoke': {
         const args: Record<string, unknown> = {};
         for (const [parameterId, argument] of Object.entries(operation.arguments ?? {})) {
@@ -697,7 +885,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         const route = ir.routes.find((candidate) => candidate.id === operation.routeId);
         if (!route) {
           result.push({
-            code: 'ROUTE_NOT_FOUND',
+            code: RUNTIME_DIAGNOSTIC_CODES.ROUTE_NOT_FOUND,
             message: `Navigate operation could not resolve route ${String(operation.routeId)}`,
             severity: 'error',
           });
@@ -714,7 +902,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         const implementation = natives.get(operation.implementationId);
         if (!implementation) {
           result.push({
-            code: 'NATIVE_OPERATION_MISSING',
+            code: RUNTIME_DIAGNOSTIC_CODES.NATIVE_OPERATION_MISSING,
             message: `No implementation registered for "${operation.implementationId}"`,
             severity: 'error',
           });
@@ -738,7 +926,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       }
       default:
         result.push({
-          code: 'UNKNOWN_OPERATION',
+          code: RUNTIME_DIAGNOSTIC_CODES.UNSUPPORTED_OPERATION,
           message: `Unknown operation kind "${(operation as { kind: string }).kind}"`,
           severity: 'error',
         });
@@ -746,15 +934,23 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   }
 
   function runAction(actionId: string, args: Record<string, unknown> = {}): ActionResult {
+    return collecting((collected) => runActionCollecting(actionId, args, collected));
+  }
+
+  function runActionCollecting(
+    actionId: string,
+    args: Record<string, unknown>,
+    collected: RuntimeDiagnostic[],
+  ): ActionResult {
     const action: ActionDef | undefined = ir.actions[actionId as NodeId];
     if (!action) {
       const failure: RuntimeDiagnostic = {
-        code: 'ACTION_NOT_FOUND',
+        code: RUNTIME_DIAGNOSTIC_CODES.ACTION_NOT_FOUND,
         message: `Action ${actionId} is not defined`,
         severity: 'error',
       };
       report(failure);
-      return { ok: false, diagnostics: [failure] };
+      return { ok: false, diagnostics: [...collected] };
     }
 
     const scope = rootScope();
@@ -766,7 +962,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     for (const parameter of action.parameters ?? []) {
       if (parameter.required && !isPresent(scope.values.get(parameter.id))) {
         failures.push({
-          code: 'PARAMETER_MISSING',
+          code: RUNTIME_DIAGNOSTIC_CODES.PARAMETER_MISSING,
           message: `Action ${action.name ?? action.id} requires ${parameter.name ?? parameter.id}`,
           severity: 'error',
           nodeId: action.id,
@@ -775,29 +971,32 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
     if (failures.length > 0) {
       failures.forEach(report);
-      return { ok: false, diagnostics: failures };
+      return { ok: false, diagnostics: [...collected] };
     }
 
-    for (const precondition of action.preconditions ?? []) {
-      if (!toBoolean(evaluate(precondition, scope))) {
-        const failure: RuntimeDiagnostic = {
-          code: 'PRECONDITION_FAILED',
-          message:
-            action.failureModes?.[0]?.message ??
-            `A precondition of ${action.name ?? action.id} was not satisfied`,
-          severity: 'error',
-          nodeId: action.id,
-        };
-        report(failure);
-        return { ok: false, diagnostics: [failure] };
+    // Failure modes line up with preconditions by position, so a refusal says which
+    // condition was not met rather than always naming the first one.
+    for (const [index, precondition] of (action.preconditions ?? []).entries()) {
+      if (toBoolean(evaluate(precondition, scope))) {
+        continue;
       }
+      const mode = action.failureModes?.[index];
+      report({
+        code: RUNTIME_DIAGNOSTIC_CODES.PRECONDITION_FAILED,
+        message: mode?.message ?? `A precondition of ${action.name ?? action.id} was not satisfied`,
+        severity: 'error',
+        nodeId: action.id,
+        actionId: action.id,
+        details: { preconditionIndex: index, ...(mode?.code ? { failureMode: mode.code } : {}) },
+      });
+      return { ok: false, diagnostics: [...collected] };
     }
 
     if (action.requiresConfirmation) {
       const message =
         action.confirmationMessage ?? `Confirm ${action.name ?? action.id}. This cannot be undone.`;
       if (!host.confirm(message)) {
-        return { ok: false, diagnostics: [] };
+        return { ok: false, diagnostics: [...collected] };
       }
     }
 
@@ -808,35 +1007,44 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       transactionId: transaction.id,
     };
     const operationDiagnostics: RuntimeDiagnostic[] = [];
+    const reportedBefore = collected.length;
     for (const operation of action.operations ?? []) {
       executeOperation(operation, scope, context, operationDiagnostics);
     }
 
+    // Anything reported while the operations ran — an expression that could not be
+    // evaluated, for instance — is a failure of this action, not a passing curiosity.
     const violations = [
       ...operationDiagnostics.filter((diagnostic) => diagnostic.severity === 'error'),
+      ...collected.slice(reportedBefore).filter((diagnostic) => diagnostic.severity === 'error'),
       ...evaluateInvariants().filter((diagnostic) => diagnostic.severity === 'error'),
     ];
     for (const postcondition of action.postconditions ?? []) {
       if (!toBoolean(evaluate(postcondition, scope))) {
         violations.push({
-          code: 'POSTCONDITION_FAILED',
+          code: RUNTIME_DIAGNOSTIC_CODES.POSTCONDITION_FAILED,
           message: `A postcondition of ${action.name ?? action.id} was not satisfied`,
           severity: 'error',
           nodeId: action.id,
+          actionId: action.id,
         });
       }
     }
 
     if (violations.length > 0) {
       settle(transaction, 'rolled-back');
-      violations.forEach(report);
+      for (const violation of violations) {
+        if (!collected.includes(violation)) {
+          report({ ...violation, actionId: action.id, transactionId: transaction.id });
+        }
+      }
       renderApplication();
-      return { ok: false, diagnostics: violations };
+      return { ok: false, diagnostics: [...collected] };
     }
 
     settle(transaction, 'committed');
     renderApplication();
-    return { ok: true, diagnostics: operationDiagnostics };
+    return { ok: true, diagnostics: [...collected] };
   }
 
   // ------------------------------------------------------------------ routing
@@ -1022,7 +1230,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     const node = ir.uiNodes[id];
     if (!node) {
       report({
-        code: 'UI_NODE_MISSING',
+        code: RUNTIME_DIAGNOSTIC_CODES.UI_NODE_MISSING,
         message: `UI node ${id} is not defined`,
         severity: 'error',
         nodeId: id,
@@ -1177,7 +1385,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
               settle(transaction, 'rolled-back');
               introduced.forEach(report);
               report({
-                code: 'INPUT_REJECTED',
+                code: RUNTIME_DIAGNOSTIC_CODES.INPUT_REJECTED,
                 message: `${node.label ?? node.id} kept its previous value: ${introduced[0].message}`,
                 severity: 'warning',
                 nodeId: node.id,
@@ -1228,7 +1436,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       }
       default:
         report({
-          code: 'UNKNOWN_UI_NODE',
+          code: RUNTIME_DIAGNOSTIC_CODES.UNSUPPORTED_UI_NODE,
           message: `Unknown UI node kind "${(node as { kind: string }).kind}"`,
           severity: 'error',
         });
@@ -1315,6 +1523,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     },
     diagnostics(): RuntimeDiagnostic[] {
       return diagnostics.map((diagnostic) => ({ ...diagnostic }));
+    },
+    clearDiagnostics(): void {
+      diagnostics.length = 0;
     },
     getMutationLog(): MutationLogEntry[] {
       return mutationLog.map((entry) => ({ ...entry }));

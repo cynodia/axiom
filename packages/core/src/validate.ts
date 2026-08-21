@@ -1,8 +1,10 @@
+import { AGGREGATE_FUNCTIONS, BUILTIN_FUNCTIONS } from './expressions.js';
 import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
 import { VALIDATION_CODES } from './diagnostics.js';
 import type { ValidationIssue, ValidationResult } from './diagnostics.js';
-import { EDGE_KINDS } from './nodes.js';
+import type { LiteralValue } from './nodes.js';
+import { EDGE_KINDS, isMutationOperation } from './nodes.js';
 import type {
   ActionDef,
   ConstraintDef,
@@ -17,7 +19,13 @@ import type { UINode } from './ui.js';
 import type { AnyNode } from './types.js';
 import type { ApplicationGraph } from './graph.js';
 import { semanticContextFromGraph } from './context.js';
-import { inferExpressionType, inferLocationType, isObviouslyIncompatible } from './infer.js';
+import {
+  inferExpressionType,
+  inferLocationType,
+  isNonNumericCollection,
+  isObviouslyIncompatible,
+  itemTypeOf,
+} from './infer.js';
 import type { SemanticContext } from './infer.js';
 import { locationExpressions } from './location.js';
 import type { Location } from './location.js';
@@ -159,6 +167,9 @@ function validateEntity(entity: EntityDef, context: Context): void {
 
 function validateState(state: StateDef, context: Context): void {
   validateTypeRef(state.valueType, state.id, context);
+  if (state.initialValue !== undefined) {
+    validateValue(state.initialValue, state.valueType, String(state.id), state, context);
+  }
   if (state.derivation) {
     validateExpression(state.derivation, state.id, context, new Set());
   }
@@ -171,11 +182,131 @@ function validateState(state: StateDef, context: Context): void {
   }
 }
 
+/**
+ * Checks seed data against the type it is declared to have, recursively. Entity values
+ * are keyed by field id, so data keyed by field *name* is a mistake this catches rather
+ * than one that surfaces later as a mysteriously empty UI.
+ */
+function validateValue(
+  value: LiteralValue | undefined,
+  type: TypeRef,
+  path: string,
+  state: StateDef,
+  context: Context,
+): void {
+  const report = (code: string, message: string, extra: Partial<ValidationIssue> = {}): void => {
+    context.errors.push({ code, message, nodeId: state.id, path, ...extra });
+  };
+  const actual = (candidate: unknown): string =>
+    candidate === null ? 'null' : Array.isArray(candidate) ? 'a collection' : typeof candidate;
+
+  if (type.kind === 'optional') {
+    if (value === null || value === undefined) {
+      return;
+    }
+    validateValue(value, type.valueType, path, state, context);
+    return;
+  }
+
+  if (value === undefined || value === null) {
+    report(
+      VALIDATION_CODES.initialValueTypeMismatch,
+      `${path} is ${value === undefined ? 'missing' : 'null'} but is declared as ${describeType(type)}`,
+      { details: { expected: describeType(type), actual: actual(value) } },
+    );
+    return;
+  }
+
+  switch (type.kind) {
+    case 'primitive': {
+      const expected =
+        type.primitive === 'number' ? 'number' : type.primitive === 'boolean' ? 'boolean' : 'string';
+      if (typeof value !== expected) {
+        report(
+          VALIDATION_CODES.initialValueTypeMismatch,
+          `${path} should be a ${type.primitive} but is ${actual(value)}`,
+          { details: { expected: type.primitive, actual: actual(value), value } },
+        );
+      }
+      return;
+    }
+    case 'enum': {
+      if (typeof value !== 'string' || !type.values.includes(value)) {
+        report(
+          VALIDATION_CODES.initialValueTypeMismatch,
+          `${path} should be one of ${type.values.join(', ')} but is ${JSON.stringify(value)}`,
+          { details: { expected: type.values, value } },
+        );
+      }
+      return;
+    }
+    case 'collection': {
+      if (!Array.isArray(value)) {
+        report(
+          VALIDATION_CODES.initialValueTypeMismatch,
+          `${path} should be a collection but is ${actual(value)}`,
+          { details: { expected: describeType(type), actual: actual(value) } },
+        );
+        return;
+      }
+      value.forEach((item, index) => {
+        validateValue(item, type.itemType, `${path}[${index}]`, state, context);
+      });
+      return;
+    }
+    case 'entity': {
+      const entity = context.semantics.getEntity(type.entityId);
+      if (!entity) {
+        return;
+      }
+      if (typeof value !== 'object' || Array.isArray(value)) {
+        report(
+          VALIDATION_CODES.initialValueInvalidEntity,
+          `${path} should be a ${entity.name ?? entity.id} record but is ${actual(value)}`,
+          { details: { entityId: entity.id, actual: actual(value) } },
+        );
+        return;
+      }
+      const record = value as Record<string, LiteralValue>;
+      const declared = new Map(entity.fields.map((field) => [String(field.id), field]));
+
+      for (const key of Object.keys(record)) {
+        if (!declared.has(key)) {
+          report(
+            VALIDATION_CODES.initialValueUnknownField,
+            `${path}.${key} is not a field of ${entity.name ?? entity.id}. Records are keyed by field id, not by field name.`,
+            { details: { entityId: entity.id, key, expected: [...declared.keys()] } },
+          );
+        }
+      }
+
+      for (const field of entity.fields) {
+        const present = Object.prototype.hasOwnProperty.call(record, String(field.id));
+        if (!present) {
+          // A draft holds work in progress, so it is allowed to be incomplete.
+          if (field.required && field.valueType.kind !== 'optional' && !state.draft) {
+            report(
+              VALIDATION_CODES.initialValueMissingRequiredField,
+              `${path} is missing required field ${field.name ?? field.id}`,
+              { fieldId: field.id, details: { entityId: entity.id, fieldId: field.id } },
+            );
+          }
+          continue;
+        }
+        validateValue(record[String(field.id)], field.valueType, `${path}.${field.id}`, state, context);
+      }
+      return;
+    }
+    default:
+  }
+}
+
 function validateAction(action: ActionDef, context: Context): void {
-  const local = new Set<NodeId>((action.parameters ?? []).map((parameter) => parameter.id));
+  const local = emptyScope(new Set<NodeId>((action.parameters ?? []).map((parameter) => parameter.id)));
   for (const parameter of action.parameters ?? []) {
     if (parameter.valueType) {
       validateTypeRef(parameter.valueType, action.id, context);
+      local.types.set(parameter.id, parameter.valueType);
     }
   }
   for (const precondition of action.preconditions ?? []) {
@@ -193,13 +324,37 @@ function validateOperation(
   operation: Operation,
   action: ActionDef,
   context: Context,
-  local: Set<NodeId>,
+  local: Scoped,
 ): void {
   switch (operation.kind) {
+    case 'for-each': {
+      validateExpression(operation.collection, action.id, context, local);
+      requireCollection(operation.collection, action.id, context, local, 'for-each');
+      const scoped = iterationScope(local, operation.scopeId, operation.collection, context);
+      if ((operation.operations ?? []).length === 0) {
+        context.warnings.push({
+          code: VALIDATION_CODES.unsupportedOperation,
+          message: `A for-each in ${action.id} performs no mutations`,
+          nodeId: action.id,
+        });
+      }
+      for (const nested of operation.operations ?? []) {
+        if (!isMutationOperation(nested)) {
+          context.errors.push({
+            code: VALIDATION_CODES.unsupportedOperation,
+            message: `A for-each in ${action.id} may only contain set, insert and remove operations`,
+            nodeId: action.id,
+          });
+          continue;
+        }
+        validateOperation(nested, action, context, scoped);
+      }
+      return;
+    }
     case 'set': {
       checkLocation(operation.target, action.id, context, local, true);
       validateExpression(operation.value, action.id, context, local);
-      checkAssignment(operation.target, operation.value, action.id, context);
+      checkAssignment(operation.target, operation.value, action.id, context, local);
       return;
     }
     case 'insert': {
@@ -217,7 +372,7 @@ function validateOperation(
       if (target?.kind === 'collection') {
         reportIncompatible(
           target.itemType,
-          inferExpressionType(operation.value, context.semantics),
+          inferExpressionType(operation.value, context.semantics, local.types),
           action.id,
           context,
         );
@@ -288,7 +443,7 @@ function checkLocation(
   location: Location,
   ownerId: NodeId,
   context: Context,
-  local: Set<NodeId>,
+  local: Set<NodeId> | Scoped,
   requireWritable: boolean,
 ): void {
   context.errors.push(
@@ -299,10 +454,16 @@ function checkLocation(
   }
 }
 
-function checkAssignment(target: Location, value: Expression, ownerId: NodeId, context: Context): void {
+function checkAssignment(
+  target: Location,
+  value: Expression,
+  ownerId: NodeId,
+  context: Context,
+  scope: Scoped,
+): void {
   reportIncompatible(
     inferLocationType(target, context.semantics),
-    inferExpressionType(value, context.semantics),
+    inferExpressionType(value, context.semantics, scope.types),
     ownerId,
     context,
   );
@@ -589,17 +750,47 @@ function validateTypeRef(
   }
 }
 
+interface Scoped {
+  /** Ids a `ref` may resolve. */
+  ids: Set<NodeId>;
+  /** Types those ids carry, where known. */
+  types: Map<NodeId, TypeRef>;
+}
+
+function emptyScope(ids: Set<NodeId> = new Set()): Scoped {
+  return { ids, types: new Map() };
+}
+
+/** Extends a scope with the member type of the collection an iteration walks. */
+function iterationScope(
+  scope: Scoped,
+  scopeId: NodeId,
+  source: Expression,
+  context: Context,
+): Scoped {
+  const item = itemTypeOf(inferExpressionType(source, context.semantics, scope.types));
+  const types = new Map(scope.types);
+  if (item) {
+    types.set(scopeId, item);
+  } else {
+    types.delete(scopeId);
+  }
+  return { ids: new Set([...scope.ids, scopeId]), types };
+}
+
 function validateExpression(
   expression: Expression,
   ownerId: NodeId,
   context: Context,
-  local: Set<NodeId>,
+  local: Set<NodeId> | Scoped,
 ): void {
+  const scope: Scoped = local instanceof Set ? emptyScope(local) : local;
+
   switch (expression.kind) {
     case 'literal':
       return;
     case 'ref':
-      if (!local.has(expression.targetId) && !context.scopes.has(expression.targetId)) {
+      if (!scope.ids.has(expression.targetId) && !context.scopes.has(expression.targetId)) {
         context.errors.push({
           code: VALIDATION_CODES.invalidExpressionRef,
           message: `Expression in ${ownerId} references unknown id ${expression.targetId}`,
@@ -609,7 +800,7 @@ function validateExpression(
       return;
     case 'field':
       requireField(expression.fieldId, ownerId, context);
-      validateExpression(expression.source, ownerId, context, local);
+      validateExpression(expression.source, ownerId, context, scope);
       return;
     case 'object':
       if (expression.entityId) {
@@ -617,35 +808,108 @@ function validateExpression(
       }
       for (const entry of expression.entries) {
         requireField(entry.fieldId, ownerId, context);
-        validateExpression(entry.value, ownerId, context, local);
+        validateExpression(entry.value, ownerId, context, scope);
       }
       return;
     case 'binary':
-      validateExpression(expression.left, ownerId, context, local);
-      validateExpression(expression.right, ownerId, context, local);
+      validateExpression(expression.left, ownerId, context, scope);
+      validateExpression(expression.right, ownerId, context, scope);
       return;
     case 'unary':
-      validateExpression(expression.operand, ownerId, context, local);
+      validateExpression(expression.operand, ownerId, context, scope);
       return;
-    case 'call':
+    case 'call': {
+      if (!BUILTIN_FUNCTIONS.includes(expression.function)) {
+        context.errors.push({
+          code: VALIDATION_CODES.unsupportedExpression,
+          message: `${ownerId} calls "${String(expression.function)}", which is not a built-in function`,
+          nodeId: ownerId,
+        });
+        return;
+      }
       for (const argument of expression.arguments) {
-        validateExpression(argument, ownerId, context, local);
+        validateExpression(argument, ownerId, context, scope);
+      }
+      // An aggregation over anything but numbers cannot mean what it says.
+      if (AGGREGATE_FUNCTIONS.includes(expression.function)) {
+        const argument = expression.arguments[0];
+        if (!argument) {
+          context.errors.push({
+            code: VALIDATION_CODES.invalidAggregation,
+            message: `${expression.function} in ${ownerId} needs a collection to aggregate`,
+            nodeId: ownerId,
+          });
+          return;
+        }
+        const type = inferExpressionType(argument, context.semantics, scope.types);
+        if (isNonNumericCollection(type)) {
+          context.errors.push({
+            code: VALIDATION_CODES.invalidAggregation,
+            message: `${expression.function} in ${ownerId} expects a collection of numbers but was given ${describeType(type)}`,
+            nodeId: ownerId,
+          });
+        }
       }
       return;
+    }
     case 'filter':
     case 'find': {
-      validateExpression(expression.source, ownerId, context, local);
-      const scoped = new Set(local);
-      scoped.add(expression.scopeId);
-      validateExpression(expression.predicate, ownerId, context, scoped);
+      validateExpression(expression.source, ownerId, context, scope);
+      requireCollection(expression.source, ownerId, context, scope, expression.kind);
+      validateExpression(
+        expression.predicate,
+        ownerId,
+        context,
+        iterationScope(scope, expression.scopeId, expression.source, context),
+      );
+      return;
+    }
+    case 'map': {
+      validateExpression(expression.source, ownerId, context, scope);
+      requireCollection(expression.source, ownerId, context, scope, 'map');
+      validateExpression(
+        expression.projection,
+        ownerId,
+        context,
+        iterationScope(scope, expression.scopeId, expression.source, context),
+      );
+      return;
+    }
+    case 'sort': {
+      validateExpression(expression.source, ownerId, context, scope);
+      requireCollection(expression.source, ownerId, context, scope, 'sort');
+      validateExpression(
+        expression.by,
+        ownerId,
+        context,
+        iterationScope(scope, expression.scopeId, expression.source, context),
+      );
       return;
     }
     default:
       context.errors.push({
-        code: VALIDATION_CODES.invalidExpressionRef,
-        message: `Unknown expression kind in ${ownerId}`,
+        code: VALIDATION_CODES.unsupportedExpression,
+        message: `Unknown expression kind "${(expression as { kind: string }).kind}" in ${ownerId}`,
         nodeId: ownerId,
       });
+  }
+}
+
+/** Iterating anything that is statically known not to be a collection is an error. */
+function requireCollection(
+  source: Expression,
+  ownerId: NodeId,
+  context: Context,
+  scope: Scoped,
+  what: string,
+): void {
+  const type = resolveKnownType(inferExpressionType(source, context.semantics, scope.types));
+  if (type && type.kind !== 'collection') {
+    context.errors.push({
+      code: VALIDATION_CODES.notACollection,
+      message: `${what} in ${ownerId} iterates ${describeType(type)}, which is not a collection`,
+      nodeId: ownerId,
+    });
   }
 }
 

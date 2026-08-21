@@ -333,7 +333,8 @@ export class GraphQueries {
 
   private nodesWithFieldEdge(fieldId: FieldId, kinds: readonly EdgeKind[]): AnyNode[] {
     const found = new Map<NodeId, AnyNode>();
-    for (const edge of this.graph.listEdges()) {
+    // Derived relationships, so an answer never depends on edges having been written.
+    for (const edge of this.graph.semanticEdges()) {
       if (!kinds.includes(edge.kind) || !edgeFieldIds(edge).includes(fieldId)) {
         continue;
       }

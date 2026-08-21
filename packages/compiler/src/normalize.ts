@@ -146,7 +146,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
     uiNodes,
     constraints,
     routes,
-    edges: graph.listEdges(),
+    edges: graph.semanticEdges(),
     locationTypes,
     locationRoots,
   };

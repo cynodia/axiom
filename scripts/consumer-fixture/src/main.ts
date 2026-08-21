@@ -21,6 +21,18 @@ import {
   UI_INCREMENT,
   createCounterGraph,
 } from './counter.js';
+import {
+  ACTION_RESERVE,
+  F_LINE_ID,
+  F_LINE_QUANTITY,
+  F_PART_ID,
+  F_PART_STOCK,
+  STATE_LINES,
+  STATE_PARTS,
+  STATE_SORTED,
+  STATE_TOTAL,
+  createPickingListGraph,
+} from './orders.js';
 
 function step(description: string): void {
   console.log(`  ok  ${description}`);
@@ -84,5 +96,54 @@ assert.match(page, /<!DOCTYPE html>/);
 assert.match(page, /createAxiomRuntime/);
 assert.doesNotMatch(page, /^import /m, 'the emitted page resolves no modules');
 step('the compiler emits a self-contained page');
+
+// --------------------------------------------------- collection semantics
+
+const picking = createPickingListGraph();
+const pickingValidation = validateGraph(picking);
+assert.equal(
+  pickingValidation.valid,
+  true,
+  pickingValidation.errors.map((problem) => problem.message).join('\n'),
+);
+
+const pickingHost = createMemoryHost({ path: '/' });
+const list = createAxiomRuntime({
+  ir: compileToIR(picking),
+  rootElement: pickingHost.root,
+  host: pickingHost,
+});
+list.start();
+
+assert.equal(list.getState(STATE_TOTAL), 2 * 30 + 4 * 10);
+assert.match(textOf(pickingHost.root), /Total: 100/);
+step('a projection can be summed into a derived total');
+
+assert.deepEqual(
+  (list.getState(STATE_SORTED) as Array<Record<string, string>>).map((line) => line[F_LINE_ID]),
+  ['l2', 'l1'],
+);
+step('a collection can be ordered by a projected key');
+
+const reserved = list.invokeAction(ACTION_RESERVE);
+assert.equal(reserved.ok, true, JSON.stringify(reserved.diagnostics));
+const stockOf = (partId: string): number =>
+  (list.getState(STATE_PARTS) as Array<Record<string, number>>).find(
+    (part) => (part[F_PART_ID] as unknown as string) === partId,
+  )?.[F_PART_STOCK] as number;
+assert.equal(stockOf('bolt'), 3);
+assert.equal(stockOf('nut'), 5);
+step('one action reduced the stock of every part its lines mention');
+
+// Ask for more than exists, across two lines for the same part.
+const lines = list.getState(STATE_LINES) as Array<Record<string, unknown>>;
+lines.push({ [F_LINE_ID]: 'l3', ['field_line_part']: 'bolt', [F_LINE_QUANTITY]: 9, ['field_line_price']: 30 });
+list.setState(STATE_LINES, lines);
+
+const refused = list.invokeAction(ACTION_RESERVE);
+assert.equal(refused.ok, false, 'the aggregate guard should refuse this');
+assert.equal(stockOf('bolt'), 3, 'and nothing may have moved');
+assert.equal(stockOf('nut'), 5);
+step('an aggregate guard refuses, and the whole action rolls back');
 
 console.log('\nExternal consumer smoke test passed.');

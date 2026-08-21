@@ -12,9 +12,16 @@ Every state change — from an action or from a keystroke in a form — is an ad
 validated, transactional mutation, so an agent can answer "if I change this, what exactly
 am I changing, and what does that affect?" from the graph alone.
 
+Collections are semantics too: `map`, `sum`, `sort` and `for-each` express projection,
+aggregation, aggregate invariants and atomic multi-record changes as inspectable data
+rather than as callbacks. An action either commits entirely or rolls back entirely,
+iteration included.
+
 * `doc/spec.md` — the original 0.1 vision and research goals.
 * `doc/spec2.md` — the 0.2 architecture: a domain-independent compiler and runtime.
-* `doc/spec3.md` — the 0.3 architecture: semantic mutation and addressing, implemented here.
+* `doc/spec3.md` — the 0.3 architecture: semantic mutation and addressing.
+* `doc/spec4.md` — the 0.4 architecture: collection semantics and transactional iteration,
+  implemented here.
 * `CLAUDE.md` — orientation for working in the codebase.
 
 ## Installation
@@ -40,9 +47,11 @@ node packages/cli/dist/index.js validate packages/demo/dist/issue-tracker.js --e
 node packages/cli/dist/index.js serve    packages/demo/dist/issue-tracker.js --export=createIssueTrackerGraph
 ```
 
-Two unrelated applications — an issue tracker and an inventory system — are built from
-graphs alone in `packages/demo`, and run on the same compiler and runtime without a line
-of application-specific framework code.
+Three unrelated applications — an issue tracker, an inventory system and an order system —
+are built from graphs alone in `packages/demo`, and run on the same compiler and runtime
+without a line of application-specific framework code. The order system is the 0.4
+acceptance fixture: it aggregates requested stock across order lines, refuses a
+confirmation it cannot cover, and reduces stock for every line in one transaction.
 
 ## Releasing
 

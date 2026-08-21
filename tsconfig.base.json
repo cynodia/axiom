@@ -41,6 +41,9 @@
       ],
       "@cynodia/axiom-demo/inventory": [
         "packages/demo/src/inventory.ts"
+      ],
+      "@cynodia/axiom-demo/order-system": [
+        "packages/demo/src/order-system.ts"
       ]
     },
     "declarationMap": true

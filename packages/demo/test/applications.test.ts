@@ -35,20 +35,19 @@ test('both applications are valid graphs', () => {
   }
 });
 
-test('both applications compile to a page through the same compiler', () => {
+test('every application compiles to a page through the same compiler', () => {
   const pages = demoApplications.map((application) => compileToHtml(application.createGraph()));
   for (const page of pages) {
     assert.match(page, /createAxiomRuntime/);
   }
-  const [first, second] = pages;
-  assert.notEqual(first, second, 'the pages differ only because the graphs differ');
+  assert.equal(new Set(pages).size, pages.length, 'the pages differ only because the graphs differ');
 });
 
-test('the two applications share one runtime and one compiler', () => {
+test('the applications share one runtime and one compiler', () => {
   const irs = demoApplications.map((application) => compileToIR(application.createGraph()));
   assert.deepEqual(
     irs.map((ir) => ir.id),
-    ['issue-tracker', 'inventory'],
+    ['issue-tracker', 'inventory', 'order-system'],
   );
   for (const ir of irs) {
     assert.ok(ir.routes.length > 0);
