@@ -17,7 +17,11 @@ export type Expression =
   | FilterExpression
   | FindExpression
   | MapExpression
-  | SortExpression;
+  | SortExpression
+  | EveryExpression
+  | SomeExpression
+  | FlattenExpression
+  | ConditionalExpression;
 
 export type ExpressionKind = Expression['kind'];
 
@@ -34,6 +38,10 @@ export const EXPRESSION_KINDS: readonly ExpressionKind[] = [
   'find',
   'map',
   'sort',
+  'every',
+  'some',
+  'flatten',
+  'conditional',
 ];
 
 export type LiteralPrimitive = string | number | boolean | null;
@@ -109,6 +117,7 @@ export interface UnaryExpression {
 export type BuiltinFunction =
   | 'required'
   | 'is-empty'
+  | 'non-empty'
   | 'length'
   | 'contains'
   | 'concat'
@@ -124,6 +133,7 @@ export type BuiltinFunction =
 export const BUILTIN_FUNCTIONS: readonly BuiltinFunction[] = [
   'required',
   'is-empty',
+  'non-empty',
   'length',
   'contains',
   'concat',
@@ -181,6 +191,36 @@ export interface SortExpression {
   scopeId: NodeId;
   by: Expression;
   direction?: 'asc' | 'desc';
+}
+
+/** True when every member satisfies the predicate. An empty collection satisfies it. */
+export interface EveryExpression {
+  kind: 'every';
+  source: Expression;
+  scopeId: NodeId;
+  predicate: Expression;
+}
+
+/** True when at least one member satisfies the predicate. An empty collection does not. */
+export interface SomeExpression {
+  kind: 'some';
+  source: Expression;
+  scopeId: NodeId;
+  predicate: Expression;
+}
+
+/** Collapses one level of nesting: Collection<Collection<T>> becomes Collection<T>. */
+export interface FlattenExpression {
+  kind: 'flatten';
+  source: Expression;
+}
+
+/** Chooses between two values. Both branches are expressions, never callbacks. */
+export interface ConditionalExpression {
+  kind: 'conditional';
+  condition: Expression;
+  whenTrue: Expression;
+  whenFalse: Expression;
 }
 
 export function literal(value: LiteralValue): LiteralExpression {
@@ -241,6 +281,45 @@ export function count(source: Expression): CallExpression {
   return call('count', source);
 }
 
+/** True when a value exists at all — an empty collection or string still exists. */
+export function required(value: Expression): CallExpression {
+  return call('required', value);
+}
+
+/** True when a collection or string has no members. */
+export function isEmpty(value: Expression): CallExpression {
+  return call('is-empty', value);
+}
+
+export function nonEmpty(value: Expression): CallExpression {
+  return call('non-empty', value);
+}
+
+/** The first value that exists. Only null and undefined are skipped. */
+export function coalesce(...values: Expression[]): CallExpression {
+  return call('coalesce', ...values);
+}
+
+export function every(source: Expression, scopeId: NodeId, predicate: Expression): EveryExpression {
+  return { kind: 'every', source, scopeId, predicate };
+}
+
+export function some(source: Expression, scopeId: NodeId, predicate: Expression): SomeExpression {
+  return { kind: 'some', source, scopeId, predicate };
+}
+
+export function flatten(source: Expression): FlattenExpression {
+  return { kind: 'flatten', source };
+}
+
+export function conditional(
+  condition: Expression,
+  whenTrue: Expression,
+  whenFalse: Expression,
+): ConditionalExpression {
+  return { kind: 'conditional', condition, whenTrue, whenFalse };
+}
+
 /** Visits every sub-expression, parents before children. */
 export function walkExpression(expression: Expression, visit: (node: Expression) => void): void {
   visit(expression);
@@ -278,8 +357,29 @@ export function walkExpression(expression: Expression, visit: (node: Expression)
       walkExpression(expression.source, visit);
       walkExpression(expression.by, visit);
       return;
+    case 'every':
+    case 'some':
+      walkExpression(expression.source, visit);
+      walkExpression(expression.predicate, visit);
+      return;
+    case 'flatten':
+      walkExpression(expression.source, visit);
+      return;
+    case 'conditional':
+      walkExpression(expression.condition, visit);
+      walkExpression(expression.whenTrue, visit);
+      walkExpression(expression.whenFalse, visit);
+      return;
     default:
   }
+}
+
+/**
+ * Field ids a constructed record assigns. Only the record's own entries count: the
+ * expressions that compute those values are reads, not writes.
+ */
+export function constructedFieldIds(expression: Expression): FieldId[] {
+  return expression.kind === 'object' ? expression.entries.map((entry) => entry.fieldId) : [];
 }
 
 /** Field ids an expression reads, including nested sources and constructed records. */

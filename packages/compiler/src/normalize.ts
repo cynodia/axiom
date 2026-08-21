@@ -1,4 +1,5 @@
 import {
+  actionGuards,
   inferLocationType,
   locationRootStateId,
   semanticContextFromGraph,
@@ -16,6 +17,7 @@ import type {
   RouteDef,
   RouteSegment,
   StateDef,
+  TransitionConstraintDef,
   TypeRef,
   UINode,
   ValidationIssue,
@@ -84,6 +86,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
   const entities: EntityDef[] = [];
   const states: StateDef[] = [];
   const constraints: ConstraintDef[] = [];
+  const transitionConstraints: TransitionConstraintDef[] = [];
   const routes: CompiledRoute[] = [];
 
   for (const node of graph.listNodes()) {
@@ -99,11 +102,22 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
       case 'state':
         states.push(node);
         break;
-      case 'action':
-        actions[node.id] = node;
+      case 'action': {
+        // Guards are authoring sugar: the IR carries conditions and failures aligned.
+        const guards = actionGuards(node);
+        actions[node.id] = {
+          ...node,
+          preconditions: guards.map((guard) => guard.condition),
+          failureModes: guards.map((guard) => guard.failureMode ?? { code: 'precondition-failed' }),
+        };
+        nodes[node.id] = actions[node.id];
         break;
+      }
       case 'constraint':
         constraints.push(node);
+        break;
+      case 'transition-constraint':
+        transitionConstraints.push(node);
         break;
       case 'route':
         routes.push(compileRoute(node));
@@ -145,6 +159,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
     actions,
     uiNodes,
     constraints,
+    transitionConstraints,
     routes,
     edges: graph.semanticEdges(),
     locationTypes,

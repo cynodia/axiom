@@ -71,9 +71,17 @@ export interface FailureMode {
   message?: string;
 }
 
+/** A condition together with the failure it reports, so the two cannot drift apart. */
+export interface ActionGuard {
+  condition: Expression;
+  failureMode?: FailureMode;
+}
+
 export interface ActionDef extends NodeBase {
   kind: 'action';
   parameters?: ActionParameter[];
+  /** Preferred over the parallel `preconditions` and `failureModes` arrays. */
+  guards?: ActionGuard[];
   preconditions?: Expression[];
   operations: Operation[];
   postconditions?: Expression[];
@@ -82,6 +90,20 @@ export interface ActionDef extends NodeBase {
   destructive?: boolean;
   requiresConfirmation?: boolean;
   confirmationMessage?: string;
+}
+
+/**
+ * The conditions an action checks, however they were written. `guards` pairs each
+ * condition with its failure; the older parallel arrays are matched by position.
+ */
+export function actionGuards(action: ActionDef): ActionGuard[] {
+  if (action.guards && action.guards.length > 0) {
+    return action.guards;
+  }
+  return (action.preconditions ?? []).map((condition, index) => ({
+    condition,
+    ...(action.failureModes?.[index] ? { failureMode: action.failureModes[index] } : {}),
+  }));
 }
 
 export type Operation =
@@ -197,6 +219,30 @@ export interface ConstraintDef extends NodeBase {
   expression: Expression;
   /** When set, the expression is evaluated once per instance of this entity. */
   entityId?: NodeId;
+  severity?: 'error' | 'warning';
+  message?: string;
+}
+
+/**
+ * A rule about how state may change, rather than about what state may be.
+ *
+ * An ordinary constraint judges the proposed state on its own; a transition constraint
+ * sees the instance as it was when the transaction began *and* as the transaction
+ * proposes it. That is what lets a rule like "once confirmed, an order may not change"
+ * hold no matter which path attempts the write — an action, an input binding, an
+ * iteration, or something added later.
+ *
+ * `previousScopeId` and `proposedScopeId` bind those two instances for the expression.
+ * When the instance is being removed, the proposed scope is bound to nothing.
+ */
+export interface TransitionConstraintDef extends NodeBase {
+  kind: 'transition-constraint';
+  /** The entity whose transitions are governed. It must have an identity field. */
+  entityId: NodeId;
+  previousScopeId: NodeId;
+  proposedScopeId: NodeId;
+  /** Must hold for every governed transition. */
+  expression: Expression;
   severity?: 'error' | 'warning';
   message?: string;
 }

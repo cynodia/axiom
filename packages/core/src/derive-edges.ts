@@ -1,4 +1,4 @@
-import { expressionFieldIds, walkExpression } from './expressions.js';
+import { constructedFieldIds, expressionFieldIds, walkExpression } from './expressions.js';
 import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
 import type {
@@ -82,6 +82,23 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
     }
   }
 
+  // Which states can hold instances of an entity, including nested ones. An entity-scoped
+  // constraint reads its fields wherever those instances actually live.
+  const entities = new Map<NodeId, EntityDef>(
+    nodes.filter((node): node is EntityDef => node.kind === 'entity').map((node) => [node.id, node]),
+  );
+  const statesByEntity = new Map<NodeId, NodeId[]>();
+  for (const node of nodes) {
+    if (node.kind !== 'state' || node.draft || node.derivation) {
+      continue;
+    }
+    for (const entityId of reachableEntities(node.valueType, entities)) {
+      statesByEntity.set(entityId, [...(statesByEntity.get(entityId) ?? []), node.id]);
+    }
+  }
+  const entityScope = (entityId: NodeId): ScopeBindings =>
+    new Map([...rootScope, [entityId, statesByEntity.get(entityId) ?? []]]);
+
   const link = (from: NodeId, to: NodeId, kind: EdgeKind, fieldIds: readonly FieldId[] = []): void => {
     if (from === to || !known.has(from) || !known.has(to)) {
       return;
@@ -141,8 +158,18 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
         if (node.entityId) {
           link(node.id, node.entityId, 'constrains', expressionFieldIds(node.expression));
         }
-        reads(node.id, node.expression, rootScope);
+        reads(node.id, node.expression, node.entityId ? entityScope(node.entityId) : rootScope);
         break;
+      case 'transition-constraint': {
+        link(node.id, node.entityId, 'constrains', expressionFieldIds(node.expression));
+        const holders = statesByEntity.get(node.entityId) ?? [];
+        reads(
+          node.id,
+          node.expression,
+          new Map([...rootScope, [node.previousScopeId, holders], [node.proposedScopeId, holders]]),
+        );
+        break;
+      }
       case 'route':
         link(node.id, node.viewId, 'routes-to');
         break;
@@ -162,7 +189,11 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
   }));
 }
 
-/** The states an expression ultimately draws its members from. */
+/**
+ * The states an expression ultimately draws its members from. Following `field` and calls
+ * matters: a collection reached as `coalesce(field(ref(state), lines), [])` still comes
+ * from that state, and its members' fields are still reads of it.
+ */
 function statesOf(expression: Expression, scope: ScopeBindings, states: ReadonlySet<NodeId>): NodeId[] {
   switch (expression.kind) {
     case 'ref': {
@@ -176,10 +207,42 @@ function statesOf(expression: Expression, scope: ScopeBindings, states: Readonly
     case 'find':
     case 'sort':
     case 'map':
+    case 'flatten':
       return statesOf(expression.source, scope, states);
+    case 'conditional':
+      return [
+        ...new Set([
+          ...statesOf(expression.whenTrue, scope, states),
+          ...statesOf(expression.whenFalse, scope, states),
+        ]),
+      ];
+    case 'field':
+      return statesOf(expression.source, scope, states);
+    case 'call':
+      return [...new Set(expression.arguments.flatMap((argument) => statesOf(argument, scope, states)))];
     default:
       return [];
   }
+}
+
+/** Entities reachable from a type, following entity fields as well as collections. */
+function reachableEntities(
+  type: TypeRef,
+  entities: ReadonlyMap<NodeId, EntityDef>,
+  seen: Set<NodeId> = new Set(),
+): NodeId[] {
+  const found: NodeId[] = [];
+  for (const entityId of entityIdsIn(type)) {
+    if (seen.has(entityId)) {
+      continue;
+    }
+    seen.add(entityId);
+    found.push(entityId);
+    for (const field of entities.get(entityId)?.fields ?? []) {
+      found.push(...reachableEntities(field.valueType, entities, seen));
+    }
+  }
+  return found;
 }
 
 function bind(scope: ScopeBindings, id: NodeId, targets: readonly NodeId[]): ScopeBindings {
@@ -239,7 +302,9 @@ function collectReads(
     case 'filter':
     case 'find':
     case 'map':
-    case 'sort': {
+    case 'sort':
+    case 'every':
+    case 'some': {
       collectReads(expression.source, scope, states, found);
       const inner = bind(scope, expression.scopeId, statesOf(expression.source, scope, states));
       const body =
@@ -251,6 +316,14 @@ function collectReads(
       collectReads(body, inner, states, found);
       return found;
     }
+    case 'flatten':
+      collectReads(expression.source, scope, states, found);
+      return found;
+    case 'conditional':
+      collectReads(expression.condition, scope, states, found);
+      collectReads(expression.whenTrue, scope, states, found);
+      collectReads(expression.whenFalse, scope, states, found);
+      return found;
     default:
       return found;
   }
@@ -304,8 +377,9 @@ function linkOperations(
         linker.reads(actionId, operation.value, scope);
         break;
       case 'insert':
-        // Inserting a constructed record writes every field the record declares.
-        linker.writes(actionId, operation.target, scope, 'writes', expressionFieldIds(operation.value));
+        // A constructed record writes the fields it declares. Fields consulted while
+        // computing those values are reads, and must not be reported as writes.
+        linker.writes(actionId, operation.target, scope, 'writes', constructedFieldIds(operation.value));
         linker.reads(actionId, operation.value, scope);
         break;
       case 'remove':

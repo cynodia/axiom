@@ -32,10 +32,14 @@ import {
 import type {
   ActionDef,
   ConstraintDef,
+  ContainerNode,
   EntityDef,
+  InputNode,
+  RepeatNode,
   RouteDef,
   StateDef,
   TextNode,
+  TransitionConstraintDef,
   ViewNode,
 } from '@cynodia/axiom';
 
@@ -54,8 +58,13 @@ export const STATE_TOTAL = nodeId('state_total');
 export const STATE_SORTED = nodeId('state_sorted');
 export const ACTION_RESERVE = nodeId('action_reserve');
 export const CONSTRAINT_STOCK = nodeId('constraint_stock');
+export const TRANSITION_STOCK_ONLY_FALLS = nodeId('transition_stock_only_falls');
+export const UI_STOCK_INPUT = nodeId('ui_stock_input');
+export const UI_PARTS_REPEAT = nodeId('ui_parts_repeat');
 
 const SCOPE = nodeId('scope_line');
+const PREVIOUS_PART = nodeId('scope_previous_part');
+const PROPOSED_PART = nodeId('scope_proposed_part');
 const PART_SCOPE = nodeId('scope_part');
 const LOOKUP = nodeId('scope_lookup');
 
@@ -188,6 +197,25 @@ export function createPickingListGraph(): ApplicationGraph {
     ],
   });
 
+  /**
+   * A rule about how stock may change, not about what stock may be. It holds whatever
+   * writes it — including the input below, which is bound straight into canonical state.
+   */
+  graph.addNode<TransitionConstraintDef>({
+    id: TRANSITION_STOCK_ONLY_FALLS,
+    kind: 'transition-constraint',
+    name: 'Stock is only ever reduced here',
+    entityId: ENTITY_PART,
+    previousScopeId: PREVIOUS_PART,
+    proposedScopeId: PROPOSED_PART,
+    message: 'Stock can only be reduced from this screen.',
+    expression: binary(
+      'lte',
+      field(ref(PROPOSED_PART), F_PART_STOCK),
+      field(ref(PREVIOUS_PART), F_PART_STOCK),
+    ),
+  });
+
   graph.addNode<ConstraintDef>({
     id: CONSTRAINT_STOCK,
     kind: 'constraint',
@@ -197,6 +225,33 @@ export function createPickingListGraph(): ApplicationGraph {
     expression: binary('gte', field(ref(ENTITY_PART), F_PART_STOCK), literal(0)),
   });
 
+  // An input bound directly to canonical stock — nothing hides it, the rule refuses it.
+  graph.addNode<InputNode>({
+    id: UI_STOCK_INPUT,
+    kind: 'input',
+    label: 'Stock',
+    binding: {
+      location: fieldLocation(
+        itemLocation(
+          stateLocation(STATE_PARTS),
+          identitySelector(F_PART_ID, field(ref(UI_PARTS_REPEAT), F_PART_ID)),
+        ),
+        F_PART_STOCK,
+      ),
+    },
+  });
+  graph.addNode<ContainerNode>({
+    id: nodeId('ui_part_row'),
+    kind: 'container',
+    children: [UI_STOCK_INPUT],
+  });
+  graph.addNode<RepeatNode>({
+    id: UI_PARTS_REPEAT,
+    kind: 'repeat',
+    source: ref(STATE_PARTS),
+    templateId: nodeId('ui_part_row'),
+  });
+
   const display = nodeId('ui_total');
   const view = nodeId('ui_view');
   graph.addNode<TextNode>({
@@ -204,7 +259,7 @@ export function createPickingListGraph(): ApplicationGraph {
     kind: 'text',
     value: call('concat', literal('Total: '), call('to-string', ref(STATE_TOTAL))),
   });
-  graph.addNode<ViewNode>({ id: view, kind: 'view', children: [display] });
+  graph.addNode<ViewNode>({ id: view, kind: 'view', children: [display, UI_PARTS_REPEAT] });
   graph.addNode<RouteDef>({ id: nodeId('route_root'), kind: 'route', path: '/', viewId: view });
 
   return graph;

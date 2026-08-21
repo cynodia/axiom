@@ -12,8 +12,10 @@ turn it into a working browser application whose generated JavaScript nobody rea
 * `doc/spec.md` — the 0.1 vision, research goals and metrics.
 * `doc/spec2.md` — the 0.2 architecture: domain-independent compiler and runtime.
 * `doc/spec3.md` — the 0.3 architecture: semantic mutation and addressing.
-* `doc/spec4.md` — the **0.4 architecture: collection semantics and transactional
-  iteration**. Together with spec2 and spec3 this is the authority on design decisions.
+* `doc/spec4.md` — the 0.4 architecture: collection semantics and transactional iteration.
+* `doc/spec4.1.md` — the **0.4.1 hardening release: mutation-path-independent rules,
+  presence semantics, strict collection nulls and trustworthy dependency analysis**.
+  Together with spec2–spec4 this is the authority on design decisions.
 
 Two rules govern almost every decision:
 
@@ -33,6 +35,10 @@ Two rules govern almost every decision:
 > **Expressive power arrives as structure** (spec4 §41) — when Axiom gains capability, it
 > gains an inspectable semantic node, never a callback. No `formatter: fn`, no
 > `validator: fn`, no stored closures. The graph stays serializable and analyzable.
+
+> **Rules bind the state, not the path** (spec4.1 §2) — if the graph says a business rule
+> holds, every governed write path must be unable to violate it. Correctness may never
+> depend on an author remembering "do not bind an input to that location".
 
 Both are enforced by tests, not convention: `packages/core/test/architecture.test.ts`
 scans framework sources for application vocabulary, and `packages/runtime/test/store.test.ts`
@@ -89,7 +95,15 @@ marked `private` and never ship. Everything is MIT, copyright AskTech AS.
 npm run release:prepare        # clean, build, test, pack, verify tarballs, consumer test
 npm run release:publish:dry-run
 npm run release:publish        # deliberate and manual; CI never publishes
+npm run release:dist-tag       # point "latest" at this release
 ```
+
+**npm owns `latest` whether you want it or not.** The first publish of a new package
+claims `latest` regardless of `--tag`, and npm will not let it be deleted. So `latest`
+exists, and every subsequent `--tag alpha` publish leaves it pointing at whichever version
+was published first — a plain `npm install @cynodia/axiom` then silently hands out a stale
+release. After publishing, run `npm run release:dist-tag` to move it. Check with
+`npm view @cynodia/axiom dist-tags` rather than assuming.
 
 `release:prepare` ends with `scripts/consumer-test.mjs`, which builds a project in a temp
 directory from the tarballs alone — no workspace links, no path aliases, no relative
@@ -99,14 +113,15 @@ use it. `release:publish` additionally requires a clean git tree (`--allow-dirty
 override), `npm whoami` to be `cynodia`, and a pre-release version, and publishes the
 verified tarballs under the `alpha` dist-tag — never `latest`.
 
-**Two-factor authentication.** The npm account has 2FA on publish, so each `npm publish`
-needs a one-time password. The script prompts for one, or takes `--otp=<code>`. A code
-lasts about 30 seconds and five packages are published in sequence, so it can expire
-mid-release: on a failure the script asks for a fresh code and retries that package, and
-any version already on the registry is skipped, which makes
-`npm run release:publish -- --skip-prepare` safe to re-run after a partial release.
-Automation can instead authenticate with a granular access token that has "bypass 2FA"
-enabled — never commit that token, or any credential, including to `.npmrc`.
+**Two-factor authentication.** The npm account has 2FA, so publishing *and* moving a
+dist-tag each need a one-time password. `scripts/otp.mjs` handles this for both: it
+prompts, or takes `--otp=<code>`, and because a code lasts about 30 seconds while five
+packages go out in sequence, it asks for a fresh one and retries when a command is
+rejected. Both scripts skip work already done — a version already on the registry, a tag
+already pointing at this release — so re-running after a partial failure is safe.
+These scripts need a real terminal for the prompt to appear. Automation should instead
+authenticate with a granular access token that has "bypass 2FA" enabled — never commit
+that token, or any credential, including to `.npmrc`.
 
 ## Working agreements
 
@@ -150,12 +165,26 @@ optional | enum` (`core/type-ref.ts`), with builders `primitiveType()`, `entityT
 `collectionType()`, `optionalType()`, `enumType()`.
 
 **Expressions are trees, not text** (`core/expressions.ts`): `literal`, `ref`, `field`,
-`object`, `binary`, `unary`, `call`, `filter`, `find`, `map`, `sort`. Every kind has a
+`object`, `binary`, `unary`, `call`, `filter`, `find`, `map`, `sort`, `every`, `some`,
+`flatten`, `conditional`. Every kind has a
 builder — never hand-write the discriminated union. A `ref` resolves an **id** against the
 scope chain, in order: action parameters → iteration scopes → route parameters → state.
 The iteration scope for a `repeat` is the repeat node's own id; for `filter`, `find`,
 `map` and `sort` it is the expression's `scopeId`. Evaluation is pure: it never changes
 state.
+
+**Presence is not emptiness.** `required(x)` is true for `[]`, `''`, `0` and `false`, and
+false only for null and undefined. Emptiness is `is-empty` / `non-empty`, and `coalesce`
+falls back only on absence — so falling back to an empty collection works. Field-level
+`required: true` likewise means present, not non-blank; express "must not be blank" as a
+constraint.
+
+**Collection operators are strict.** `null` is a missing collection and fails the
+evaluation; `[]` is an empty collection and behaves normally. Nothing returns a plausible
+value alongside a failure diagnostic — a failing expression throws
+`ExpressionEvaluationError`, which the runtime catches at each boundary (derivation,
+precondition, constraint, operation, render) and turns into a diagnostic. A constraint that
+cannot be evaluated counts as violated, never as satisfied.
 
 **Collections project, aggregate and order.** `map(source, scopeId, projection)` takes
 `Collection<A>` to `Collection<B>`; `sum` reduces `Collection<number>` to a number (an
@@ -177,17 +206,19 @@ inside it (`locationExpressions()`) are read dependencies, and the fields it wri
 (`view`, `container`, `text`, `repeat`, `field-display`, `form`, `input`, `button`,
 `conditional`). All of them live in the same graph and are discriminated by `kind`.
 
-**Behaviour is data.** An `ActionDef` has parameters, preconditions, operations,
-postconditions and failure modes. Operations are `set`, `insert`, `remove` (the three
+**Behaviour is data.** An `ActionDef` has parameters, guards (a condition paired with the
+failure it reports — prefer these to the older positional `preconditions`/`failureModes`
+arrays, which the compiler normalizes into), operations, postconditions and failure modes. Operations are `set`, `insert`, `remove` (the three
 mutations, each addressing a `Location`), `for-each`, plus `invoke`, `navigate` and
 `native`. An action runs as a transaction: mutations apply, constraints are then evaluated
 against the **proposed state**, and **every mutation rolls back together** if anything
 fails. That is public contract now (spec4 §36), not incidental behaviour.
 
-**`for-each` iterates without opening a transaction of its own.** Its nested operations
-are mutations only, they run in the action's transaction, and its members are read once
-before any of them are mutated. A failure in the seventeenth iteration unwinds the first
-sixteen with it. Locations inside the iteration may use `ref(scopeId)` to address the
+**`for-each` iterates without opening a transaction of its own.** Its nested operations are
+mutations only, they run in the action's transaction, and the *collection* is read once
+before any member is mutated. Each iteration otherwise reads the latest provisional state,
+so two members touching the same record debit it twice (5 → 2 → −1) and the invariant then
+catches the total. A failure in the seventeenth iteration unwinds the first sixteen. Locations inside the iteration may use `ref(scopeId)` to address the
 canonical record the current member points at — which is how one action reduces stock
 across many records without ever aliasing an object.
 
@@ -208,6 +239,15 @@ incomplete by definition while it is being filled in — the action that commits
 it has to be valid. This is spec3 §38's two editing patterns made enforceable rather than
 advisory, and which one an application uses is visible in the graph: look at what the
 input's location is rooted in.
+
+**Reads and writes are attributed separately.** A `set` writes the fields its *target*
+location names and reads the fields its *value* expression consults; an `insert` writes the
+fields the constructed record declares, not the fields read to compute them. Reads follow
+iteration scopes and derived collections, so projecting a field inside a `map` over
+`coalesce(field(ref(state), lines), [])` is still recorded as a read of that field of that
+state. `getMutationImpact` reports `analysisComplete: false` with `analysisGaps` when
+something — a native operation with undeclared effects — cannot be analyzed, rather than
+presenting a partial answer as exhaustive.
 
 **Edges cannot go stale.** `graph.semanticEdges()` and every `getEdges` query derive
 relationships from the current nodes on demand, cached against a revision counter that
@@ -235,11 +275,19 @@ id**, so data keyed by field *name* is caught (`INITIAL_VALUE_UNKNOWN_FIELD` plu
 empty UI. Diagnostics carry a `path` such as `state_orders[2].field_lines[0]` and
 structured `details`.
 
-**Three layers of correctness**, don't confuse them:
+**Four layers of correctness**, don't confuse them:
 1. `validateGraph` — is the graph structurally sound? (authoring time)
 2. Schema conformance — do instances satisfy `required` and their `TypeRef`? (runtime)
-3. `ConstraintDef` — declared invariants, evaluated per instance of `entityId` with that
+3. `ConstraintDef` — is this state allowed? Evaluated per instance of `entityId` with that
    instance bound to the entity's id. (runtime)
+4. `TransitionConstraintDef` — is this *change* allowed? Evaluated with the instance as it
+   was at transaction entry bound to `previousScopeId` and as proposed bound to
+   `proposedScopeId`. A removed instance has a proposed value of nothing. (runtime)
+
+Transition rules are what make a business rule hold on **every governed path** — actions,
+`for-each`, and input bindings alike. `hydrateState` is deliberately *not* governed: it is
+an administrative facility for hosts, tests and seeding, and is named so that it cannot be
+mistaken for a semantic write.
 
 Layers 2 and 3 apply to **every canonical occurrence** of an entity, found by walking
 state values against their declared types. An entity nested inside a collection inside
@@ -285,7 +333,9 @@ surrounding transaction settles. Rejected attempts stay in the log as `rolled-ba
 Only the outermost transaction decides an outcome; a nested one shares its parent's fate —
 so the log never suggests that early iterations of a failed `for-each` committed.
 
-**Diagnostics are structured.** `RUNTIME_DIAGNOSTIC_CODES` is public vocabulary; a
+**Diagnostics are structured.** `RUNTIME_DIAGNOSTIC_CODES` is public vocabulary — including
+`TRANSITION_CONSTRAINT_VIOLATION`, which carries the rule, the entity, and the previous and
+proposed values, and `details.source` naming the mutation path; a
 `RuntimeDiagnostic` carries `code`, `severity`, and where relevant `actionId`,
 `constraintId`, `stateId`, `transactionId` and `details`. `invokeAction` returns the
 diagnostics **of that invocation** — no diffing global history — while `diagnostics()` and
@@ -353,8 +403,9 @@ a `HostEnvironment`, so it can be driven headlessly without a browser or jsdom.
   validates and does nothing). `memory` and `local-storage` work.
 - **Type inference is deliberately partial** (spec3 §22): it rejects obvious mismatches and
   stays silent wherever a type depends on an iteration scope.
-- **No conditional expression.** Applications express a branch with two actions or a
-  `conditional` UI node.
+- **Iteration scopes are ordinary `NodeId`s**, not a distinct branded type. Misuse is
+  caught by validation instead: a scope may not shadow an enclosing one, and may not take
+  the id of a graph node.
 - **No typed handles or higher-level authoring API yet** (spec4 §21–§23), and no semantic
   value formatting (§24). Graphs are still built by calling `addNode` with explicit ids.
 - **Change sets are in memory** and per `AgentAPI` instance. There is no semantic version

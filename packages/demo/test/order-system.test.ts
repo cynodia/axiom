@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validateGraph } from '@cynodia/axiom-core';
+import { fieldLocation, identitySelector, itemLocation, stateLocation, validateGraph } from '@cynodia/axiom-core';
+import { AgentAPI } from '@cynodia/axiom-agent-api';
 import type { ApplicationGraph, NodeId } from '@cynodia/axiom-core';
 import { compileToIR } from '@cynodia/axiom-compiler';
-import { RUNTIME_DIAGNOSTIC_CODES, createAxiomRuntime, createMemoryHost, textOf } from '@cynodia/axiom-runtime';
+import {
+  RUNTIME_DIAGNOSTIC_CODES,
+  createAxiomRuntime,
+  createMemoryHost,
+  findAll,
+  textOf,
+} from '@cynodia/axiom-runtime';
 import type { AxiomRuntime } from '@cynodia/axiom-runtime';
 import { createOrderSystemGraph, orderSystemIds as ids } from '@cynodia/axiom-demo/order-system';
 
@@ -33,12 +40,12 @@ function setStock(app: AxiomRuntime, productId: string, stock: number): void {
   const product = products.find((candidate) => candidate[ids.F_PRODUCT_ID] === productId);
   assert.ok(product);
   product[ids.F_PRODUCT_STOCK] = stock;
-  app.setState(ids.STATE_PRODUCTS, products);
+  app.hydrateState(ids.STATE_PRODUCTS, products);
 }
 
 function addLine(app: AxiomRuntime, productId: string, quantity: number) {
   const draft = app.getState(ids.STATE_DRAFT_LINE) as Record_;
-  app.setState(ids.STATE_DRAFT_LINE, {
+  app.hydrateState(ids.STATE_DRAFT_LINE, {
     ...draft,
     [ids.F_LINE_PRODUCT]: productId,
     [ids.F_LINE_QUANTITY]: quantity,
@@ -142,7 +149,7 @@ test('a confirmed order keeps the price it was placed at', () => {
 
   const products = app.getState(ids.STATE_PRODUCTS) as Record_[];
   products[0][ids.F_PRODUCT_PRICE] = 150;
-  app.setState(ids.STATE_PRODUCTS, products);
+  app.hydrateState(ids.STATE_PRODUCTS, products);
 
   assert.equal(app.getState(ids.STATE_ORDER_TOTAL), 200, 'history is a snapshot, not a live lookup');
 });
@@ -162,7 +169,7 @@ test('a confirmed order refuses every change, and changes nothing when it does',
     false,
     'cannot remove a line',
   );
-  app.setState(ids.STATE_DRAFT_CUSTOMER, 'customer-2');
+  app.hydrateState(ids.STATE_DRAFT_CUSTOMER, 'customer-2');
   assert.equal(app.invokeAction(ids.ACTION_SET_CUSTOMER).ok, false, 'cannot change the customer');
   assert.equal(app.invokeAction(ids.ACTION_CONFIRM_ORDER).ok, false, 'cannot confirm twice');
 
@@ -224,4 +231,152 @@ test('the line form drives the whole flow through the UI', () => {
 
   assert.equal(order(app)[ids.F_ORDER_STATUS], 'confirmed');
   assert.equal(stockOf(app, 'product-a'), 8);
+});
+
+/** Section 43 — a direct input into confirmed state must be refused by the framework. */
+test('an input bound straight into a confirmed order is rejected', () => {
+  const { app, host } = run();
+  addLine(app, 'product-a', 2);
+  assert.equal(app.invokeAction(ids.ACTION_CONFIRM_ORDER).ok, true);
+
+  const control = findAll(
+    host.root,
+    (element) => element.getAttribute('data-node') === ids.UI_LINE_QUANTITY && element.tagName !== 'label',
+  )[0];
+  assert.ok(control, 'the quantity input is rendered — nothing is hidden');
+
+  control.value = '7';
+  control.dispatch('input');
+
+  assert.equal(linesOf(app)[0][ids.F_LINE_QUANTITY], 2, 'the write did not land');
+  const rejection = app
+    .diagnostics()
+    .find((diagnostic) => diagnostic.code === RUNTIME_DIAGNOSTIC_CODES.TRANSITION_CONSTRAINT_VIOLATION);
+  assert.ok(rejection, 'and it was refused as a transition, not as a value problem');
+  assert.equal(rejection.details?.entityId, ids.ENTITY_ORDER);
+  assert.equal(rejection.details?.source, 'input');
+  assert.equal(app.getMutationLog().at(-1)?.outcome, 'rolled-back');
+});
+
+/** Section 45 — the same input on a draft order still works. */
+test('the same input works while the order is a draft', () => {
+  const { app, host } = run();
+  addLine(app, 'product-a', 2);
+
+  const control = findAll(
+    host.root,
+    (element) => element.getAttribute('data-node') === ids.UI_LINE_QUANTITY && element.tagName !== 'label',
+  )[0];
+  assert.ok(control);
+  control.value = '5';
+  control.dispatch('input');
+
+  assert.equal(linesOf(app)[0][ids.F_LINE_QUANTITY], 5, 'the rule is about transitions, not read-only fields');
+});
+
+/** Section 44 — the action path stays closed too. */
+test('a confirmed order refuses changes through actions as well as inputs', () => {
+  const { app } = run();
+  addLine(app, 'product-a', 1);
+  app.invokeAction(ids.ACTION_CONFIRM_ORDER);
+  const before = JSON.stringify(app.getState(ids.STATE_ORDERS));
+
+  assert.equal(addLine(app, 'product-b', 1).ok, false);
+  assert.equal(JSON.stringify(app.getState(ids.STATE_ORDERS)), before);
+});
+
+/** Section 49 — each iteration sees what the previous ones proposed. */
+test('an iteration reads the provisional state the previous iterations left', () => {
+  const { app } = run();
+  setStock(app, 'product-a', 5);
+  addLine(app, 'product-a', 3);
+  addLine(app, 'product-a', 1);
+
+  assert.equal(app.invokeAction(ids.ACTION_CONFIRM_ORDER).ok, true);
+
+  const stockWrites = app
+    .getMutationLog()
+    .filter((entry) => entry.source === 'action' && entry.description.endsWith(String(ids.F_PRODUCT_STOCK)));
+  assert.deepEqual(
+    stockWrites.map((entry) => [entry.oldValue, entry.newValue]),
+    [
+      [5, 2],
+      [2, 1],
+    ],
+    'the second iteration debits the value the first one left, not the value it started from',
+  );
+  assert.equal(stockOf(app, 'product-a'), 1);
+});
+
+test('the same sequence rolls back completely when it ends below zero', () => {
+  const { app } = run();
+  setStock(app, 'product-a', 5);
+  addLine(app, 'product-a', 3);
+  addLine(app, 'product-a', 3);
+
+  // The aggregate guard refuses first; without it the invariant would still catch it.
+  assert.equal(app.invokeAction(ids.ACTION_CONFIRM_ORDER).ok, false);
+  assert.equal(stockOf(app, 'product-a'), 5);
+  assert.equal(order(app)[ids.F_ORDER_STATUS], 'draft');
+});
+
+// ------------------------------------------------- agent dependency answers
+
+/** Section 25. */
+test('every semantic consumer of a line quantity is discoverable', () => {
+  const agent = new AgentAPI(createOrderSystemGraph());
+  const readers = agent.getFieldReaders(ids.F_LINE_QUANTITY).map((node) => node.name ?? node.id);
+
+  assert.ok(readers.includes('currentOrderTotal'), 'the order total projects it');
+  assert.ok(readers.includes('confirmOrder'), 'the aggregate stock check sums it');
+  assert.ok(readers.includes('A line quantity is always positive'), 'the constraint validates it');
+  assert.ok(readers.some((name) => String(name).startsWith('ui_')), 'the UI shows it');
+});
+
+/** Section 26. */
+test('reading a price to copy it is not reported as writing it', () => {
+  const agent = new AgentAPI(createOrderSystemGraph());
+
+  assert.deepEqual(
+    agent.getFieldWriters(ids.F_PRODUCT_PRICE).map((node) => node.name ?? node.id),
+    [],
+    'nothing writes Product.unitPrice',
+  );
+  assert.deepEqual(
+    agent.getFieldReaders(ids.F_PRODUCT_PRICE).map((node) => node.name ?? node.id),
+    ['addLine'],
+    'but adding a line reads it, to capture the price',
+  );
+  assert.deepEqual(
+    agent.getFieldWriters(ids.F_LINE_UNIT_PRICE).map((node) => node.name ?? node.id),
+    ['addLine'],
+    'and writes the captured price onto the line',
+  );
+});
+
+/** Section 33 — the rules protecting a location are answerable. */
+test('an agent can ask what protects a location', () => {
+  const agent = new AgentAPI(createOrderSystemGraph());
+  const rules = agent.getRulesProtecting(
+    fieldLocation(
+      itemLocation(
+        stateLocation(ids.STATE_ORDERS),
+        identitySelector(ids.F_ORDER_ID, { kind: 'literal', value: 'order-1' }),
+      ),
+      ids.F_ORDER_STATUS,
+    ),
+  );
+
+  assert.deepEqual(
+    rules.transitionConstraints.map((constraint) => constraint.id),
+    [ids.TRANSITION_ORDER_SEALED],
+  );
+});
+
+test('an agent is told when dependency analysis is incomplete', () => {
+  const agent = new AgentAPI(createOrderSystemGraph());
+  const impact = agent.getMutationImpact(stateLocation(ids.STATE_PRODUCTS));
+
+  assert.equal(impact.analysisComplete, true, 'the order system has no unanalyzable operations');
+  assert.deepEqual(impact.analysisGaps, []);
 });

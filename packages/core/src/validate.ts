@@ -4,7 +4,7 @@ import type { FieldId, NodeId } from './ids.js';
 import { VALIDATION_CODES } from './diagnostics.js';
 import type { ValidationIssue, ValidationResult } from './diagnostics.js';
 import type { LiteralValue } from './nodes.js';
-import { EDGE_KINDS, isMutationOperation } from './nodes.js';
+import { EDGE_KINDS, actionGuards, isMutationOperation } from './nodes.js';
 import type {
   ActionDef,
   ConstraintDef,
@@ -12,7 +12,9 @@ import type {
   Operation,
   RouteDef,
   StateDef,
+  TransitionConstraintDef,
 } from './nodes.js';
+import { entityType } from './type-ref.js';
 import type { TypeRef } from './type-ref.js';
 import { isUINode, uiChildIds } from './ui.js';
 import type { UINode } from './ui.js';
@@ -138,6 +140,9 @@ function validateNode(node: AnyNode, context: Context): void {
       return;
     case 'constraint':
       validateConstraint(node, context);
+      return;
+    case 'transition-constraint':
+      validateTransitionConstraint(node, context);
       return;
     case 'route':
       validateRoute(node, context);
@@ -309,8 +314,15 @@ function validateAction(action: ActionDef, context: Context): void {
       local.types.set(parameter.id, parameter.valueType);
     }
   }
-  for (const precondition of action.preconditions ?? []) {
-    validateExpression(precondition, action.id, context, local);
+  if (action.guards?.length && action.preconditions?.length) {
+    context.errors.push({
+      code: VALIDATION_CODES.unsupportedOperation,
+      message: `Action ${action.id} declares both guards and preconditions; use guards alone`,
+      nodeId: action.id,
+    });
+  }
+  for (const guard of actionGuards(action)) {
+    validateExpression(guard.condition, action.id, context, local);
   }
   for (const postcondition of action.postconditions ?? []) {
     validateExpression(postcondition, action.id, context, local);
@@ -330,7 +342,7 @@ function validateOperation(
     case 'for-each': {
       validateExpression(operation.collection, action.id, context, local);
       requireCollection(operation.collection, action.id, context, local, 'for-each');
-      const scoped = iterationScope(local, operation.scopeId, operation.collection, context);
+      const scoped = iterationScope(local, operation.scopeId, operation.collection, context, action.id);
       if ((operation.operations ?? []).length === 0) {
         context.warnings.push({
           code: VALIDATION_CODES.unsupportedOperation,
@@ -511,6 +523,36 @@ function validateConstraint(constraint: ConstraintDef, context: Context): void {
     local.add(constraint.entityId);
   }
   validateExpression(constraint.expression, constraint.id, context, local);
+}
+
+function validateTransitionConstraint(constraint: TransitionConstraintDef, context: Context): void {
+  requireKind(constraint.entityId, 'entity', constraint.id, context, VALIDATION_CODES.danglingNodeRef);
+  const entity = context.nodes.get(constraint.entityId);
+
+  // Without an identity field there is no way to say which previous instance a proposed
+  // instance corresponds to, so the rule could not be evaluated at all.
+  if (entity?.kind === 'entity' && !entity.identityFieldId) {
+    context.errors.push({
+      code: VALIDATION_CODES.unsupportedConstraintScope,
+      message: `Transition constraint ${constraint.id} governs ${entity.id}, which has no identity field to match instances by`,
+      nodeId: constraint.id,
+    });
+  }
+
+  if (constraint.previousScopeId === constraint.proposedScopeId) {
+    context.errors.push({
+      code: VALIDATION_CODES.unsupportedConstraintScope,
+      message: `Transition constraint ${constraint.id} uses one scope for both the previous and the proposed instance`,
+      nodeId: constraint.id,
+    });
+  }
+
+  const scope = emptyScope(new Set([constraint.previousScopeId, constraint.proposedScopeId]));
+  if (entity?.kind === 'entity') {
+    scope.types.set(constraint.previousScopeId, entityType(entity.id));
+    scope.types.set(constraint.proposedScopeId, entityType(entity.id));
+  }
+  validateExpression(constraint.expression, constraint.id, context, scope);
 }
 
 function validateRoute(route: RouteDef, context: Context): void {
@@ -761,13 +803,33 @@ function emptyScope(ids: Set<NodeId> = new Set()): Scoped {
   return { ids, types: new Map() };
 }
 
-/** Extends a scope with the member type of the collection an iteration walks. */
+/**
+ * Extends a scope with the member type of the collection an iteration walks.
+ *
+ * An iteration binder is not a graph node, and reusing an id that is already bound — or
+ * one that names a node — makes a reference ambiguous to read and to analyze.
+ */
 function iterationScope(
   scope: Scoped,
   scopeId: NodeId,
   source: Expression,
   context: Context,
+  ownerId?: NodeId,
 ): Scoped {
+  if (scope.ids.has(scopeId)) {
+    context.errors.push({
+      code: VALIDATION_CODES.scopeShadowing,
+      message: `Scope ${scopeId} in ${ownerId ?? 'an expression'} is already bound by an enclosing iteration`,
+      ...(ownerId ? { nodeId: ownerId } : {}),
+    });
+  }
+  if (context.nodes.has(scopeId)) {
+    context.errors.push({
+      code: VALIDATION_CODES.scopeCollidesWithNode,
+      message: `Scope ${scopeId} in ${ownerId ?? 'an expression'} has the same id as a graph node`,
+      ...(ownerId ? { nodeId: ownerId } : {}),
+    });
+  }
   const item = itemTypeOf(inferExpressionType(source, context.semantics, scope.types));
   const types = new Map(scope.types);
   if (item) {
@@ -860,7 +922,7 @@ function validateExpression(
         expression.predicate,
         ownerId,
         context,
-        iterationScope(scope, expression.scopeId, expression.source, context),
+        iterationScope(scope, expression.scopeId, expression.source, context, ownerId),
       );
       return;
     }
@@ -871,7 +933,44 @@ function validateExpression(
         expression.projection,
         ownerId,
         context,
-        iterationScope(scope, expression.scopeId, expression.source, context),
+        iterationScope(scope, expression.scopeId, expression.source, context, ownerId),
+      );
+      return;
+    }
+    case 'every':
+    case 'some': {
+      validateExpression(expression.source, ownerId, context, scope);
+      requireCollection(expression.source, ownerId, context, scope, expression.kind);
+      validateExpression(
+        expression.predicate,
+        ownerId,
+        context,
+        iterationScope(scope, expression.scopeId, expression.source, context, ownerId),
+      );
+      return;
+    }
+    case 'flatten': {
+      validateExpression(expression.source, ownerId, context, scope);
+      requireCollection(expression.source, ownerId, context, scope, 'flatten');
+      const inner = itemTypeOf(inferExpressionType(expression.source, context.semantics, scope.types));
+      if (inner && resolveKnownType(inner)?.kind !== 'collection') {
+        context.errors.push({
+          code: VALIDATION_CODES.notACollection,
+          message: `flatten in ${ownerId} expects a collection of collections but its members are ${describeType(inner)}`,
+          nodeId: ownerId,
+        });
+      }
+      return;
+    }
+    case 'conditional': {
+      validateExpression(expression.condition, ownerId, context, scope);
+      validateExpression(expression.whenTrue, ownerId, context, scope);
+      validateExpression(expression.whenFalse, ownerId, context, scope);
+      reportIncompatible(
+        inferExpressionType(expression.whenTrue, context.semantics, scope.types),
+        inferExpressionType(expression.whenFalse, context.semantics, scope.types),
+        ownerId,
+        context,
       );
       return;
     }
@@ -882,7 +981,7 @@ function validateExpression(
         expression.by,
         ownerId,
         context,
-        iterationScope(scope, expression.scopeId, expression.source, context),
+        iterationScope(scope, expression.scopeId, expression.source, context, ownerId),
       );
       return;
     }

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { createInterface } from 'node:readline/promises';
+import { createOtpSession, otpFromArgv } from './otp.mjs';
 import { publishable, readManifest, repoRoot, tarballPath, version } from './packages.mjs';
 
 /**
@@ -12,26 +12,8 @@ const allowDirty = process.argv.includes('--allow-dirty');
 const skipPrepare = process.argv.includes('--skip-prepare');
 const tag = 'alpha';
 
-/**
- * npm requires a one-time password for accounts with 2FA on publish. Pass it as
- * `--otp=123456`, or leave it out and this prompts for one — which is usually better,
- * since the code is only valid for about 30 seconds.
- */
-let otp = process.argv.find((argument) => argument.startsWith('--otp='))?.slice('--otp='.length);
-const interactive = process.stdin.isTTY === true;
-
-async function askForOtp(reason) {
-  if (!interactive) {
-    return undefined;
-  }
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = (await rl.question(`${reason}npm one-time password (blank to skip): `)).trim();
-    return answer || undefined;
-  } finally {
-    rl.close();
-  }
-}
+/** npm requires a one-time password when the account has 2FA on publish. */
+const otp = createOtpSession(otpFromArgv());
 
 const fail = (message) => {
   console.error(`\nRefusing to publish: ${message}`);
@@ -116,8 +98,8 @@ function alreadyPublished(name) {
   }
 }
 
-if (!dryRun && otp === undefined) {
-  otp = await askForOtp('');
+if (!dryRun) {
+  await otp.prime();
 }
 
 console.log(`\n${dryRun ? 'Dry run:' : 'Publishing:'}`);
@@ -129,46 +111,29 @@ for (const [index, { name }] of publishable.entries()) {
     continue;
   }
 
-  let attempt = 0;
-  for (;;) {
-    attempt += 1;
-    const args = ['publish', tarballPath(name), '--tag', tag, '--access', 'public'];
-    if (dryRun) {
-      args.push('--dry-run');
-    }
-    if (otp) {
-      args.push('--otp', otp);
-    }
+  const args = ['publish', tarballPath(name), '--tag', tag, '--access', 'public'];
+  if (dryRun) {
+    args.push('--dry-run');
+  }
 
-    try {
-      console.log(`  ${name}`);
-      execFileSync('npm', args, { cwd: repoRoot, stdio: 'inherit' });
-      published.push(name);
-      break;
-    } catch {
-      // A one-time password expires in about 30 seconds, so a long release can outlive
-      // the code it started with. Ask for a fresh one rather than abandoning the run.
-      const fresh = attempt <= 3 ? await askForOtp(`Publishing ${name} failed. `) : undefined;
-      if (fresh) {
-        otp = fresh;
-        continue;
-      }
-
-      console.error(`\n${name} could not be published.`);
-      if (published.length > 0) {
-        console.error(`Already published in this run: ${published.join(', ')}`);
-      }
-      const remaining = publishable.slice(index).map((entry) => entry.name);
-      console.error(`Still to publish: ${remaining.join(', ')}`);
-      console.error(
-        '\nRe-run "npm run release:publish -- --skip-prepare" to continue. Packages that\n' +
-          'already reached the registry are skipped, so resuming is safe.\n' +
-          '\nIf npm reported a 403 asking for two-factor authentication, either supply a\n' +
-          'one-time password when prompted (or with --otp=<code>), or authenticate with a\n' +
-          'granular access token that has "bypass 2FA" enabled. Never commit that token.',
-      );
-      process.exit(1);
+  try {
+    console.log(`  ${name}`);
+    await otp.run(name, args, repoRoot);
+    published.push(name);
+  } catch {
+    console.error(`\n${name} could not be published.`);
+    if (published.length > 0) {
+      console.error(`Already published in this run: ${published.join(', ')}`);
     }
+    const remaining = publishable.slice(index).map((entry) => entry.name);
+    console.error(`Still to publish: ${remaining.join(', ')}`);
+    console.error(
+      '\nRe-run "npm run release:publish -- --skip-prepare" to continue. Packages that\n' +
+        'already reached the registry are skipped, so resuming is safe.\n' +
+        '\nIf npm reported a 403 asking for two-factor authentication, authenticate with a\n' +
+        'granular access token that has "bypass 2FA" enabled instead. Never commit that token.',
+    );
+    process.exit(1);
   }
 }
 

@@ -1,4 +1,20 @@
 /**
+ * Raised when an expression cannot be evaluated — a collection operator applied to
+ * something that is not a collection, an aggregation over non-numeric data, a reference
+ * that does not resolve. Failing loudly is deliberate: an expression must never return a
+ * plausible-looking value and report a failure at the same time.
+ */
+export class ExpressionEvaluationError extends Error {
+  readonly details: Record<string, unknown>;
+
+  constructor(message: string, details: Record<string, unknown> = {}) {
+    super(message);
+    this.name = 'ExpressionEvaluationError';
+    this.details = details;
+  }
+}
+
+/**
  * Value helpers shared by the runtime and the mutation subsystem.
  *
  * Stored state is deeply frozen. Any accidental write to a value read out of the store
@@ -27,18 +43,26 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Presence semantics used by `required` — distinct from boolean coercion. */
+/**
+ * Presence answers one question: does a value exist? It says nothing about whether the
+ * value is empty. An empty collection, an empty string, zero and false are all present.
+ */
 export function isPresent(value: unknown): boolean {
+  return value !== null && value !== undefined;
+}
+
+/** Emptiness of a collection or a string. Anything else is never empty. */
+export function isEmptyValue(value: unknown): boolean {
   if (value === null || value === undefined) {
-    return false;
+    return true;
   }
   if (typeof value === 'string') {
-    return value.trim().length > 0;
+    return value.trim().length === 0;
   }
   if (Array.isArray(value)) {
-    return value.length > 0;
+    return value.length === 0;
   }
-  return true;
+  return false;
 }
 
 export function toBoolean(value: unknown): boolean {
@@ -70,6 +94,20 @@ export function compareValues(left: unknown, right: unknown): number {
   return leftText === rightText ? 0 : leftText < rightText ? -1 : 1;
 }
 
+/** A stable serialization, so record comparison does not depend on key order. */
+function canonical(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonical).join(',')}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`;
+}
+
 export function valuesEqual(left: unknown, right: unknown): boolean {
   if (left === right) {
     return true;
@@ -78,7 +116,7 @@ export function valuesEqual(left: unknown, right: unknown): boolean {
     return (left ?? null) === (right ?? null);
   }
   if (typeof left === 'object' || typeof right === 'object') {
-    return JSON.stringify(left) === JSON.stringify(right);
+    return canonical(left) === canonical(right);
   }
   return false;
 }

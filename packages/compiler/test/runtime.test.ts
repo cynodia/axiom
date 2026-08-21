@@ -170,7 +170,7 @@ function buildGraph(): ApplicationGraph {
     id: ACTION_ADD,
     kind: 'action',
     name: 'addRecord',
-    preconditions: [call('required', field(ref(STATE_DRAFT), F_LABEL))],
+    preconditions: [call('non-empty', field(ref(STATE_DRAFT), F_LABEL))],
     failureModes: [{ code: 'label-missing', message: 'A record needs a label.' }],
     operations: [
       {
@@ -345,7 +345,7 @@ function buildGraph(): ApplicationGraph {
     name: 'Label present',
     entityId: ENTITY,
     message: 'Every record must keep a label.',
-    expression: call('required', field(ref(ENTITY), F_LABEL)),
+    expression: call('non-empty', field(ref(ENTITY), F_LABEL)),
   });
 
   graph.addNode<RouteDef>({ id: ROUTE_ROOT, kind: 'route', path: '/', viewId: UI_ROOT });
@@ -397,14 +397,14 @@ test('derived state is recomputed rather than stored', () => {
   assert.equal(app.getState(STATE_TOTAL), 2);
   assert.match(textOf(host.root), /\b2\b/);
 
-  app.setState(STATE_RECORDS, []);
+  app.hydrateState(STATE_RECORDS, []);
   assert.equal(app.getState(STATE_TOTAL), 0);
   assert.match(textOf(host.root), /Nothing here/);
 });
 
 test('repeat falls back to its empty template', () => {
   const { app, host } = createApp();
-  app.setState(STATE_RECORDS, []);
+  app.hydrateState(STATE_RECORDS, []);
   assert.match(textOf(host.root), /Nothing here/);
   assert.equal(findByNodeId(host.root, UI_ROW).length, 0);
 });
@@ -517,7 +517,7 @@ test('a constraint violation rolls the whole action back', () => {
   // Break an existing record so the invariant fails after the action's operations run.
   const records = app.getState(STATE_RECORDS) as Array<Record<string, unknown>>;
   records[0][F_LABEL] = '';
-  app.setState(STATE_RECORDS, records);
+  app.hydrateState(STATE_RECORDS, records);
 
   const result = app.invokeAction(ACTION_ADD);
   assert.equal(result.ok, false);
@@ -552,7 +552,7 @@ test('state marked for local storage is persisted and restored', () => {
   const host = createMemoryHost({ storage: true });
   const first = createAxiomRuntime({ ir: persistent, rootElement: host.root, host });
   first.start();
-  first.setState(STATE_RECORDS, [{ [F_ID]: 'r9', [F_LABEL]: 'Kept', [F_SIZE]: 1, [F_STAGE]: 'ready' }]);
+  first.hydrateState(STATE_RECORDS, [{ [F_ID]: 'r9', [F_LABEL]: 'Kept', [F_SIZE]: 1, [F_STAGE]: 'ready' }]);
 
   const second = createAxiomRuntime({
     ir: persistent,

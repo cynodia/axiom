@@ -51,4 +51,6 @@ export const VALIDATION_CODES = {
   initialValueUnknownField: 'INITIAL_VALUE_UNKNOWN_FIELD',
   initialValueMissingRequiredField: 'INITIAL_VALUE_MISSING_REQUIRED_FIELD',
   initialValueInvalidEntity: 'INITIAL_VALUE_INVALID_ENTITY',
+  scopeShadowing: 'SCOPE_SHADOWING',
+  scopeCollidesWithNode: 'SCOPE_COLLIDES_WITH_NODE',
 } as const;

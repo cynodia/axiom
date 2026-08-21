@@ -104,6 +104,57 @@ seventeenth breaks an invariant, the first sixteen do not survive — you never 
 rollback logic yourself, and `runtime.getMutationLog()` shows every attempted write with
 its `outcome` of `committed` or `rolled-back`.
 
+Within one action, each `for-each` iteration reads the state the previous iterations
+proposed. Two lines for the same product debit it twice:
+
+```text
+stock 5  →  line A (−3)  →  2  →  line A (−3)  →  −1  →  stock >= 0 fails  →  all rolled back
+```
+
+That is a guarantee, not an implementation detail: an aggregate rule can be expressed as a
+simple per-record invariant.
+
+## What is enforced, and where
+
+Two kinds of rule, and they answer different questions:
+
+| | Question | Applies to |
+| --- | --- | --- |
+| **Constraint** | Is this state allowed? | Every instance of an entity, wherever it is stored — including instances nested inside other entities. |
+| **Transition constraint** | Is this *change* allowed? | The instance as it was when the transaction began, compared with the instance the transaction proposes. |
+
+A transition constraint is what makes a rule like "a confirmed order never changes" hold
+no matter which path attempts the write:
+
+```ts
+graph.addNode<TransitionConstraintDef>({
+  id: ORDER_SEALED,
+  kind: 'transition-constraint',
+  entityId: ORDER,
+  previousScopeId: PREVIOUS,
+  proposedScopeId: PROPOSED,
+  message: 'A confirmed order cannot be changed.',
+  expression: binary(
+    'or',
+    binary('neq', field(ref(PREVIOUS), STATUS), literal('confirmed')),
+    binary('eq', ref(PROPOSED), ref(PREVIOUS)),
+  ),
+});
+```
+
+**Governed paths** — actions, `for-each` iterations, and input bindings — all evaluate
+entity constraints *and* transition constraints against the proposed state, and roll the
+whole transaction back if either refuses. You do not have to remember not to bind an input
+to a protected location: binding it and typing into it is simply refused, with a
+`TRANSITION_CONSTRAINT_VIOLATION` naming the rule, the entity, and the previous and
+proposed values.
+
+**`hydrateState` is not governed.** It replaces a state value outright for hosts, tests and
+seeding, and evaluates nothing. It is deliberately not named like a normal write.
+
+**"Previous" means transaction entry** — committed state as it was before the outermost
+transaction began. Not the previous operation, and not the previous iteration.
+
 ## Collections
 
 Values are described by expressions, writable positions by **locations**. Collections add
@@ -140,8 +191,30 @@ const confirm = forEach(ref(LINES), LINE, [
 ]);
 ```
 
-None of this is a callback. `map`, `sort`, `filter`, `find` and `for-each` are data: they
-serialize, they validate, and an agent can ask what they read and write.
+None of this is a callback. `map`, `sort`, `filter`, `find`, `every`, `some`, `flatten`,
+`conditional` and `for-each` are data: they serialize, they validate, and an agent can ask
+what they read and write.
+
+**Collection operators are strict about their source.** `null` means a missing or invalid
+collection and fails the evaluation; `[]` means an empty collection and works normally
+(`sum([])` is `0`, `count([])` is `0`, `every([])` is `true`). Nothing returns a
+plausible-looking value while reporting a failure. Where a collection may legitimately be
+absent, say so:
+
+```ts
+coalesce(field(ref(CURRENT_ORDER), LINES), literal([]))
+```
+
+**Presence is not emptiness.** `required(value)` asks only whether a value exists:
+
+```text
+required(null) → false      required([])  → true
+required(0)    → true       required('')  → true
+required(false)→ true
+```
+
+Use `is-empty` / `non-empty` for collections and strings, and `coalesce` to fall back on
+absence — which means falling back *to* an empty collection now works.
 
 ## Diagnostics
 

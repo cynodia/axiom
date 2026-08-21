@@ -19,6 +19,7 @@ import type {
   Location,
   NodeId,
   StateDef,
+  TransitionConstraintDef,
   UINode,
   ViewNode,
 } from '@cynodia/axiom-core';
@@ -46,7 +47,17 @@ export interface MutationImpact {
   directWriters: AnyNode[];
   dependentDerivedStates: StateDef[];
   affectedConstraints: ConstraintDef[];
+  /** Rules that govern how this state may change, whatever writes it. */
+  affectedTransitionConstraints: TransitionConstraintDef[];
   affectedViews: ViewNode[];
+  /**
+   * False when something in the graph cannot be analyzed — a native operation that does
+   * not declare its effects, for instance. An incomplete answer says so rather than
+   * presenting itself as exhaustive.
+   */
+  analysisComplete: boolean;
+  /** Why the analysis is incomplete, when it is. */
+  analysisGaps: string[];
 }
 
 function edgeFieldIds(edge: GraphEdge): FieldId[] {
@@ -102,6 +113,40 @@ export class GraphQueries {
 
   getConstraintsForEntity(entityId: NodeId): ConstraintDef[] {
     return this.graph.getNodesByKind('constraint').filter((constraint) => constraint.entityId === entityId);
+  }
+
+  /** Rules governing how instances of this entity may change. */
+  getTransitionConstraintsForEntity(entityId: NodeId): TransitionConstraintDef[] {
+    return this.graph
+      .getNodesByKind('transition-constraint')
+      .filter((constraint) => constraint.entityId === entityId);
+  }
+
+  /** Every rule that protects a location, whichever path attempts the write. */
+  getRulesProtecting(location: Location): {
+    constraints: ConstraintDef[];
+    transitionConstraints: TransitionConstraintDef[];
+  } {
+    const impact = this.getMutationImpact(location);
+    return {
+      constraints: impact.affectedConstraints,
+      transitionConstraints: impact.affectedTransitionConstraints,
+    };
+  }
+
+  /** Parts of the graph whose reads and writes cannot be derived. */
+  private analysisGaps(): string[] {
+    const gaps: string[] = [];
+    for (const action of this.graph.getNodesByKind('action')) {
+      for (const operation of action.operations ?? []) {
+        if (operation.kind === 'native' && (operation.declaredEffects ?? []).length === 0) {
+          gaps.push(
+            `${action.name ?? action.id} runs the native operation "${operation.implementationId}" without declaring its effects`,
+          );
+        }
+      }
+    }
+    return gaps;
   }
 
   /** Actions that write a state holding the entity, or that construct instances of it. */
@@ -287,6 +332,11 @@ export class GraphQueries {
       }
     }
 
+    const affectedTransitionConstraints = this.graph
+      .getNodesByKind('transition-constraint')
+      .filter((constraint) => entityIds.has(constraint.entityId));
+    const gaps = this.analysisGaps();
+
     return {
       location,
       rootStateId,
@@ -294,7 +344,10 @@ export class GraphQueries {
       directWriters,
       dependentDerivedStates,
       affectedConstraints,
+      affectedTransitionConstraints,
       affectedViews: [...views.values()],
+      analysisComplete: gaps.length === 0,
+      analysisGaps: gaps,
     };
   }
 

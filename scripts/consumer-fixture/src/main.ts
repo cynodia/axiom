@@ -4,6 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import {
+  RUNTIME_DIAGNOSTIC_CODES,
   compileToHtml,
   compileToIR,
   createAxiomRuntime,
@@ -31,6 +32,7 @@ import {
   STATE_PARTS,
   STATE_SORTED,
   STATE_TOTAL,
+  UI_STOCK_INPUT,
   createPickingListGraph,
 } from './orders.js';
 
@@ -138,12 +140,38 @@ step('one action reduced the stock of every part its lines mention');
 // Ask for more than exists, across two lines for the same part.
 const lines = list.getState(STATE_LINES) as Array<Record<string, unknown>>;
 lines.push({ [F_LINE_ID]: 'l3', ['field_line_part']: 'bolt', [F_LINE_QUANTITY]: 9, ['field_line_price']: 30 });
-list.setState(STATE_LINES, lines);
+list.hydrateState(STATE_LINES, lines);
 
 const refused = list.invokeAction(ACTION_RESERVE);
 assert.equal(refused.ok, false, 'the aggregate guard should refuse this');
 assert.equal(stockOf('bolt'), 3, 'and nothing may have moved');
 assert.equal(stockOf('nut'), 5);
 step('an aggregate guard refuses, and the whole action rolls back');
+
+// A rule that governs the write path, not merely the value.
+const stockControl = findByNodeId(pickingHost.root, UI_STOCK_INPUT).find(
+  (element) => element.tagName !== 'label',
+);
+assert.ok(stockControl, 'the stock input is rendered — nothing is hidden from the user');
+
+stockControl.value = '99';
+stockControl.dispatch('input');
+assert.equal(stockOf('bolt'), 3, 'raising stock through a direct binding was refused');
+assert.ok(
+  list
+    .diagnostics()
+    .some((diagnostic) => diagnostic.code === RUNTIME_DIAGNOSTIC_CODES.TRANSITION_CONSTRAINT_VIOLATION),
+  'and refused as a transition, naming the rule',
+);
+step('a transition rule protects canonical state from a direct input binding');
+
+const lowering = findByNodeId(pickingHost.root, UI_STOCK_INPUT).find(
+  (element) => element.tagName !== 'label',
+);
+assert.ok(lowering);
+lowering.value = '1';
+lowering.dispatch('input');
+assert.equal(stockOf('bolt'), 1, 'a change the rule allows still goes through');
+step('the same input still works for a change the rule permits');
 
 console.log('\nExternal consumer smoke test passed.');

@@ -18,6 +18,12 @@ export interface RuntimeTransaction {
 export interface TransactionManager {
   begin(): RuntimeTransaction;
   currentId(): string | undefined;
+  /**
+   * Committed state as it was immediately before the outermost open transaction began —
+   * what a transition rule means by "previous". Not the previous operation, not the
+   * previous iteration.
+   */
+  entrySnapshot(): unknown;
 }
 
 export function createTransactionManager(store: StoreSnapshot, nextId: () => string): TransactionManager {
@@ -25,6 +31,7 @@ export function createTransactionManager(store: StoreSnapshot, nextId: () => str
 
   return {
     currentId: () => open[0]?.id,
+    entrySnapshot: () => open[0]?.snapshot,
     begin(): RuntimeTransaction {
       const isRoot = open.length === 0;
       const id = isRoot ? nextId() : open[0].id;

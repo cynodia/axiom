@@ -233,7 +233,7 @@ function buildGraph(): ApplicationGraph {
     name: 'Label present',
     entityId: ENTITY,
     message: 'Every record must keep a label.',
-    expression: call('required', field(ref(ENTITY), F_LABEL)),
+    expression: call('non-empty', field(ref(ENTITY), F_LABEL)),
   });
 
   graph.addNode<ConstraintDef>({
@@ -421,7 +421,7 @@ test('a native operation cannot write state itself; its result is set through a 
 
 test('the runtime refuses to write derived state even if asked directly', () => {
   const { app } = createApp();
-  app.setState(STATE_CURRENT, { [F_ID]: 'r1', [F_LABEL]: 'nope' });
+  app.hydrateState(STATE_CURRENT, { [F_ID]: 'r1', [F_LABEL]: 'nope' });
 
   assert.equal(records(app)[0][F_LABEL], 'First');
   assert.ok(
@@ -482,7 +482,7 @@ test('data that was already invalid does not lock the rest of the UI', () => {
   // Seed a violation in a record the user is not editing.
   const seeded = records(app);
   seeded[1][F_LABEL] = '';
-  app.setState(STATE_RECORDS, seeded);
+  app.hydrateState(STATE_RECORDS, seeded);
 
   typeInto(host, UI_LABEL_INPUT, 'Still editable');
 

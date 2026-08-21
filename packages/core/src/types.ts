@@ -5,15 +5,29 @@ import type {
   GraphEdge,
   RouteDef,
   StateDef,
+  TransitionConstraintDef,
 } from './nodes.js';
 import type { NodeId } from './ids.js';
 import type { UINode, UINodeKind } from './ui.js';
 
-export type SemanticNodeKind = 'entity' | 'state' | 'action' | 'constraint' | 'route';
+export type SemanticNodeKind =
+  | 'entity'
+  | 'state'
+  | 'action'
+  | 'constraint'
+  | 'transition-constraint'
+  | 'route';
 
 export type NodeKind = SemanticNodeKind | UINodeKind;
 
-export type AnyNode = EntityDef | StateDef | ActionDef | ConstraintDef | RouteDef | UINode;
+export type AnyNode =
+  | EntityDef
+  | StateDef
+  | ActionDef
+  | ConstraintDef
+  | TransitionConstraintDef
+  | RouteDef
+  | UINode;
 
 export type NodeOfKind<K extends NodeKind> = Extract<AnyNode, { kind: K }>;
 

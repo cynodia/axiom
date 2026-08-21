@@ -2,6 +2,7 @@ import {
   ApplicationGraph,
   binary,
   call,
+  coalesce,
   collectionType,
   count,
   entityType,
@@ -26,6 +27,7 @@ import {
 import type {
   ActionDef,
   ButtonNode,
+  TransitionConstraintDef,
   ConditionalNode,
   ConstraintDef,
   ContainerNode,
@@ -113,6 +115,7 @@ const UI_LINES_REPEAT = nodeId('ui_lines_repeat');
 const UI_LINE_ROW = nodeId('ui_line_row');
 const UI_LINE_PRODUCT = nodeId('ui_line_product');
 const UI_LINE_QUANTITY = nodeId('ui_line_quantity');
+const UI_LINE_QUANTITY_INPUT_ROW = nodeId('ui_line_quantity_edit');
 const UI_LINE_PRICE = nodeId('ui_line_price');
 const UI_LINE_REMOVE = nodeId('ui_line_remove');
 const UI_LINES_EMPTY = nodeId('ui_lines_empty');
@@ -124,6 +127,9 @@ const UI_ORDER_MISSING = nodeId('ui_order_missing');
 
 const CONSTRAINT_QUANTITY = nodeId('constraint_line_quantity');
 const CONSTRAINT_STOCK = nodeId('constraint_product_stock');
+const TRANSITION_ORDER_SEALED = nodeId('transition_order_sealed');
+const SCOPE_PREVIOUS_ORDER = nodeId('scope_previous_order');
+const SCOPE_PROPOSED_ORDER = nodeId('scope_proposed_order');
 
 // Iteration scopes.
 const SCOPE_ORDER_LOOKUP = nodeId('scope_order_lookup');
@@ -138,7 +144,12 @@ const SCOPE_CUSTOMER_OPTION = nodeId('scope_customer_option');
 
 /** The order named by the route — a read-only derived copy. */
 const currentOrder: Expression = ref(STATE_CURRENT_ORDER);
-const currentLines: Expression = field(currentOrder, F_ORDER_LINES);
+
+/**
+ * Collection operators are strict about their source, and there is no current order on
+ * the list route — so the absent case is stated rather than left to a null.
+ */
+const currentLines: Expression = coalesce(field(currentOrder, F_ORDER_LINES), literal([]));
 
 /** Where that order is actually stored, which is what every mutation addresses. */
 const routedOrder = itemLocation(
@@ -338,7 +349,7 @@ export function createOrderSystemGraph(): ApplicationGraph {
     name: 'addLine',
     preconditions: [
       isDraft,
-      call('required', field(ref(STATE_DRAFT_LINE), F_LINE_PRODUCT)),
+      call('non-empty', field(ref(STATE_DRAFT_LINE), F_LINE_PRODUCT)),
       binary('gt', field(ref(STATE_DRAFT_LINE), F_LINE_QUANTITY), literal(0)),
     ],
     // One failure mode per precondition, in the same order.
@@ -397,7 +408,7 @@ export function createOrderSystemGraph(): ApplicationGraph {
     id: ACTION_SET_CUSTOMER,
     kind: 'action',
     name: 'setCustomer',
-    preconditions: [isDraft, call('required', ref(STATE_DRAFT_CUSTOMER))],
+    preconditions: [isDraft, call('non-empty', ref(STATE_DRAFT_CUSTOMER))],
     failureModes: [{ code: 'not-draft', message: 'The customer of a confirmed order cannot change.' }],
     operations: [
       { kind: 'set', target: fieldLocation(routedOrder, F_ORDER_CUSTOMER), value: ref(STATE_DRAFT_CUSTOMER) },
@@ -488,6 +499,26 @@ export function createOrderSystemGraph(): ApplicationGraph {
     entityId: ENTITY_LINE,
     message: 'Every order line must have a quantity above zero.',
     expression: binary('gt', field(ref(ENTITY_LINE), F_LINE_QUANTITY), literal(0)),
+  });
+
+  /**
+   * The rule that makes confirmation final. It is expressed as a transition, not as a
+   * value constraint, so it holds no matter which path attempts the write — the
+   * quantity input below writes straight into canonical order state, and is refused.
+   */
+  graph.addNode<TransitionConstraintDef>({
+    id: TRANSITION_ORDER_SEALED,
+    kind: 'transition-constraint',
+    name: 'A confirmed order never changes',
+    entityId: ENTITY_ORDER,
+    previousScopeId: SCOPE_PREVIOUS_ORDER,
+    proposedScopeId: SCOPE_PROPOSED_ORDER,
+    message: 'A confirmed order cannot be changed.',
+    expression: binary(
+      'or',
+      binary('neq', field(ref(SCOPE_PREVIOUS_ORDER), F_ORDER_STATUS), literal('confirmed')),
+      binary('eq', ref(SCOPE_PROPOSED_ORDER), ref(SCOPE_PREVIOUS_ORDER)),
+    ),
   });
 
   graph.addNode<ConstraintDef>({
@@ -598,11 +629,20 @@ export function createOrderSystemGraph(): ApplicationGraph {
     source: ref(UI_LINES_REPEAT),
     fieldId: F_LINE_PRODUCT,
   });
-  graph.addNode<FieldDisplayNode>({
+  graph.addNode<InputNode>({
     id: UI_LINE_QUANTITY,
-    kind: 'field-display',
-    source: ref(UI_LINES_REPEAT),
-    fieldId: F_LINE_QUANTITY,
+    kind: 'input',
+    label: 'Quantity',
+    // Straight into canonical state: order → this line → quantity.
+    binding: {
+      location: fieldLocation(
+        itemLocation(
+          routedLines,
+          identitySelector(F_LINE_ID, field(ref(UI_LINES_REPEAT), F_LINE_ID)),
+        ),
+        F_LINE_QUANTITY,
+      ),
+    },
   });
   graph.addNode<FieldDisplayNode>({
     id: UI_LINE_PRICE,
@@ -740,6 +780,8 @@ export const orderSystemIds = {
   PARAM_REMOVE_LINE,
   PARAM_ROUTE_ORDER,
   ROUTE_ORDER,
+  TRANSITION_ORDER_SEALED,
+  UI_LINE_QUANTITY,
   UI_LINE_FORM,
   UI_LINE_PRODUCT_INPUT,
   UI_LINE_QUANTITY_INPUT,

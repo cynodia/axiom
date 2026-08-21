@@ -363,7 +363,7 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     id: ACTION_CREATE_ISSUE,
     kind: 'action',
     name: 'createIssue',
-    preconditions: [call('required', field(ref(STATE_DRAFT_ISSUE), F_ISSUE_TITLE))],
+    preconditions: [call('non-empty', field(ref(STATE_DRAFT_ISSUE), F_ISSUE_TITLE))],
     failureModes: [{ code: 'title-missing', message: 'An issue needs a title before it can be created.' }],
     operations: [
       {
@@ -405,7 +405,7 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     id: ACTION_ADD_COMMENT,
     kind: 'action',
     name: 'addComment',
-    preconditions: [call('required', field(ref(STATE_DRAFT_COMMENT), F_COMMENT_BODY))],
+    preconditions: [call('non-empty', field(ref(STATE_DRAFT_COMMENT), F_COMMENT_BODY))],
     failureModes: [{ code: 'body-missing', message: 'A comment needs a body.' }],
     operations: [
       {
@@ -849,7 +849,7 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     entityId: ENTITY_ISSUE,
     severity: 'error',
     message: 'Every issue must have a title.',
-    expression: call('required', field(ref(ENTITY_ISSUE), F_ISSUE_TITLE)),
+    expression: call('non-empty', field(ref(ENTITY_ISSUE), F_ISSUE_TITLE)),
   });
 
   graph.addNode<ConstraintDef>({
@@ -859,7 +859,7 @@ export function createIssueTrackerGraph(): ApplicationGraph {
     entityId: ENTITY_COMMENT,
     severity: 'error',
     message: 'Every comment must have a body.',
-    expression: call('required', field(ref(ENTITY_COMMENT), F_COMMENT_BODY)),
+    expression: call('non-empty', field(ref(ENTITY_COMMENT), F_COMMENT_BODY)),
   });
 
   // ------------------------------------------------------------------ routes

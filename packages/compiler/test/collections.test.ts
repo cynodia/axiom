@@ -3,6 +3,9 @@ import test from 'node:test';
 import {
   ApplicationGraph,
   BUILTIN_FUNCTIONS,
+  conditional,
+  every,
+  flatten,
   EXPRESSION_KINDS,
   OPERATION_KINDS,
   binary,
@@ -23,6 +26,7 @@ import {
   object,
   primitiveType,
   ref,
+  some,
   sort,
   stateLocation,
   sum,
@@ -268,20 +272,135 @@ test('an empty collection sums to zero', () => {
   assert.equal(app.getState(STATE_EMPTY_TOTAL), 0);
 });
 
-test('an aggregation over non-numeric data reports rather than quietly yielding nothing', () => {
+test('an aggregation over non-numeric data fails rather than producing a number', () => {
   const { app } = createApp();
   const broken = lines(app);
   broken[0][F_LINE_QUANTITY] = 'lots' as unknown as number;
-  app.setState(STATE_LINES, broken);
+  app.hydrateState(STATE_LINES, broken);
 
-  const total = app.getState(STATE_TOTAL);
-  assert.notEqual(total, null, 'a malformed aggregation must not look like an absent value');
-  assert.ok(Number.isNaN(total as number), 'it yields a number no comparison will accept');
-  assert.ok(
-    app
-      .diagnostics()
-      .some((diagnostic) => diagnostic.code === RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED),
-  );
+  assert.equal(app.getState(STATE_TOTAL), null, 'the derivation has no value at all');
+  const failure = app
+    .diagnostics()
+    .find((diagnostic) => diagnostic.code === RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED);
+  assert.ok(failure, 'and the failure is reported against the state that could not be computed');
+  assert.equal(failure.stateId, STATE_TOTAL);
+});
+
+// ------------------------------------------------- presence and null policy
+
+test('presence asks whether a value exists, not whether it is empty', () => {
+  const graph = buildGraph();
+  const probes: Array<[string, Expression, boolean]> = [
+    ['required(null)', call('required', literal(null)), false],
+    ['required([])', call('required', literal([])), true],
+    ["required('')", call('required', literal('')), true],
+    ['required(0)', call('required', literal(0)), true],
+    ['required(false)', call('required', literal(false)), true],
+    ['is-empty([])', call('is-empty', literal([])), true],
+    ["is-empty('')", call('is-empty', literal('')), true],
+    ['is-empty([1])', call('is-empty', literal([1])), false],
+    ['non-empty([1])', call('non-empty', literal([1])), true],
+    ['non-empty([])', call('non-empty', literal([])), false],
+  ];
+
+  const ids = probes.map(([label, expression], index) => {
+    const id = nodeId(`state_presence_${index}`);
+    graph.addNode<StateDef>({ id, kind: 'state', valueType: primitiveType('boolean'), derivation: expression });
+    return { id, label };
+  });
+
+  const { app } = createApp(graph);
+  for (const [index, { id, label }] of ids.entries()) {
+    assert.equal(app.getState(id), probes[index][2], label);
+  }
+});
+
+test('coalesce falls back on absence, so an empty collection can be the answer', () => {
+  const graph = buildGraph();
+  const probes: Array<[string, Expression, unknown]> = [
+    ['coalesce(null, [])', call('coalesce', literal(null), literal([])), []],
+    ['coalesce([], [1])', call('coalesce', literal([]), literal([1])), []],
+    ["coalesce('', 'x')", call('coalesce', literal(''), literal('x')), ''],
+    ['coalesce(0, 1)', call('coalesce', literal(0), literal(1)), 0],
+    ['coalesce(false, true)', call('coalesce', literal(false), literal(true)), false],
+    ['coalesce(null, null, 3)', call('coalesce', literal(null), literal(null), literal(3)), 3],
+  ];
+
+  const ids = probes.map(([, expression], index) => {
+    const id = nodeId(`state_coalesce_${index}`);
+    graph.addNode<StateDef>({
+      id,
+      kind: 'state',
+      valueType: collectionType(primitiveType('number')),
+      derivation: expression,
+    });
+    return id;
+  });
+
+  const { app } = createApp(graph);
+  for (const [index, id] of ids.entries()) {
+    assert.deepEqual(app.getState(id), probes[index][2], probes[index][0]);
+  }
+});
+
+test('a collection operator applied to nothing fails, consistently', () => {
+  const graph = buildGraph();
+  const absent = call('coalesce', literal(null));
+  const operators: Array<[string, Expression]> = [
+    ['filter', filter(absent, SCOPE, literal(true))],
+    ['map', map(absent, SCOPE, literal(1))],
+    ['sort', sort(absent, SCOPE, literal(1))],
+    ['find', find(absent, SCOPE, literal(true))],
+    ['count', call('count', absent)],
+    ['sum', sum(absent)],
+  ];
+
+  const ids = operators.map(([name, expression]) => {
+    const id = nodeId(`state_null_${name}`);
+    graph.addNode<StateDef>({
+      id,
+      kind: 'state',
+      valueType: primitiveType('string'),
+      derivation: call('to-string', expression),
+    });
+    return { id, name };
+  });
+
+  const { app } = createApp(graph);
+  for (const { id, name } of ids) {
+    assert.equal(app.getState(id), null, `${name} over nothing must not produce a value`);
+    assert.ok(
+      app
+        .diagnostics()
+        .some(
+          (diagnostic) =>
+            diagnostic.stateId === id &&
+            diagnostic.code === RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
+        ),
+      `${name} over nothing must report a failure`,
+    );
+  }
+});
+
+test('an empty collection is a perfectly good collection', () => {
+  const graph = buildGraph();
+  graph.addNode<StateDef>({
+    id: nodeId('state_empty_count'),
+    kind: 'state',
+    valueType: primitiveType('number'),
+    derivation: call('count', ref(STATE_EMPTY)),
+  });
+  graph.addNode<StateDef>({
+    id: nodeId('state_empty_map'),
+    kind: 'state',
+    valueType: collectionType(primitiveType('number')),
+    derivation: map(ref(STATE_EMPTY), SCOPE, field(ref(SCOPE), F_LINE_QUANTITY)),
+  });
+
+  const { app } = createApp(graph);
+  assert.equal(app.getState(nodeId('state_empty_count')), 0);
+  assert.deepEqual(app.getState(nodeId('state_empty_map')), []);
+  assert.equal(app.getState(STATE_EMPTY_TOTAL), 0);
 });
 
 test('sorting is by a projected key and honours direction', () => {
@@ -350,7 +469,7 @@ test('entity constraints apply to instances nested inside other entities', () =>
   const { app } = createApp();
   const groups = app.getState(STATE_GROUPS) as Array<Record<string, Array<Record<string, number>>>>;
   groups[0][F_GROUP_LINES][0][F_LINE_QUANTITY] = 0;
-  app.setState(STATE_GROUPS, groups);
+  app.hydrateState(STATE_GROUPS, groups);
 
   // Any action now has to fail: a nested Line breaks the Line constraint.
   const result = app.invokeAction(ACTION_DOUBLE);
@@ -369,6 +488,7 @@ test('entity constraints apply to instances nested inside other entities', () =>
 const BUILTIN_PROBES: Record<string, { expression: Expression; expected?: unknown }> = {
   required: { expression: call('required', literal('x')), expected: true },
   'is-empty': { expression: call('is-empty', literal('')), expected: true },
+  'non-empty': { expression: call('non-empty', literal('x')), expected: true },
   length: { expression: call('length', literal('abc')), expected: 3 },
   contains: { expression: call('contains', literal('abc'), literal('b')), expected: true },
   concat: { expression: call('concat', literal('a'), literal('b')), expected: 'ab' },
@@ -432,6 +552,10 @@ test('every declared expression kind is evaluated by the runtime', () => {
     find: find(ref(STATE_LINES), SCOPE, literal(true)),
     map: map(ref(STATE_LINES), SCOPE, field(ref(SCOPE), F_LINE_QUANTITY)),
     sort: sort(ref(STATE_LINES), SCOPE, field(ref(SCOPE), F_LINE_QUANTITY)),
+    every: every(ref(STATE_LINES), SCOPE, binary('gt', field(ref(SCOPE), F_LINE_QUANTITY), literal(0))),
+    some: some(ref(STATE_LINES), SCOPE, binary('gt', field(ref(SCOPE), F_LINE_QUANTITY), literal(2))),
+    flatten: flatten(map(ref(STATE_LINES), SCOPE, ref(STATE_LINES))),
+    conditional: conditional(literal(true), literal('yes'), literal('no')),
   };
   assert.deepEqual(Object.keys(byKind).sort(), [...EXPRESSION_KINDS].sort());
 
@@ -542,4 +666,104 @@ test('a constraint diagnostic identifies the constraint that failed', () => {
   assert.equal(failure.constraintId, CONSTRAINT_QUANTITY);
   assert.equal(failure.details?.entityId, ENTITY_LINE);
   assert.match(failure.message, /above zero/);
+});
+
+// -------------------------------------------------- quantifiers and branches
+
+test('a quantifier says what a filter-and-count says, but directly', () => {
+  const graph = buildGraph();
+  graph.addNode<StateDef>({
+    id: nodeId('state_all_positive'),
+    kind: 'state',
+    valueType: primitiveType('boolean'),
+    derivation: every(ref(STATE_LINES), SCOPE, binary('gt', field(ref(SCOPE), F_LINE_QUANTITY), literal(0))),
+  });
+  graph.addNode<StateDef>({
+    id: nodeId('state_any_large'),
+    kind: 'state',
+    valueType: primitiveType('boolean'),
+    derivation: some(ref(STATE_LINES), SCOPE, binary('gt', field(ref(SCOPE), F_LINE_QUANTITY), literal(2))),
+  });
+  graph.addNode<StateDef>({
+    id: nodeId('state_every_empty'),
+    kind: 'state',
+    valueType: primitiveType('boolean'),
+    derivation: every(ref(STATE_EMPTY), SCOPE, literal(false)),
+  });
+  graph.addNode<StateDef>({
+    id: nodeId('state_some_empty'),
+    kind: 'state',
+    valueType: primitiveType('boolean'),
+    derivation: some(ref(STATE_EMPTY), SCOPE, literal(true)),
+  });
+
+  const { app } = createApp(graph);
+  assert.equal(app.getState(nodeId('state_all_positive')), true);
+  assert.equal(app.getState(nodeId('state_any_large')), true);
+  assert.equal(app.getState(nodeId('state_every_empty')), true, 'every([]) is true');
+  assert.equal(app.getState(nodeId('state_some_empty')), false, 'some([]) is false');
+});
+
+test('flatten collapses exactly one level', () => {
+  const graph = buildGraph();
+  graph.addNode<StateDef>({
+    id: nodeId('state_flat'),
+    kind: 'state',
+    valueType: collectionType(entityType(ENTITY_LINE)),
+    derivation: flatten(
+      map(ref(STATE_GROUPS), SCOPE, field(ref(SCOPE), F_GROUP_LINES)),
+    ),
+  });
+
+  const { app } = createApp(graph);
+  assert.deepEqual(
+    (app.getState(nodeId('state_flat')) as Array<Record<string, unknown>>).map((line) => line[F_LINE_ID]),
+    ['n1'],
+  );
+});
+
+test('a conditional chooses a value without a callback', () => {
+  const graph = buildGraph();
+  graph.addNode<StateDef>({
+    id: nodeId('state_label'),
+    kind: 'state',
+    valueType: primitiveType('string'),
+    derivation: conditional(
+      binary('gt', call('count', ref(STATE_LINES)), literal(2)),
+      literal('many'),
+      literal('few'),
+    ),
+  });
+
+  const { app } = createApp(graph);
+  assert.equal(app.getState(nodeId('state_label')), 'many');
+});
+
+test('paired guards report the failure that belongs to the condition', () => {
+  const graph = buildGraph();
+  const guarded = nodeId('action_guarded');
+  graph.addNode<ActionDef>({
+    id: guarded,
+    kind: 'action',
+    name: 'guarded',
+    guards: [
+      { condition: literal(true), failureMode: { code: 'never', message: 'This never fires.' } },
+      {
+        condition: binary('lt', call('count', ref(STATE_LINES)), literal(2)),
+        failureMode: { code: 'too-many', message: 'There are too many lines.' },
+      },
+    ],
+    operations: [{ kind: 'set', target: stateLocation(STATE_COUNTER), value: literal(1) }],
+  });
+  assert.deepEqual(validateGraph(graph).errors, []);
+
+  const { app } = createApp(graph);
+  const result = app.invokeAction(guarded);
+
+  assert.equal(result.ok, false);
+  const failure = result.diagnostics.find(
+    (diagnostic) => diagnostic.code === RUNTIME_DIAGNOSTIC_CODES.PRECONDITION_FAILED,
+  );
+  assert.equal(failure?.message, 'There are too many lines.');
+  assert.equal(failure?.details?.failureMode, 'too-many');
 });

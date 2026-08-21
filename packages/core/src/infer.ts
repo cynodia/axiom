@@ -179,6 +179,16 @@ export function inferExpressionType(
       const item = itemTypeOf(inferExpressionType(expression.source, context, scope));
       return item ? optionalType(item) : undefined;
     }
+    case 'every':
+    case 'some':
+      return primitiveType('boolean');
+    case 'flatten':
+      return itemTypeOf(inferExpressionType(expression.source, context, scope));
+    case 'conditional':
+      return (
+        inferExpressionType(expression.whenTrue, context, scope) ??
+        inferExpressionType(expression.whenFalse, context, scope)
+      );
     case 'map': {
       const item = itemTypeOf(inferExpressionType(expression.source, context, scope));
       const projected = inferExpressionType(
@@ -204,6 +214,8 @@ export function scopeForExpression(
     case 'find':
     case 'map':
     case 'sort':
+    case 'every':
+    case 'some':
       return withScope(
         scope,
         expression.scopeId,

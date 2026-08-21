@@ -23,9 +23,11 @@ import { createStateStore } from './mutation/store.js';
 import { createTransactionManager } from './mutation/transaction.js';
 import type { RuntimeTransaction } from './mutation/transaction.js';
 import {
+  ExpressionEvaluationError,
   cloneValue,
   compareValues,
   deepFreeze,
+  isEmptyValue,
   isPresent,
   isRecord,
   toBoolean,
@@ -52,6 +54,7 @@ export const RUNTIME_DIAGNOSTIC_CODES = {
   MUTATION_FAILED: 'MUTATION_FAILED',
   DERIVED_STATE_WRITE: 'DERIVED_STATE_WRITE',
   UNKNOWN_STATE: 'UNKNOWN_STATE',
+  TRANSITION_CONSTRAINT_VIOLATION: 'TRANSITION_CONSTRAINT_VIOLATION',
   UNSUPPORTED_EXPRESSION: 'UNSUPPORTED_EXPRESSION',
   UNSUPPORTED_OPERATION: 'UNSUPPORTED_OPERATION',
   ROUTE_NOT_FOUND: 'ROUTE_NOT_FOUND',
@@ -110,7 +113,14 @@ export interface AxiomRuntime {
   start(): void;
   render(): void;
   getState(id: NodeId): unknown;
-  setState(id: NodeId, value: unknown): void;
+  /**
+   * Replaces a state value outright, for hosts, tests and seeding.
+   *
+   * This is an administrative facility, not a semantic write: it does not evaluate
+   * preconditions, entity constraints or transition constraints. Application behaviour
+   * belongs in actions and input bindings, which are governed.
+   */
+  hydrateState(id: NodeId, value: unknown): void;
   invokeAction(id: NodeId, args?: Record<string, unknown>): ActionResult;
   navigate(path: string): void;
   currentRoute(): RouteMatch | null;
@@ -155,6 +165,21 @@ function defaultForType(type: TypeRef): unknown {
     default:
       return null;
   }
+}
+
+/**
+ * Collection operators are strict about their source: `null` means a missing or invalid
+ * collection, and an empty collection means an empty collection. Conflating the two is
+ * what made 0.4 hard to reason about.
+ */
+function requireCollection(value: unknown, operator: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new ExpressionEvaluationError(
+      `${operator} expects a collection but received ${describeValue(value)}`,
+      { operator, received: value },
+    );
+  }
+  return value;
 }
 
 /** A short, structured description of a runtime value, for diagnostics. */
@@ -284,9 +309,15 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return derivedCache.get(stateId);
       }
       derivedCache.set(stateId, null);
-      const value = deepFreeze(cloneValue(evaluate(state.derivation, rootScope())));
-      derivedCache.set(stateId, value);
-      return value;
+      try {
+        const value = deepFreeze(cloneValue(evaluate(state.derivation, rootScope())));
+        derivedCache.set(stateId, value);
+        return value;
+      } catch (error) {
+        report(evaluationFailure(error, { nodeId: state.id, stateId: state.id }));
+        derivedCache.set(stateId, null);
+        return null;
+      }
     }
     return store.read(stateId);
   }
@@ -366,6 +397,36 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
   }
 
+  /** Turns an evaluation failure into a diagnostic instead of letting it escape. */
+  function evaluationFailure(
+    error: unknown,
+    context: Partial<RuntimeDiagnostic> = {},
+  ): RuntimeDiagnostic {
+    if (error instanceof ExpressionEvaluationError) {
+      return {
+        code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
+        message: error.message,
+        severity: 'error',
+        ...context,
+        details: { ...error.details, ...(context.details ?? {}) },
+      };
+    }
+    throw error;
+  }
+
+  /** Evaluates an expression, reporting rather than throwing if it cannot be evaluated. */
+  function tryEvaluate(
+    expression: Expression,
+    scope: Scope,
+    context: Partial<RuntimeDiagnostic> = {},
+  ): { ok: true; value: unknown } | { ok: false; diagnostic: RuntimeDiagnostic } {
+    try {
+      return { ok: true, value: evaluate(expression, scope) };
+    } catch (error) {
+      return { ok: false, diagnostic: evaluationFailure(error, context) };
+    }
+  }
+
   /** Applies a mutation inside the current transaction and reports resolution failures. */
   function mutate(
     apply: () => MutationResult,
@@ -429,13 +490,10 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         if (statesById.has(expression.targetId)) {
           return readState(expression.targetId);
         }
-        report({
-          code: RUNTIME_DIAGNOSTIC_CODES.UNRESOLVED_REFERENCE,
-          message: `Reference ${expression.targetId} could not be resolved`,
-          severity: 'error',
-          nodeId: expression.targetId,
-        });
-        return null;
+        throw new ExpressionEvaluationError(
+          `Reference ${expression.targetId} could not be resolved`,
+          { targetId: expression.targetId },
+        );
       }
       case 'field': {
         const source = evaluate(expression.source, scope);
@@ -461,60 +519,56 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       case 'call':
         return evaluateCall(expression.function, expression.arguments, scope);
       case 'filter': {
-        const source = evaluate(expression.source, scope);
-        if (!Array.isArray(source)) {
-          return [];
-        }
+        const source = requireCollection(evaluate(expression.source, scope), 'filter');
         return source.filter((item) =>
           toBoolean(evaluate(expression.predicate, childScope(scope, expression.scopeId, item))),
         );
       }
       case 'map': {
-        const source = evaluate(expression.source, scope);
-        if (!Array.isArray(source)) {
-          report({
-            code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
-            message: `map expects a collection but received ${describeValue(source)}`,
-            severity: 'error',
-          });
-          return [];
-        }
+        const source = requireCollection(evaluate(expression.source, scope), 'map');
         return source.map((item) =>
           evaluate(expression.projection, childScope(scope, expression.scopeId, item)),
         );
       }
       case 'sort': {
-        const source = evaluate(expression.source, scope);
-        if (!Array.isArray(source)) {
-          report({
-            code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
-            message: `sort expects a collection but received ${describeValue(source)}`,
-            severity: 'error',
-          });
-          return [];
-        }
+        const source = requireCollection(evaluate(expression.source, scope), 'sort');
         const direction = expression.direction === 'desc' ? -1 : 1;
         const key = (item: unknown): unknown =>
           evaluate(expression.by, childScope(scope, expression.scopeId, item));
         return [...source].sort((left, right) => direction * compareValues(key(left), key(right)));
       }
+      case 'every': {
+        const source = requireCollection(evaluate(expression.source, scope), 'every');
+        return source.every((item) =>
+          toBoolean(evaluate(expression.predicate, childScope(scope, expression.scopeId, item))),
+        );
+      }
+      case 'some': {
+        const source = requireCollection(evaluate(expression.source, scope), 'some');
+        return source.some((item) =>
+          toBoolean(evaluate(expression.predicate, childScope(scope, expression.scopeId, item))),
+        );
+      }
+      case 'flatten': {
+        const source = requireCollection(evaluate(expression.source, scope), 'flatten');
+        return source.flatMap((member) => requireCollection(member, 'flatten'));
+      }
+      case 'conditional':
+        return toBoolean(evaluate(expression.condition, scope))
+          ? evaluate(expression.whenTrue, scope)
+          : evaluate(expression.whenFalse, scope);
       case 'find': {
-        const source = evaluate(expression.source, scope);
-        if (!Array.isArray(source)) {
-          return null;
-        }
+        const source = requireCollection(evaluate(expression.source, scope), 'find');
         const found = source.find((item) =>
           toBoolean(evaluate(expression.predicate, childScope(scope, expression.scopeId, item))),
         );
         return found === undefined ? null : found;
       }
       default:
-        report({
-          code: RUNTIME_DIAGNOSTIC_CODES.UNSUPPORTED_EXPRESSION,
-          message: `Unknown expression kind "${(expression as { kind: string }).kind}"`,
-          severity: 'error',
-        });
-        return null;
+        throw new ExpressionEvaluationError(
+          `Unknown expression kind "${(expression as { kind: string }).kind}"`,
+          { kind: (expression as { kind: string }).kind },
+        );
     }
   }
 
@@ -556,8 +610,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return divisor === 0 ? null : Number(left ?? 0) / divisor;
       }
       default:
-        report({ code: RUNTIME_DIAGNOSTIC_CODES.UNSUPPORTED_EXPRESSION, message: `Unknown operator "${operator}"`, severity: 'error' });
-        return null;
+        throw new ExpressionEvaluationError(`Unknown operator "${operator}"`, { operator });
     }
   }
 
@@ -565,36 +618,27 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     const values = args.map((argument) => evaluate(argument, scope));
     switch (fn) {
       case 'required':
+        // Presence only: an empty collection or string exists, and so does 0 and false.
         return isPresent(values[0]);
       case 'is-empty':
-        return !isPresent(values[0]);
+        return isEmptyValue(values[0]);
+      case 'non-empty':
+        return !isEmptyValue(values[0]);
       case 'length':
         return Array.isArray(values[0]) ? values[0].length : toText(values[0]).length;
       case 'count':
-        return Array.isArray(values[0]) ? values[0].length : 0;
+        return requireCollection(values[0], 'count').length;
       case 'sum': {
-        // An aggregation that cannot be computed must not quietly produce a value that
-        // makes a guard pass. It reports, and yields a number no comparison accepts.
-        const source = values[0];
-        if (!Array.isArray(source)) {
-          report({
-            code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
-            message: `sum expects a collection of numbers but received ${describeValue(source)}`,
-            severity: 'error',
-            details: { received: source },
-          });
-          return Number.NaN;
-        }
+        // An aggregation that cannot be computed fails; it never returns a number that
+        // would quietly satisfy a guard.
+        const source = requireCollection(values[0], 'sum');
         let total = 0;
         for (const member of source) {
           if (typeof member !== 'number' || !Number.isFinite(member)) {
-            report({
-              code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
-              message: `sum encountered ${describeValue(member)} where a number was required`,
-              severity: 'error',
-              details: { member },
-            });
-            return Number.NaN;
+            throw new ExpressionEvaluationError(
+              `sum encountered ${describeValue(member)} where a number was required`,
+              { member },
+            );
           }
           total += member;
         }
@@ -610,6 +654,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       case 'concat':
         return values.map(toText).join('');
       case 'coalesce':
+        // Nullish, not "non-empty": falling back to an empty collection has to be possible.
         return values.find((value) => isPresent(value)) ?? null;
       case 'one-of':
         return values.slice(1).some((option) => valuesEqual(option, values[0]));
@@ -622,8 +667,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       case 'uuid':
         return host.uuid();
       default:
-        report({ code: RUNTIME_DIAGNOSTIC_CODES.UNSUPPORTED_EXPRESSION, message: `Unknown function "${fn}"`, severity: 'error' });
-        return null;
+        throw new ExpressionEvaluationError(`Unknown function "${fn}"`, { function: fn });
     }
   }
 
@@ -643,7 +687,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
    * their declared types. Entities nested inside collections and inside other entities
    * are reached recursively, so their constraints apply wherever they actually live.
    */
-  function collectInstances(): Map<string, unknown[]> {
+  function collectInstances(read: (stateId: string) => unknown = readState): Map<string, unknown[]> {
     const found = new Map<string, unknown[]>();
 
     const visit = (value: unknown, type: TypeRef): void => {
@@ -673,9 +717,82 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       if (state.draft || state.derivation) {
         continue;
       }
-      visit(readState(state.id), state.valueType);
+      visit(read(state.id), state.valueType);
     }
     return found;
+  }
+
+  /**
+   * Transition rules, evaluated against the state the transaction started from and the
+   * state it now proposes. Every governed mutation path runs this before committing, so a
+   * rule holds regardless of which path attempted the write.
+   */
+  function evaluateTransitions(): RuntimeDiagnostic[] {
+    const snapshot = transactions.entrySnapshot() as Map<string, unknown> | undefined;
+    if (!snapshot || ir.transitionConstraints.length === 0) {
+      return [];
+    }
+
+    const previousInstances = collectInstances((stateId) => snapshot.get(stateId));
+    const proposedInstances = collectInstances();
+    const failures: RuntimeDiagnostic[] = [];
+
+    for (const rule of ir.transitionConstraints) {
+      const entity = entitiesById.get(rule.entityId);
+      const identity = entity?.identityFieldId;
+      if (!identity) {
+        continue;
+      }
+
+      const identify = (instance: unknown): unknown => (isRecord(instance) ? instance[identity] : undefined);
+      const proposedByIdentity = new Map<string, unknown>();
+      for (const instance of proposedInstances.get(rule.entityId) ?? []) {
+        proposedByIdentity.set(toText(identify(instance)), instance);
+      }
+
+      for (const previous of previousInstances.get(rule.entityId) ?? []) {
+        const key = toText(identify(previous));
+        // A removed instance is a transition too: its proposed form is nothing.
+        const proposed = proposedByIdentity.get(key) ?? null;
+        if (proposed !== null && valuesEqual(previous, proposed)) {
+          continue;
+        }
+
+        const scope = childScope(
+          childScope(rootScope(), rule.previousScopeId, previous),
+          rule.proposedScopeId,
+          proposed,
+        );
+        const outcome = tryEvaluate(rule.expression, scope, {
+          nodeId: rule.id,
+          constraintId: rule.id,
+        });
+        if (outcome.ok && toBoolean(outcome.value)) {
+          continue;
+        }
+
+        failures.push(
+          outcome.ok
+            ? {
+                code: RUNTIME_DIAGNOSTIC_CODES.TRANSITION_CONSTRAINT_VIOLATION,
+                message: rule.message ?? `Transition ${rule.name ?? rule.id} is not allowed`,
+                severity: rule.severity ?? 'error',
+                nodeId: rule.id,
+                constraintId: rule.id,
+                details: {
+                  transitionConstraintId: rule.id,
+                  entityId: rule.entityId,
+                  identity: identify(previous),
+                  previousValue: previous,
+                  proposedValue: proposed,
+                },
+              }
+            : outcome.diagnostic,
+        );
+      }
+    }
+
+    return failures;
   }
 
   function instancesOf(entityId: string): unknown[] {
@@ -816,15 +933,27 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       });
     };
 
+    /** A constraint that cannot be evaluated counts as violated, never as satisfied. */
+    const holds = (scope: Scope): boolean => {
+      const outcome = tryEvaluate(constraint.expression, scope, {
+        nodeId: constraint.id,
+        constraintId: constraint.id,
+      });
+      if (!outcome.ok) {
+        failures.push(outcome.diagnostic);
+        return false;
+      }
+      return toBoolean(outcome.value);
+    };
+
     if (!constraint.entityId) {
-      if (!toBoolean(evaluate(constraint.expression, rootScope()))) {
+      if (!holds(rootScope())) {
         record();
       }
       return failures;
     }
     for (const instance of instances.get(constraint.entityId) ?? []) {
-      const scope = childScope(rootScope(), constraint.entityId, instance);
-      if (!toBoolean(evaluate(constraint.expression, scope))) {
+      if (!holds(childScope(rootScope(), constraint.entityId, instance))) {
         record(instance);
       }
     }
@@ -834,6 +963,24 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   // --------------------------------------------------------------- behaviour
 
   function executeOperation(
+    operation: Operation,
+    scope: Scope,
+    context: MutationContext,
+    result: RuntimeDiagnostic[],
+  ): void {
+    try {
+      executeOperationUnguarded(operation, scope, context, result);
+    } catch (error) {
+      result.push(
+        evaluationFailure(error, {
+          ...(context.sourceNodeId ? { nodeId: context.sourceNodeId, actionId: context.sourceNodeId } : {}),
+          ...(context.transactionId ? { transactionId: context.transactionId } : {}),
+        }),
+      );
+    }
+  }
+
+  function executeOperationUnguarded(
     operation: Operation,
     scope: Scope,
     context: MutationContext,
@@ -850,16 +997,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         // walks the collection as it stood when the operation began. Nothing here opens
         // a transaction: these mutations belong to the action's own transaction, and a
         // failure in any iteration rolls back every iteration with it.
-        const members = evaluate(operation.collection, scope);
-        if (!Array.isArray(members)) {
-          result.push({
-            code: RUNTIME_DIAGNOSTIC_CODES.EXPRESSION_EVALUATION_FAILED,
-            message: `for-each expects a collection but received ${describeValue(members)}`,
-            severity: 'error',
-            ...(context.sourceNodeId ? { actionId: context.sourceNodeId } : {}),
-          });
-          return;
-        }
+        const members = requireCollection(evaluate(operation.collection, scope), 'for-each');
         for (const member of members) {
           const iteration = childScope(scope, operation.scopeId, member);
           for (const nested of operation.operations ?? []) {
@@ -977,7 +1115,12 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     // Failure modes line up with preconditions by position, so a refusal says which
     // condition was not met rather than always naming the first one.
     for (const [index, precondition] of (action.preconditions ?? []).entries()) {
-      if (toBoolean(evaluate(precondition, scope))) {
+      const outcome = tryEvaluate(precondition, scope, { nodeId: action.id, actionId: action.id });
+      if (!outcome.ok) {
+        report(outcome.diagnostic);
+        return { ok: false, diagnostics: [...collected] };
+      }
+      if (toBoolean(outcome.value)) {
         continue;
       }
       const mode = action.failureModes?.[index];
@@ -1018,9 +1161,14 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       ...operationDiagnostics.filter((diagnostic) => diagnostic.severity === 'error'),
       ...collected.slice(reportedBefore).filter((diagnostic) => diagnostic.severity === 'error'),
       ...evaluateInvariants().filter((diagnostic) => diagnostic.severity === 'error'),
+      ...evaluateTransitions().filter((diagnostic) => diagnostic.severity === 'error'),
     ];
     for (const postcondition of action.postconditions ?? []) {
-      if (!toBoolean(evaluate(postcondition, scope))) {
+      const outcome = tryEvaluate(postcondition, scope, { nodeId: action.id, actionId: action.id });
+      if (!outcome.ok || !toBoolean(outcome.value)) {
+        if (!outcome.ok) {
+          violations.push(outcome.diagnostic);
+        }
         violations.push({
           code: RUNTIME_DIAGNOSTIC_CODES.POSTCONDITION_FAILED,
           message: `A postcondition of ${action.name ?? action.id} was not satisfied`,
@@ -1227,6 +1375,15 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   }
 
   function renderNode(id: NodeId, scope: Scope): DomElement | null {
+    try {
+      return renderNodeUnguarded(id, scope);
+    } catch (error) {
+      report(evaluationFailure(error, { nodeId: id }));
+      return null;
+    }
+  }
+
+  function renderNodeUnguarded(id: NodeId, scope: Scope): DomElement | null {
     const node = ir.uiNodes[id];
     if (!node) {
       report({
@@ -1380,15 +1537,23 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
             settle(transaction, 'rolled-back');
             failures.forEach(report);
           } else {
-            const introduced = before ? violationsIntroducedSince(before) : [];
-            if (introduced.length > 0) {
+            // A transition rule always applies: it compares against the state this
+            // mutation started from, so it can never be a pre-existing violation.
+            const rejected = [
+              ...(before ? violationsIntroducedSince(before) : []),
+              ...evaluateTransitions().filter((diagnostic) => diagnostic.severity === 'error'),
+            ];
+            if (rejected.length > 0) {
               settle(transaction, 'rolled-back');
-              introduced.forEach(report);
+              rejected.forEach((diagnostic) =>
+                report({ ...diagnostic, details: { ...diagnostic.details, source: 'input', nodeId: node.id } }),
+              );
               report({
                 code: RUNTIME_DIAGNOSTIC_CODES.INPUT_REJECTED,
-                message: `${node.label ?? node.id} kept its previous value: ${introduced[0].message}`,
+                message: `${node.label ?? node.id} kept its previous value: ${rejected[0].message}`,
                 severity: 'warning',
                 nodeId: node.id,
+                details: { source: 'input' },
               });
             } else {
               settle(transaction, 'committed');
@@ -1497,7 +1662,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     getState(id: NodeId): unknown {
       return cloneValue(readState(id));
     },
-    setState(id: NodeId, value: unknown): void {
+    hydrateState(id: NodeId, value: unknown): void {
       const transaction = transactions.begin();
       const failures: RuntimeDiagnostic[] = [];
       const context: MutationContext = { source: 'system', transactionId: transaction.id };

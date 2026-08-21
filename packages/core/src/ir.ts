@@ -6,6 +6,7 @@ import type {
   GraphEdge,
   RouteParameter,
   StateDef,
+  TransitionConstraintDef,
 } from './nodes.js';
 import type { FieldIndexEntry } from './graph.js';
 import type { UINode } from './ui.js';
@@ -44,6 +45,8 @@ export interface ApplicationIR {
   actions: Record<NodeId, ActionDef>;
   uiNodes: Record<NodeId, UINode>;
   constraints: ConstraintDef[];
+  /** Rules about how state may change, enforced on every governed mutation path. */
+  transitionConstraints: TransitionConstraintDef[];
   routes: CompiledRoute[];
   edges: GraphEdge[];
   /**

@@ -378,8 +378,8 @@ export function createInventoryGraph(): ApplicationGraph {
     kind: 'action',
     name: 'createProduct',
     preconditions: [
-      call('required', field(ref(STATE_DRAFT_PRODUCT), F_PRODUCT_SKU)),
-      call('required', field(ref(STATE_DRAFT_PRODUCT), F_PRODUCT_NAME)),
+      call('non-empty', field(ref(STATE_DRAFT_PRODUCT), F_PRODUCT_SKU)),
+      call('non-empty', field(ref(STATE_DRAFT_PRODUCT), F_PRODUCT_NAME)),
     ],
     failureModes: [{ code: 'incomplete', message: 'A product needs both an SKU and a name.' }],
     operations: [
@@ -913,7 +913,7 @@ export function createInventoryGraph(): ApplicationGraph {
     entityId: ENTITY_PRODUCT,
     severity: 'error',
     message: 'Every product must keep an SKU.',
-    expression: call('required', field(ref(ENTITY_PRODUCT), F_PRODUCT_SKU)),
+    expression: call('non-empty', field(ref(ENTITY_PRODUCT), F_PRODUCT_SKU)),
   });
 
   graph.addNode<ConstraintDef>({
