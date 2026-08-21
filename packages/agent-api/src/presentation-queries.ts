@@ -1,5 +1,6 @@
 import {
   isUINode,
+  primaryChildIds,
   resolvePresentationMap,
   uiChildIds,
   validateGraph,
@@ -8,6 +9,7 @@ import type {
   ActionDef,
   Density,
   DeviceClass,
+  DiagnosticNode,
   FormNode,
   NodeId,
   Presentation,
@@ -54,10 +56,18 @@ export interface FormSectionSummary {
  * The shape of a form as UX, rather than as a list of children: which parts are sections,
  * which controls are required, where the actions are and which one is primary.
  */
+/**
+ * The **declared** structure of a form: what it contains, not what is on screen right now.
+ *
+ * It is read along the primary render path, so an alternative branch — an empty template,
+ * a conditional's false branch — is not described as part of the form's structure.
+ */
 export interface FormStructure {
   formId: NodeId;
   density: Density;
   submitActionId?: NodeId;
+  /** Set when the form uses a declared `ButtonNode` as its submit control. */
+  submitButtonId?: NodeId;
   sections: FormSectionSummary[];
   /** Inputs that belong to no section. */
   ungroupedInputIds: NodeId[];
@@ -161,6 +171,47 @@ export class PresentationQueries extends GraphQueries {
     return this.uiNodes().filter((node) => resolved[node.id]?.opaque === true);
   }
 
+  /** UI nodes that present failures from this action. */
+  getDiagnosticPresentations(actionId: NodeId): DiagnosticNode[] {
+    return this.uiNodes().filter(
+      (node): node is DiagnosticNode => node.kind === 'diagnostic' && node.actionId === actionId,
+    );
+  }
+
+  /**
+   * Actions that can refuse but whose refusal no UI node presents.
+   *
+   * An action counts as able to refuse if it declares a guard, a precondition or a
+   * postcondition. Only actions a control actually invokes are reported, since an action
+   * nothing invokes has no refusal to explain.
+   */
+  getActionsWithoutDiagnosticPresentation(): ActionDef[] {
+    const invoked = new Set<NodeId>();
+    for (const node of this.uiNodes()) {
+      if (node.kind === 'button') {
+        invoked.add(node.actionId);
+      }
+      if (node.kind === 'form' && node.submitActionId) {
+        invoked.add(node.submitActionId);
+      }
+    }
+    const presented = new Set(
+      this.uiNodes()
+        .filter((node): node is DiagnosticNode => node.kind === 'diagnostic')
+        .map((node) => node.actionId),
+    );
+    return this.graph.getNodesByKind('action').filter((action) => {
+      if (!invoked.has(action.id) || presented.has(action.id)) {
+        return false;
+      }
+      const canRefuse =
+        (action.guards ?? []).length > 0 ||
+        (action.preconditions ?? []).length > 0 ||
+        (action.postconditions ?? []).length > 0;
+      return canRefuse;
+    });
+  }
+
   /** States marked as ephemeral presentation state rather than domain facts. */
   getEphemeralStates(): StateDef[] {
     return this.graph.getNodesByKind('state').filter((state) => state.ephemeral === true);
@@ -197,14 +248,22 @@ export class PresentationQueries extends GraphQueries {
     const requiredInputIds: NodeId[] = [];
     const allInputIds: NodeId[] = [];
 
-    if (form.submitActionId) {
-      primaryActionIds.add(form.submitActionId);
+    const submitButton = form.submitButtonId
+      ? this.graph.getNode(form.submitButtonId)
+      : undefined;
+    const submitActionId =
+      form.submitActionId ??
+      (submitButton && isUINode(submitButton) && submitButton.kind === 'button'
+        ? submitButton.actionId
+        : undefined);
+    if (submitActionId) {
+      primaryActionIds.add(submitActionId);
     }
 
-    for (const node of this.descendants(formId)) {
+    for (const node of this.descendants(formId, { primaryPathOnly: true })) {
       const view = resolved[node.id];
       if (view?.uxRole === 'form-section') {
-        const inner = this.descendants(node.id);
+        const inner = this.descendants(node.id, { primaryPathOnly: true });
         const inputIds = inner.filter((child) => child.kind === 'input').map((child) => child.id);
         inputIds.forEach((id) => sectionInputs.add(id));
         sections.push({
@@ -241,7 +300,8 @@ export class PresentationQueries extends GraphQueries {
     return {
       formId,
       density: resolved[formId]?.density ?? 'comfortable',
-      ...(form.submitActionId ? { submitActionId: form.submitActionId } : {}),
+      ...(submitActionId ? { submitActionId } : {}),
+      ...(form.submitButtonId ? { submitButtonId: form.submitButtonId } : {}),
       sections,
       ungroupedInputIds: allInputIds.filter((id) => !sectionInputs.has(id)),
       actionGroupIds,
@@ -261,7 +321,13 @@ export class PresentationQueries extends GraphQueries {
     return this.graph.listNodes().filter((node): node is UINode => isUINode(node));
   }
 
-  protected descendants(id: NodeId): UINode[] {
+  /**
+   * UI nodes beneath this one. `primaryPathOnly` restricts the walk to the arrangement that
+   * appears when every collection has members and every condition holds, which is what
+   * "structure that is on screen together" means.
+   */
+  protected descendants(id: NodeId, options: { primaryPathOnly?: boolean } = {}): UINode[] {
+    const children = options.primaryPathOnly ? primaryChildIds : uiChildIds;
     const found: UINode[] = [];
     const seen = new Set<NodeId>([id]);
     const visit = (current: NodeId): void => {
@@ -269,7 +335,7 @@ export class PresentationQueries extends GraphQueries {
       if (!node || !isUINode(node)) {
         return;
       }
-      for (const childId of uiChildIds(node)) {
+      for (const childId of children(node)) {
         if (seen.has(childId)) {
           continue;
         }

@@ -1,6 +1,6 @@
 # UI
 
-Axiom 0.5.1-alpha.1. Nine semantic UI node kinds describe **what exists and what it does**.
+Axiom 0.5.2-alpha.1. Ten semantic UI node kinds describe **what exists and what it does**.
 How it looks is [presentation](PRESENTATION.md).
 
 All nine share `UIBase`:
@@ -71,14 +71,48 @@ field's `name`.
 ### `form`
 
 ```ts
-{ kind: 'form', target: Expression, children: NodeId[], submitActionId?: NodeId, submitLabel?: string }
+{
+  kind: 'form',
+  target: Expression,
+  children: NodeId[],
+  submitActionId?: NodeId,
+  submitLabel?: string,
+  submitButtonId?: NodeId,
+}
 ```
 
 Groups controls and optionally submits an action. `target` is the record the form is about;
 it is a read, and does **not** define where the children write — each input carries its own
 location.
 
-A `submitActionId` makes the rendered submit button the form's primary action.
+Two ways to give a form a submit control:
+
+| | Declare | Behaviour |
+| --- | --- | --- |
+| **Simple** | `submitActionId` (+ `submitLabel`) | The renderer generates the button, wrapped in an action group, presented as the primary action. |
+| **Advanced** | `submitButtonId` | A declared `ButtonNode` inside the form is the submit control. |
+
+The advanced form exists because a generated button cannot be addressed: the declared one
+stays an ordinary graph node, so it can sit in an action group of your choosing, carry an
+icon and its own presentation, and be queried like any other control — while still
+receiving native form-submit behaviour.
+
+```ts
+graph.addNode<ButtonNode>({
+  id: UI_ADD, kind: 'button', label: 'Add line', actionId: ACTION_ADD_LINE,
+  presentation: { uxRole: 'primary-action', icon: 'add' },
+});
+graph.addNode<FormNode>({
+  id: UI_LINE_FORM, kind: 'form', target: ref(STATE_DRAFT_LINE),
+  children: [UI_PRODUCT, UI_QUANTITY, UI_REFUSAL, UI_ACTIONS],
+  submitButtonId: UI_ADD,
+});
+```
+
+- `submitButtonId` MUST name a `ButtonNode` among the form's descendants.
+- The submit action is `submitActionId ?? <that button>.actionId`. If both are given they MUST agree.
+- The declared control is rendered with `type="submit"` and no click handler of its own, so a click runs the action exactly once.
+- `submitLabel` is ignored when `submitButtonId` is given.
 
 ### `input`
 
@@ -108,12 +142,18 @@ Governance depends on what the location is **rooted in**:
 | canonical state | Entity constraints and transition constraints apply. A value that breaks a hard invariant is rolled back and the control re-renders with what is stored. |
 | a `draft` or `ephemeral` state | Entity constraints are skipped. Transition constraints still apply to whatever instance the write reaches. |
 
-With `inputValidation: 'deferred'` the per-keystroke entity-constraint check is off
-entirely; transition constraints are unaffected.
+**`inputValidation` defaults to `'immediate'`** — in `createAxiomRuntime` and therefore in
+every generated page.
+
+| Mode | Entity constraints per keystroke | Transition constraints | Accessibility |
+| --- | --- | --- | --- |
+| `'immediate'` (default) | evaluated; a write that would break a hard invariant is rolled back | always evaluated | the refused control is marked `aria-invalid` and the reason is announced beside it |
+| `'deferred'` | **not** evaluated; validity is left to the next action | always evaluated | a control is marked invalid only when a transition constraint refuses it |
 
 A refused write reports the violation with `details.source: 'input'`, plus an
-`INPUT_REJECTED` warning naming the control, and the control is marked invalid with an
-announced message.
+`INPUT_REJECTED` warning naming the control. The control is marked `aria-invalid`, the
+reason is rendered next to it in a `role="alert"` element, and `aria-describedby` relates
+the two. All three are keyed by render instance, so only the refused row is affected.
 
 ### `button`
 
@@ -124,6 +164,36 @@ announced message.
 Invokes an action. `arguments` is keyed by the **action parameter id**; passing an unknown
 parameter is a validation error. `destructive` may be declared here, but declaring it on
 the action is enough — presentation is inferred from the action.
+
+### `diagnostic`
+
+```ts
+{ kind: 'diagnostic', actionId: NodeId, severity?: 'error' | 'warning' }
+```
+
+Presents why an action refused. The runtime already knows; this makes it available to the
+semantic UI, so an application never has to duplicate an action's guards as derived state
+merely to explain them, read console output, or copy an `ActionResult` into its own state.
+
+```ts
+graph.addNode<DiagnosticNode>({
+  id: UI_CONFIRM_REFUSAL, kind: 'diagnostic', actionId: ACTION_CONFIRM_ORDER,
+});
+```
+
+Lifecycle — see [`RUNTIME.md`](RUNTIME.md#action-diagnostics) for the full contract:
+
+| Event | What the region presents |
+| --- | --- |
+| The action was refused | that invocation's diagnostics |
+| The action succeeded | nothing — the message clears |
+| A confirmation was declined | nothing |
+| `clearDiagnostics()`, or navigating away | nothing |
+
+- Only the **most recent** invocation of that action is presented.
+- `severity` is the lowest severity presented. `'error'` (the default) presents only errors; `'warning'` presents both.
+- Messages come from the structured diagnostics — `failureMode.message` for a refused guard, `ConstraintDef.message` for a broken invariant. The renderer invents no wording.
+- The region is a live region (`role="alert"` for errors, `role="status"` for warnings) and is rendered even when empty, so later content is announced. A control invoking the same action is related to it with `aria-describedby` while it has content.
 
 ### `conditional`
 
@@ -146,6 +216,53 @@ Renders one branch. The condition uses the truthiness rules in
 | others | none |
 
 A UI node not reachable from any route is reported as `UNREACHABLE_UI_NODE` (a warning).
+
+### The primary render path
+
+`primaryChildIds(node)` walks the arrangement that appears when every collection has
+members and every condition holds: a `repeat`'s `templateId` but not its `emptyTemplateId`,
+a `conditional`'s `whenTrue` but not its `whenFalse`.
+
+An alternative branch is not part of that path, because its content is never on screen at
+the same time. Analysis of structure that appears together uses this rather than
+`uiChildIds`:
+
+- document-outline validation (`INVALID_HEADING_STRUCTURE`);
+- `AgentAPI.getFormStructure`, so a heading inside an empty template is not described as one of the form's sections.
+
+## Render instances
+
+A UI node inside a `repeat` is rendered once per member. `NodeId` alone therefore cannot
+identify a rendered element, and two concepts are kept distinct:
+
+```text
+NodeId          = semantic graph identity        → data-node
+RenderInstance  = runtime presentation identity  → data-instance
+```
+
+Every renderer-generated identity and relationship is keyed by the render instance:
+
+```text
+element id          label for          aria-describedby
+error-region ids    control lookup     focus restoration
+```
+
+So refusing a write in one row marks **that row** invalid, and nothing leaks into another.
+
+Instance identity is:
+
+- **semantic where it can be** — the value of the member entity's `identityFieldId`, so the identity follows a row through reordering;
+- **a deterministic index otherwise** — where the member type cannot be resolved statically, or the identity value is absent or unusable in an id;
+- **composing** for nested repeats, rather than colliding.
+
+```html
+<input data-node="ui_line_quantity"
+       data-instance="ui_line_quantity--line-7f3a"
+       id="axiom-control-ui_line_quantity--line-7f3a">
+```
+
+The exact encoding is an implementation detail; the properties above are the contract. The
+graph still holds one node, and `AgentAPI` reasons about that node.
 
 ## Visibility is not authorization
 

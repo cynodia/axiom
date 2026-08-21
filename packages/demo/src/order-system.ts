@@ -27,6 +27,7 @@ import {
 import type {
   ActionDef,
   ButtonNode,
+  DiagnosticNode,
   TransitionConstraintDef,
   ConditionalNode,
   ConstraintDef,
@@ -146,6 +147,14 @@ const UI_ORDER_ACTIONS = nodeId('ui_order_actions');
 const UI_LINES_EMPTY_BOX = nodeId('ui_lines_empty_box');
 const UI_LINES_EMPTY_ACTION = nodeId('ui_lines_empty_action');
 const UI_ORDER_MISSING_BOX = nodeId('ui_order_missing_box');
+
+// 0.5.2 hardening: a refusal is presented as semantic UI rather than duplicated as
+// derived state, the order total is large without being a document heading, and the line
+// form's submit control is a declared button.
+const UI_CONFIRM_DIAGNOSTIC = nodeId('ui_confirm_diagnostic');
+const UI_LINE_DIAGNOSTIC = nodeId('ui_line_diagnostic');
+const UI_LINE_SUBMIT = nodeId('ui_line_submit');
+const UI_LINE_FORM_ACTIONS = nodeId('ui_line_form_actions');
 
 const CONSTRAINT_QUANTITY = nodeId('constraint_line_quantity');
 const CONSTRAINT_STOCK = nodeId('constraint_product_stock');
@@ -750,7 +759,9 @@ export function createOrderSystemGraph(): ApplicationGraph {
     // The value stays a number. Only what is shown is formatted.
     value: ref(STATE_ORDER_TOTAL),
     presentation: {
+      // Drawn at heading scale, but a monetary total is not a document heading.
       textRole: 'heading',
+      headingLevel: 'none',
       emphasis: 'strong',
       format: { kind: 'currency', currency: 'NOK' },
     },
@@ -893,14 +904,40 @@ export function createOrderSystemGraph(): ApplicationGraph {
     binding: { location: fieldLocation(stateLocation(STATE_DRAFT_LINE), F_LINE_QUANTITY) },
     presentation: { control: 'stepper' },
   });
+  // The advanced form: the submit control is a declared button, so it can carry an icon,
+  // sit in an action group and be queried like any other control.
+  graph.addNode<ButtonNode>({
+    id: UI_LINE_SUBMIT,
+    kind: 'button',
+    label: 'Add line',
+    actionId: ACTION_ADD_LINE,
+    presentation: { uxRole: 'primary-action', icon: 'add' },
+  });
+  graph.addNode<DiagnosticNode>({
+    id: UI_LINE_DIAGNOSTIC,
+    kind: 'diagnostic',
+    name: 'AddLineRefusal',
+    actionId: ACTION_ADD_LINE,
+  });
+  graph.addNode<ContainerNode>({
+    id: UI_LINE_FORM_ACTIONS,
+    kind: 'container',
+    name: 'AddLineActions',
+    children: [UI_LINE_SUBMIT],
+    presentation: { uxRole: 'action-group' },
+  });
   graph.addNode<FormNode>({
     id: UI_LINE_FORM,
     kind: 'form',
     name: 'AddLineForm',
     target: ref(STATE_DRAFT_LINE),
-    children: [UI_LINE_PRODUCT_INPUT, UI_LINE_QUANTITY_INPUT],
-    submitActionId: ACTION_ADD_LINE,
-    submitLabel: 'Add line',
+    children: [
+      UI_LINE_PRODUCT_INPUT,
+      UI_LINE_QUANTITY_INPUT,
+      UI_LINE_DIAGNOSTIC,
+      UI_LINE_FORM_ACTIONS,
+    ],
+    submitButtonId: UI_LINE_SUBMIT,
   });
   graph.addNode<ContainerNode>({
     id: UI_ORDER_FORMS,
@@ -942,12 +979,28 @@ export function createOrderSystemGraph(): ApplicationGraph {
     children: [UI_CONFIRM_BUTTON],
     presentation: { uxRole: 'action-group' },
   });
+  /**
+   * Why confirmation was refused, straight from the action's own failure modes. Nothing
+   * here duplicates the guards: the runtime already knows which one was not met.
+   */
+  graph.addNode<DiagnosticNode>({
+    id: UI_CONFIRM_DIAGNOSTIC,
+    kind: 'diagnostic',
+    name: 'ConfirmationRefusal',
+    actionId: ACTION_CONFIRM_ORDER,
+  });
 
   graph.addNode<ContainerNode>({
     id: UI_ORDER_BODY,
     kind: 'container',
     name: 'OrderDetailContent',
-    children: [UI_ORDER_HEADER, UI_ORDER_FORMS, UI_LINES_SECTION, UI_ORDER_ACTIONS],
+    children: [
+      UI_ORDER_HEADER,
+      UI_ORDER_FORMS,
+      UI_LINES_SECTION,
+      UI_CONFIRM_DIAGNOSTIC,
+      UI_ORDER_ACTIONS,
+    ],
     presentation: { uxRole: 'content-region' },
   });
 
@@ -1047,5 +1100,12 @@ export const orderSystemIds = {
   UI_LINES_HEADING,
   UI_ORDERS_TITLE,
   UI_ORDER_STATUS,
+  UI_ORDER_BACK,
+  UI_CONFIRM_DIAGNOSTIC,
+  UI_LINE_DIAGNOSTIC,
+  UI_LINE_SUBMIT,
+  UI_LINE_FORM_ACTIONS,
   ACTION_OPEN_ORDERS,
+  ACTION_OPEN_ORDER,
+  PARAM_OPEN_ORDER,
 } as const;

@@ -119,10 +119,39 @@ export type SurfaceRole = 'transparent' | 'base' | 'subtle' | 'raised' | 'inset'
 
 export const SURFACE_ROLES: readonly SurfaceRole[] = ['transparent', 'base', 'subtle', 'raised', 'inset'];
 
-/** Semantic text roles. A theme maps each to font metrics; the graph names no sizes. */
+/**
+ * Semantic text roles. A theme maps each to font metrics; the graph names no sizes.
+ *
+ * A text role is a **typographic** decision only. Whether the value is a document heading
+ * is `headingLevel`, which is separate on purpose: a large monetary total or a dashboard
+ * statistic wants `display` type at `headingLevel: 'none'`.
+ */
 export type TextRole = 'body' | 'caption' | 'label' | 'heading' | 'title' | 'display';
 
 export const TEXT_ROLES: readonly TextRole[] = ['body', 'caption', 'label', 'heading', 'title', 'display'];
+
+/**
+ * Where a value sits in the document outline, independently of how large it is drawn.
+ * `'none'` means the value is not a heading at all.
+ */
+export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6 | 'none';
+
+export const HEADING_LEVELS: readonly HeadingLevel[] = [1, 2, 3, 4, 5, 6, 'none'];
+
+/**
+ * The outline level a text role implies when nothing says otherwise.
+ *
+ * This is the 0.5.0 mapping, kept so existing applications do not lose their heading
+ * structure. An explicit `headingLevel` always wins.
+ */
+export const TEXT_ROLE_HEADING_LEVELS: Readonly<Record<TextRole, HeadingLevel>> = {
+  display: 1,
+  title: 2,
+  heading: 3,
+  body: 'none',
+  caption: 'none',
+  label: 'none',
+};
 
 /**
  * Why a node exists in the interface. A UX role is high-information: `toolbar` implies a
@@ -320,6 +349,12 @@ export interface Presentation {
   emphasis?: Emphasis;
   density?: Density | LegacyDensity;
   textRole?: TextRole;
+  /**
+   * The document-outline level, independent of `textRole`. `'none'` renders the value as
+   * ordinary text however large it is drawn. Omitted, it is inferred from `textRole` by
+   * `TEXT_ROLE_HEADING_LEVELS`.
+   */
+  headingLevel?: HeadingLevel;
   uxRole?: UxRole;
   surface?: SurfaceRole;
   treatment?: Treatment;
@@ -420,6 +455,8 @@ export interface ResolvedPresentation {
   emphasis: Emphasis;
   density: Density;
   textRole: TextRole;
+  /** `'none'` when the value is not part of the document outline. */
+  headingLevel: HeadingLevel;
   uxRole?: UxRole;
   surface: SurfaceRole;
   treatment: Treatment;

@@ -100,6 +100,20 @@ export interface ActionResult {
   diagnostics: RuntimeDiagnostic[];
 }
 
+/**
+ * The outcome of an action's most recent invocation.
+ *
+ * `ok` and `cancelled` both carry no diagnostics, so a `diagnostic` UI node presenting
+ * this action shows nothing after either. They are distinguished here because the
+ * difference matters to an agent: `cancelled` means a person declined the confirmation,
+ * not that the action was refused.
+ */
+export interface ActionOutcome {
+  actionId: NodeId;
+  outcome: 'ok' | 'failed' | 'cancelled';
+  diagnostics: RuntimeDiagnostic[];
+}
+
 export interface RouteMatch {
   route: CompiledRoute;
   /** Parameter values keyed by route parameter id. */
@@ -148,7 +162,14 @@ export interface AxiomRuntime {
   currentRoute(): RouteMatch | null;
   /** Every diagnostic reported so far. Per-invocation results carry their own. */
   diagnostics(): RuntimeDiagnostic[];
+  /** Clears the running log **and** every recorded action outcome. */
   clearDiagnostics(): void;
+  /**
+   * The outcome of this action's most recent invocation, or `undefined` if it has not been
+   * invoked since the last clear or route change. This is what a `diagnostic` UI node
+   * presents.
+   */
+  getActionOutcome(id: NodeId): ActionOutcome | undefined;
   /** Every mutation this runtime has applied, in order, with its semantic location. */
   getMutationLog(): MutationLogEntry[];
   registerNativeOperation(implementationId: string, implementation: NativeImplementation): void;
@@ -226,8 +247,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     Object.entries(options.nativeOperations ?? {}),
   );
   const diagnostics: RuntimeDiagnostic[] = [];
+  /** Rendered controls, keyed by render instance — not by node id. */
   const inputElements = new Map<string, DomElement>();
-  let focusedNodeId: string | null = null;
+  let focusedInstance: string | null = null;
   let focusedCaret: number | null = null;
   let started = false;
   let transactionCounter = 0;
@@ -235,12 +257,85 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   const inputValidation = options.inputValidation ?? 'immediate';
   const theme = ir.theme;
   const locale = theme?.locale ?? 'en-US';
-  /** Messages for inputs whose last write was refused, so a control can say so. */
+  /**
+   * Messages for inputs whose last write was refused, so a control can say so. Keyed by
+   * render instance: refusing a write in one row must not mark another row invalid.
+   */
   const inputErrors = new Map<string, string>();
+
+  /**
+   * The most recent outcome of each action, which is what a `diagnostic` node presents.
+   * Ephemeral runtime state: it is replaced by the next invocation of the same action, and
+   * cleared by `clearDiagnostics()` and by navigating to another route.
+   */
+  const actionOutcomes = new Map<string, ActionOutcome>();
+
+  /**
+   * Buttons that are their form's declared submit control, and the action each submits.
+   * Such a button carries native submit behaviour instead of its own click handler, so a
+   * click runs the action exactly once.
+   */
+  const submitControls = new Map<string, { formId: NodeId; actionId: NodeId }>();
+  for (const node of Object.values(ir.uiNodes)) {
+    if (node.kind !== 'form' || !node.submitButtonId) {
+      continue;
+    }
+    const button = ir.uiNodes[node.submitButtonId];
+    if (button?.kind === 'button') {
+      submitControls.set(node.submitButtonId, {
+        formId: node.id,
+        actionId: node.submitActionId ?? button.actionId,
+      });
+    }
+  }
+
+  /** Diagnostic regions, by the action they report. Indexed once. */
+  const diagnosticRegions = new Map<string, NodeId[]>();
+  for (const node of Object.values(ir.uiNodes)) {
+    if (node.kind === 'diagnostic') {
+      diagnosticRegions.set(node.actionId, [...(diagnosticRegions.get(node.actionId) ?? []), node.id]);
+    }
+  }
+
+  function recordOutcome(
+    actionId: string,
+    outcome: ActionOutcome['outcome'],
+    diagnostics: RuntimeDiagnostic[],
+  ): void {
+    actionOutcomes.set(actionId, {
+      actionId: actionId as NodeId,
+      outcome,
+      // Only what this invocation reported, and only what a region could present.
+      diagnostics: diagnostics.map((diagnostic) => ({ ...diagnostic })),
+    });
+  }
 
   /** Presentation, already resolved by the compiler. The renderer decides nothing. */
   function presentationOf(id: string): ResolvedPresentation | undefined {
     return (ir.presentation as Record<string, ResolvedPresentation> | undefined)?.[id];
+  }
+
+  /**
+   * Where a rendered element sits: the repeat instances enclosing it, outermost first.
+   *
+   * A UI node inside a `repeat` is rendered once per member, so `NodeId` alone cannot
+   * identify a rendered element. The graph still holds one semantic node; this is the
+   * runtime presentation identity that goes with it, and the two are deliberately
+   * distinct — `data-node` carries the first, `data-instance` the second.
+   */
+  const ROOT_INSTANCE: readonly string[] = [];
+
+  /** Everything a renderer-generated id, relationship or lookup is keyed by. */
+  function instanceKey(nodeId: string, path: readonly string[]): string {
+    return path.length === 0 ? nodeId : `${nodeId}--${path.join('--')}`;
+  }
+
+  /** A DOM-safe fragment of an item's identity. */
+  function identityFragment(value: unknown, index: number): string {
+    const text = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+    const safe = text.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+    // An absent or unusable identity falls back to a deterministic iteration index.
+    return safe === '' ? `i${index}` : safe;
   }
 
   const statesById = new Map<string, StateDef>(ir.states.map((state) => [state.id, state]));
@@ -1121,8 +1216,30 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   }
 
   function runAction(actionId: string, args: Record<string, unknown> = {}): ActionResult {
-    return collecting((collected) => runActionCollecting(actionId, args, collected));
+    return collecting((collected) => {
+      const started = collected.length;
+      const result = runActionCollecting(actionId, args, collected);
+      if (ir.actions[actionId as NodeId]) {
+        // The record is this invocation's own diagnostics, so a later invocation of another
+        // action can never appear to belong to this one.
+        recordOutcome(
+          actionId,
+          result.ok ? 'ok' : cancelled ? 'cancelled' : 'failed',
+          result.ok ? [] : collected.slice(started),
+        );
+      }
+      cancelled = false;
+      // Any invocation can change what a diagnostic region presents, including one refused
+      // before a transaction was ever opened. Render once, at the outermost invocation.
+      if (transactions.currentId() === undefined) {
+        renderApplication();
+      }
+      return result;
+    });
   }
+
+  /** Set when the most recent invocation stopped because a confirmation was declined. */
+  let cancelled = false;
 
   function runActionCollecting(
     actionId: string,
@@ -1186,6 +1303,8 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
 
     if (action.requiresConfirmation) {
       if (!askForConfirmation(action)) {
+        // Declining a confirmation is not a refusal: it reports nothing.
+        cancelled = true;
         return { ok: false, diagnostics: [...collected] };
       }
     }
@@ -1233,12 +1352,10 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           report({ ...violation, actionId: action.id, transactionId: transaction.id });
         }
       }
-      renderApplication();
       return { ok: false, diagnostics: [...collected] };
     }
 
     settle(transaction, 'committed');
-    renderApplication();
     return { ok: true, diagnostics: [...collected] };
   }
 
@@ -1291,7 +1408,13 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   }
 
   function syncRoute(): void {
+    const previous = activeRoute?.route.id;
     activeRoute = matchRoute(host.getPath());
+    if (previous !== undefined && previous !== activeRoute?.route.id) {
+      // Diagnostics are about the screen that produced them.
+      actionOutcomes.clear();
+      inputErrors.clear();
+    }
     derivedCache.clear();
     renderApplication();
   }
@@ -1353,9 +1476,45 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     return host.confirmRequest(request);
   }
 
-  function renderChildren(ids: NodeId[], scope: Scope, parent: DomElement): void {
+  /**
+   * The diagnostics a region presents: those of its action's most recent invocation, at or
+   * above the region's own severity.
+   */
+  function presentedDiagnostics(node: UINode & { kind: 'diagnostic' }): RuntimeDiagnostic[] {
+    const record = actionOutcomes.get(node.actionId);
+    if (!record) {
+      return [];
+    }
+    const minimum = node.severity ?? 'error';
+    return record.diagnostics.filter(
+      (diagnostic) => minimum === 'warning' || diagnostic.severity === 'error',
+    );
+  }
+
+  /** Whether any region currently reports something about this action. */
+  function reportingRegionFor(actionId: string, path: readonly string[]): string | null {
+    if (path.length > 0) {
+      // A region reports one action, not one row; relating a repeated control to it would
+      // be guesswork. Rows report through their own input diagnostics instead.
+      return null;
+    }
+    for (const regionId of diagnosticRegions.get(actionId) ?? []) {
+      const region = ir.uiNodes[regionId];
+      if (region?.kind === 'diagnostic' && presentedDiagnostics(region).length > 0) {
+        return `axiom-diagnostic-${regionId}`;
+      }
+    }
+    return null;
+  }
+
+  function renderChildren(
+    ids: NodeId[],
+    scope: Scope,
+    parent: DomElement,
+    path: readonly string[],
+  ): void {
     for (const id of ids) {
-      const child = renderNode(id, scope);
+      const child = renderNode(id, scope, path);
       if (child) {
         parent.appendChild(child);
       }
@@ -1481,16 +1640,16 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     return raw;
   }
 
-  function renderNode(id: NodeId, scope: Scope): DomElement | null {
+  function renderNode(id: NodeId, scope: Scope, path: readonly string[]): DomElement | null {
     try {
-      return renderNodeUnguarded(id, scope);
+      return renderNodeUnguarded(id, scope, path);
     } catch (error) {
       report(evaluationFailure(error, { nodeId: id }));
       return null;
     }
   }
 
-  function renderNodeUnguarded(id: NodeId, scope: Scope): DomElement | null {
+  function renderNodeUnguarded(id: NodeId, scope: Scope, path: readonly string[]): DomElement | null {
     const node = ir.uiNodes[id];
     if (!node) {
       report({
@@ -1506,19 +1665,28 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
 
     const presentation = presentationOf(node.id);
+    const instance = instanceKey(node.id, path);
+    /** `data-node` is the semantic node; `data-instance` is this rendering of it. */
+    const identify = (target: DomElement): DomElement => {
+      target.setAttribute('data-node', node.id);
+      if (path.length > 0) {
+        target.setAttribute('data-instance', instance);
+      }
+      return target;
+    };
 
     switch (node.kind) {
       case 'view': {
-        const container = element('div', nodeClasses(node, 'axiom-view'));
-        container.setAttribute('data-node', node.id);
-        renderChildren(node.children, scope, container);
+        const container = identify(element('div', nodeClasses(node, 'axiom-view')));
+        renderChildren(node.children, scope, container, path);
         return container;
       }
       case 'container': {
         // A UX role that names a region of the page becomes the element that means it, so
         // the landmark structure an author declared is the one assistive technology sees.
-        const container = element(landmarkTag(presentation?.uxRole) ?? 'div', nodeClasses(node, 'axiom-container'));
-        container.setAttribute('data-node', node.id);
+        const container = identify(
+          element(landmarkTag(presentation?.uxRole) ?? 'div', nodeClasses(node, 'axiom-container')),
+        );
         const ariaRole = ariaRoleFor(presentation?.uxRole);
         if (ariaRole) {
           container.setAttribute('role', ariaRole);
@@ -1527,12 +1695,13 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           container.setAttribute('aria-label', presentation.accessibleLabel);
         }
         appendIcon(container, presentation);
-        renderChildren(node.children, scope, container);
+        renderChildren(node.children, scope, container, path);
         return container;
       }
       case 'text': {
-        const text = element(headingTag(presentation?.textRole) ?? 'span', nodeClasses(node, 'axiom-text'));
-        text.setAttribute('data-node', node.id);
+        const text = identify(
+          element(headingTag(presentation) ?? 'span', nodeClasses(node, 'axiom-text')),
+        );
         // A status role announces itself whatever kind of node carries it.
         const textRole = ariaRoleFor(presentation?.uxRole);
         if (textRole) {
@@ -1553,25 +1722,31 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return text;
       }
       case 'repeat': {
-        const container = element('div', nodeClasses(node, 'axiom-repeat'));
-        container.setAttribute('data-node', node.id);
+        const container = identify(element('div', nodeClasses(node, 'axiom-repeat')));
         const source = evaluate(node.source, scope);
         const items = Array.isArray(source) ? source : [];
         if (items.length === 0 && node.emptyTemplateId) {
-          renderChildren([node.emptyTemplateId], scope, container);
+          renderChildren([node.emptyTemplateId], scope, container, path);
           return container;
         }
-        for (const item of items) {
-          const child = renderNode(node.templateId, childScope(scope, node.id, item));
+        // Each member gets its own render instance, preferring its semantic identity so
+        // the identity survives reordering. Nested repeats compose rather than collide.
+        const identityFieldId = ir.repeatIdentityFields?.[node.id];
+        items.forEach((item, index) => {
+          const identity = identityFieldId && isRecord(item) ? item[identityFieldId] : undefined;
+          const child = renderNode(
+            node.templateId,
+            childScope(scope, node.id, item),
+            [...path, identityFragment(identity, index)],
+          );
           if (child) {
             container.appendChild(child);
           }
-        }
+        });
         return container;
       }
       case 'field-display': {
-        const container = element('div', nodeClasses(node, 'axiom-field'));
-        container.setAttribute('data-node', node.id);
+        const container = identify(element('div', nodeClasses(node, 'axiom-field')));
         const field = fieldOf(node.fieldId);
         if (node.label ?? field?.name) {
           const label = element('span', 'axiom-field-label');
@@ -1589,23 +1764,28 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return container;
       }
       case 'form': {
-        const form = element('form', nodeClasses(node, 'axiom-form'));
-        form.setAttribute('data-node', node.id);
-        renderChildren(node.children, scope, form);
-        if (node.submitActionId) {
-          const actions = element('div', 'axiom-container axiom-ux-action-group axiom-layout-horizontal axiom-gap-small axiom-align-center axiom-justify-end axiom-wrap axiom-width-fill');
-          const submit = element(
-            'button',
-            'axiom-submit axiom-button axiom-role-primary axiom-emphasis-strong axiom-ux-primary-action',
-          );
-          submit.setAttribute('type', 'submit');
-          submit.textContent = node.submitLabel ?? 'Submit';
-          actions.appendChild(submit);
-          form.appendChild(actions);
-          const actionId = node.submitActionId;
+        const form = identify(element('form', nodeClasses(node, 'axiom-form')));
+        renderChildren(node.children, scope, form, path);
+        const declaredControl = node.submitButtonId
+          ? submitControls.get(node.submitButtonId)
+          : undefined;
+        const submitActionId = declaredControl?.actionId ?? node.submitActionId;
+        if (submitActionId) {
+          if (!declaredControl) {
+            // The simple form: the renderer supplies the button.
+            const actions = element('div', 'axiom-container axiom-ux-action-group axiom-layout-horizontal axiom-gap-small axiom-align-center axiom-justify-end axiom-wrap axiom-width-fill');
+            const submit = element(
+              'button',
+              'axiom-submit axiom-button axiom-role-primary axiom-emphasis-strong axiom-ux-primary-action',
+            );
+            submit.setAttribute('type', 'submit');
+            submit.textContent = node.submitLabel ?? 'Submit';
+            actions.appendChild(submit);
+            form.appendChild(actions);
+          }
           form.addEventListener('submit', (event: DomEvent) => {
             event.preventDefault?.();
-            runAction(actionId);
+            runAction(submitActionId);
           });
         }
         return form;
@@ -1613,10 +1793,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       case 'input': {
         const descriptor = resolveInputTag(node);
         const grouped = descriptor.tag === 'radio-group';
-        const controlId = `axiom-control-${node.id}`;
+        const controlId = `axiom-control-${instance}`;
         const required = ir.locationRequired?.[node.id] === true;
-        const wrapper = element(grouped ? 'div' : 'label', nodeClasses(node, 'axiom-input'));
-        wrapper.setAttribute('data-node', node.id);
+        const wrapper = identify(element(grouped ? 'div' : 'label', nodeClasses(node, 'axiom-input')));
         if (grouped) {
           wrapper.setAttribute('role', 'group');
         } else {
@@ -1639,8 +1818,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
 
         const current = readLocation(node.binding.location, scope);
         const describedBy: string[] = [];
-        const control = element(grouped ? 'div' : descriptor.tag, grouped ? 'axiom-radio-group' : 'axiom-control');
-        control.setAttribute('data-node', node.id);
+        const control = identify(
+          element(grouped ? 'div' : descriptor.tag, grouped ? 'axiom-radio-group' : 'axiom-control'),
+        );
         if (descriptor.variant) {
           control.setAttribute('data-control', descriptor.variant);
         }
@@ -1742,7 +1922,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
 
           if (failures.length > 0) {
             settle(transaction, 'rolled-back');
-            inputErrors.set(node.id, failures[0].message);
+            inputErrors.set(instance, failures[0].message);
             failures.forEach(report);
           } else {
             // A transition rule always applies: it compares against the state this
@@ -1753,7 +1933,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
             ];
             if (rejected.length > 0) {
               settle(transaction, 'rolled-back');
-              inputErrors.set(node.id, rejected[0].message);
+              inputErrors.set(instance, rejected[0].message);
               rejected.forEach((diagnostic) =>
                 report({ ...diagnostic, details: { ...diagnostic.details, source: 'input', nodeId: node.id } }),
               );
@@ -1766,11 +1946,11 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
               });
             } else {
               settle(transaction, 'committed');
-              inputErrors.delete(node.id);
+              inputErrors.delete(instance);
             }
           }
 
-          focusedNodeId = node.id;
+          focusedInstance = instance;
           focusedCaret = typeof source.selectionStart === 'number' ? source.selectionStart : null;
           renderApplication();
         };
@@ -1779,10 +1959,10 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           target.addEventListener('input', apply);
           target.addEventListener('change', apply);
           target.addEventListener('focus', () => {
-            focusedNodeId = node.id;
+            focusedInstance = instance;
           });
         }
-        inputElements.set(node.id, control);
+        inputElements.set(instance, control);
         wrapper.appendChild(control);
 
         if (presentation?.description) {
@@ -1792,7 +1972,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           describedBy.push(`${controlId}-description`);
           wrapper.appendChild(help);
         }
-        const rejection = inputErrors.get(node.id);
+        const rejection = inputErrors.get(instance);
         if (rejection) {
           // The refusal is related to the control it refused, not left floating.
           const error = element('span', 'axiom-input-description axiom-role-destructive axiom-text-caption');
@@ -1811,19 +1991,37 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return wrapper;
       }
       case 'button': {
-        const button = element('button', nodeClasses(node, 'axiom-button'));
-        button.setAttribute('data-node', node.id);
+        const submits = submitControls.get(node.id);
+        const button = identify(
+          element('button', nodeClasses(node, 'axiom-button', submits ? 'axiom-submit' : '')),
+        );
         button.setAttribute('type', 'button');
         const label = typeof node.label === 'string' ? node.label : toText(evaluate(node.label, scope));
-        if (appendIcon(button, presentation)) {
+        if (presentation?.icon) {
           const caption = element('span', 'axiom-button-label');
           caption.textContent = label;
-          button.appendChild(caption);
+          // Where the icon sits is a theme decision, not a per-button one.
+          if (theme?.buttons?.iconPlacement === 'trailing') {
+            button.appendChild(caption);
+            appendIcon(button, presentation);
+          } else {
+            appendIcon(button, presentation);
+            button.appendChild(caption);
+          }
         } else {
           button.textContent = label;
         }
         if (presentation?.accessibleLabel) {
           button.setAttribute('aria-label', presentation.accessibleLabel);
+        }
+        const reporting = reportingRegionFor(node.actionId, path);
+        if (reporting) {
+          button.setAttribute('aria-describedby', reporting);
+        }
+        if (submits) {
+          // Native form submission runs the action; a click handler here would run it twice.
+          button.setAttribute('type', 'submit');
+          return button;
         }
         button.addEventListener('click', (event: DomEvent) => {
           event.preventDefault?.();
@@ -1835,11 +2033,37 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         });
         return button;
       }
+      case 'diagnostic': {
+        const region = identify(element('div', nodeClasses(node, 'axiom-diagnostic')));
+        region.setAttribute('id', `axiom-diagnostic-${instance}`);
+        const ariaRole = ariaRoleFor(presentation?.uxRole);
+        if (ariaRole) {
+          region.setAttribute('role', ariaRole);
+        }
+        if (presentation?.accessibleLabel) {
+          region.setAttribute('aria-label', presentation.accessibleLabel);
+        }
+        const reported = presentedDiagnostics(node);
+        if (reported.length === 0) {
+          // Nothing to report: the region renders empty rather than disappearing, so the
+          // relationship an initiating control declares stays resolvable.
+          region.setAttribute('data-empty', 'true');
+          return region;
+        }
+        appendIcon(region, presentation);
+        for (const diagnostic of reported) {
+          const entry = element('span', 'axiom-diagnostic-entry axiom-text-body');
+          entry.setAttribute('data-code', diagnostic.code);
+          // The wording is the structured diagnostic's own; the renderer invents none.
+          entry.textContent = diagnostic.message;
+          region.appendChild(entry);
+        }
+        return region;
+      }
       case 'conditional': {
-        const container = element('div', nodeClasses(node, 'axiom-conditional'));
-        container.setAttribute('data-node', node.id);
+        const container = identify(element('div', nodeClasses(node, 'axiom-conditional')));
         const branch = toBoolean(evaluate(node.condition, scope)) ? node.whenTrue : node.whenFalse ?? [];
-        renderChildren(branch, scope, container);
+        renderChildren(branch, scope, container, path);
         return container;
       }
       default:
@@ -1861,16 +2085,16 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       rootElement.replaceChildren(missing);
       return;
     }
-    const view = renderNode(activeRoute.route.viewId, scope);
+    const view = renderNode(activeRoute.route.viewId, scope, ROOT_INSTANCE);
     rootElement.replaceChildren(...(view ? [view] : []));
     restoreFocus();
   }
 
   function restoreFocus(): void {
-    if (!focusedNodeId) {
+    if (!focusedInstance) {
       return;
     }
-    const control = inputElements.get(focusedNodeId);
+    const control = inputElements.get(focusedInstance);
     if (!control) {
       return;
     }
@@ -1897,6 +2121,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       host.onPathChange(() => {
         activeRoute = matchRoute(host.getPath());
         derivedCache.clear();
+        // Diagnostics are about the screen that produced them.
+        actionOutcomes.clear();
+        inputErrors.clear();
         renderApplication();
       });
       syncRoute();
@@ -1934,6 +2161,13 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     },
     clearDiagnostics(): void {
       diagnostics.length = 0;
+      actionOutcomes.clear();
+      inputErrors.clear();
+      renderApplication();
+    },
+    getActionOutcome(id: NodeId): ActionOutcome | undefined {
+      const record = actionOutcomes.get(id);
+      return record ? { ...record, diagnostics: record.diagnostics.map((d) => ({ ...d })) } : undefined;
     },
     getMutationLog(): MutationLogEntry[] {
       return mutationLog.map((entry) => ({ ...entry }));

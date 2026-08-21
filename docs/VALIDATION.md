@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.5.1-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.5.2-alpha.1. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -123,7 +123,7 @@ application from compiling.
 | Code | Raised when | Severity |
 | --- | --- | --- |
 | `UNKNOWN_PRESENTATION_TOKEN` | A presentation or theme value, or a property name, outside the published vocabulary. Carries `path`, `details.value` and `details.allowed`. | **error** |
-| `PRESENTATION_SEMANTIC_CONFLICT` | Declared presentation contradicts the application's own semantics. | warning |
+| `PRESENTATION_SEMANTIC_CONFLICT` | Declared presentation contradicts what the node it sits on actually is. See below. | warning |
 | `DESTRUCTIVE_ACTION_PRESENTED_AS_SUCCESS` | A destructive action presented as `success` or `informational`. | warning |
 | `DESTRUCTIVE_ACTION_UNMARKED` | A bound action removes data but does not declare `destructive`. | warning |
 | `MULTIPLE_PRIMARY_ACTIONS` | A form or action group presenting more than one action as primary. | warning |
@@ -142,7 +142,50 @@ Only structurally determinable checks. Nothing speculative.
 | --- | --- | --- |
 | `FORM_INPUT_MISSING_LABEL` | An input with no `label` and no `accessibleLabel`. | warning |
 | `INTERACTIVE_ELEMENT_MISSING_LABEL` | A control with no accessible name — typically an icon-only button. | warning |
-| `INVALID_HEADING_STRUCTURE` | A view with section headings and no title above them. | warning |
+| `INVALID_HEADING_STRUCTURE` | A malformed document outline. See below. | warning |
+
+### Semantic conflicts
+
+`PRESENTATION_SEMANTIC_CONFLICT` reports presentation that contradicts the node it sits on.
+Every case is decided from the graph alone; none is a heuristic about taste.
+
+| Declared | Why it conflicts |
+| --- | --- |
+| A control-only `uxRole` (`primary-action`, `secondary-action`, `destructive-action`, `navigation-action`) on a node that is not a button | only a control has a place in the action hierarchy |
+| A region `uxRole` (`toolbar`, `sidebar`, `form-section`, `action-group`, `navigation-group`, `content-region`, `header-region`, `footer-region`) on a node that holds no children | there is no group to describe |
+| `uxRole: 'navigation-action'` on a button whose action does not navigate — directly or through one level of `invoke` | the control claims to go somewhere |
+| `uxRole: 'destructive-action'` on a button whose action declares no destructive intent | the control claims a danger the action does not have |
+| `role: 'muted'` on the primary action | the emphasised control is de-emphasised |
+| `treatment` other than `plain`, or a `format`, on a node that renders no value | there is nothing to present |
+| A `format` whose kind the field's declared type could never be — `currency` on a string, `boolean` on a number, `date` on a boolean | the format cannot describe the value |
+| A `control` variant on a node that is not an input | nothing is edited there |
+| A numeric `headingLevel` on a node that is not text | only text can be a heading |
+
+Related, and reported under their own codes: a destructive action presented as `success` or
+`informational` (`DESTRUCTIVE_ACTION_PRESENTED_AS_SUCCESS`), and an action that removes data
+without declaring `destructive` (`DESTRUCTIVE_ACTION_UNMARKED`).
+
+### Document outline
+
+`INVALID_HEADING_STRUCTURE` is checked on **resolved heading levels**, not on rendered
+markup, and only along each view's [primary render path](UI.md#the-primary-render-path) —
+so headings in an empty template or a false branch, which are never on screen with the rest,
+produce no findings.
+
+Per reachable view, given the levels in render order:
+
+| Reported when | `details` |
+| --- | --- |
+| The view has headings but none at level 1 | `primaryHeadings: 0` |
+| More than one level-1 heading | `primaryHeadings: n` |
+| A level more than one deeper than the previous heading — `1` then `3` | `from`, `to` |
+
+A view with no headings at all has no outline to be wrong about and is never reported.
+`details.levels` always carries the sequence that was analysed.
+
+Because the check reads `headingLevel`, a value drawn at `display` scale with
+`headingLevel: 'none'` — a monetary total, a dashboard statistic — is correctly not part of
+the outline. See [`PRESENTATION.md`](PRESENTATION.md#type-scale-and-document-outline).
 
 ## Reading a result
 

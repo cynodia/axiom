@@ -17,8 +17,11 @@ turn it into a working browser application whose generated JavaScript nobody rea
   presence semantics, strict collection nulls and trustworthy dependency analysis.
 * `doc/spec5.md` — the 0.5 presentation & UX semantic layer: semantic roles, layout and
   spacing tokens, device classes, themes, value formatting and accessible structure.
-* `doc/spec5.1.md` — the **agent-optimized documentation overhaul**: `docs/` is a machine-
-  facing operational contract, not a tutorial set.
+* `doc/spec5.1.md` — the agent-optimized documentation overhaul: `docs/` is a machine-facing
+  operational contract, not a tutorial set.
+* `doc/spec5.2.md` — the **0.5.2 presentation & UX hardening: render-instance identity,
+  action diagnostics as semantic UI, theme-owned control affordances, and a type scale
+  separate from the document outline**.
 
 Together, spec2–spec5 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
@@ -465,6 +468,22 @@ on every node. It also means a 0.4 graph gains all of it without being edited.
 roles, tokens and device classes — never CSS. `packages/compiler/test/presentation.test.ts`
 asserts that no colour, length or CSS property appears in it, because that is what keeps a
 second renderer possible. Resolve *into* the IR, translate to CSS only in `stylesheet.ts`.
+
+**A rendered element is identified by node *and* render instance.** A UI node inside a
+`repeat` is rendered once per member, so `NodeId` alone cannot identify a rendered element.
+Element ids, label associations, described-by relationships, error regions, control lookup
+and focus restoration are all keyed by the instance — `data-node` carries the semantic node,
+`data-instance` this rendering of it. Anything new that generates an id or a relationship
+must be keyed the same way, or accessibility state leaks between rows.
+
+**If many applications would need the same corrective presentation, it is a framework
+default.** Control affordances belong in the theme (`theme.buttons`), not on every node. A
+padding or gap token resolved to `none` emits no class, so a component's own metrics are
+never overridden by the absence of a value.
+
+**A type scale is not a document outline.** `textRole` decides how large text is drawn;
+`headingLevel` decides whether it is a heading. Validation reads the resolved level, along
+each view's primary render path only.
 
 **The renderer emits class names and nothing else.** No inline styles, no computed lengths.
 `presentationClassList` is the whole vocabulary of what reaches the DOM, and every class it

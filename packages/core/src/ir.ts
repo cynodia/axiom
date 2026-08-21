@@ -66,6 +66,15 @@ export interface ApplicationIR {
    * renderer can mark it without re-deriving the model.
    */
   locationRequired: Record<NodeId, boolean>;
+  /**
+   * The field that distinguishes the members of each `repeat` node's collection, resolved
+   * here so a runtime carries no type inference of its own.
+   *
+   * A renderer uses it to give every rendered repeat instance a stable identity. A repeat
+   * whose member type cannot be resolved statically is absent from this map, and the
+   * renderer falls back to the iteration index.
+   */
+  repeatIdentityFields: Record<NodeId, FieldId>;
   /** The application's visual identity, completed against the default theme. */
   theme: Theme;
   /**

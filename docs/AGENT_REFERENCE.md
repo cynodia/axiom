@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.5.1-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.5.2-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -31,7 +31,7 @@ One canonical term per concept. These are not interchangeable.
 ## Graph construction
 
 ```ts
-const graph = new ApplicationGraph(id, name);      // version defaults to '0.5.1'
+const graph = new ApplicationGraph(id, name);      // version defaults to '0.5.2'
 graph.addNode<StateDef>({ id, kind: 'state', ... }); // returns NodeId; throws if id exists
 graph.getNode<StateDef>(id);                        // deep clone, or undefined
 graph.updateNode(node);                             // write a modified node back
@@ -316,13 +316,59 @@ boolean types (`TYPE_MISMATCH`).
 
 ## UI nodes
 
-Nine kinds: `view` `container` `text` `repeat` `field-display` `form` `input` `button`
-`conditional`. Detail: [`UI.md`](UI.md).
+Ten kinds: `view` `container` `text` `repeat` `field-display` `form` `input` `button`
+`conditional` `diagnostic`. Detail: [`UI.md`](UI.md).
 
 - `RepeatNode` binds the current item to **the repeat node's own id**; the template refers to it as `ref(repeatNodeId)`.
 - `InputNode.binding` is `{ location }` — no expression, no field id. An input write goes through the same mutation engine and transaction as an action.
 - `ButtonNode.arguments` is keyed by **action parameter id**.
+- `FormNode` submits either a generated button (`submitActionId` + `submitLabel`) or a declared one (`submitButtonId`), which stays an ordinary queryable node.
+- `DiagnosticNode` presents why an action refused. See [Action diagnostics](#action-diagnostics).
 - `visibleWhen` and `ConditionalNode` are interaction behavior, **not authorization**.
+
+### Render instances
+
+A node inside a `repeat` is rendered once per member, so `NodeId` alone cannot identify a
+rendered element.
+
+```text
+NodeId          = semantic graph identity      → data-node
+RenderInstance  = runtime presentation identity → data-instance
+```
+
+Every renderer-generated id and relationship — element `id`, label `for`,
+`aria-describedby`, error-region ids, control lookup, focus restoration — is keyed by the
+**render instance**, so state never leaks between rows. Identity prefers the member's own
+identity field and falls back to a deterministic index; nested repeats compose.
+
+The graph still holds one node. `AgentAPI` reasons about that node, never about instances.
+
+## Action diagnostics
+
+The runtime already knows why an action refused. A `DiagnosticNode` makes that available
+to the semantic UI, so an application never duplicates an action's guards as derived state
+to explain them.
+
+```ts
+{ kind: 'diagnostic', actionId: ACTION_CONFIRM_ORDER, severity?: 'error' | 'warning' }
+```
+
+Lifecycle — deterministic, and the whole contract:
+
+| Event | Record |
+| --- | --- |
+| Invocation refused | `outcome: 'failed'` with that invocation's diagnostics |
+| Invocation succeeded | `outcome: 'ok'`, no diagnostics — the message clears |
+| Confirmation declined | `outcome: 'cancelled'`, no diagnostics |
+| `clearDiagnostics()` | record removed |
+| Navigating to another route | every record removed |
+
+- The record holds **only the most recent invocation** of that action.
+- `severity` is the lowest severity presented; `'error'` (default) presents only errors.
+- Multiple diagnostics are presented in the order they were reported.
+- Messages come from the structured diagnostic — `failureMode.message`, `ConstraintDef.message` — never from renderer wording.
+- The region is a live region: `role="alert"` for errors, `role="status"` for warnings, rendered even when empty so later content is announced. The initiating control gets `aria-describedby` pointing at it while it has content.
+- `app.getActionOutcome(actionId)` reads the record.
 
 ## Presentation
 
@@ -345,6 +391,15 @@ renderer defaults → theme → inherited → semantic inference → node → re
 
 `ResolvedPresentation.origins` records which layer decided each property. `density` is the
 only property that inherits.
+
+**A text role is typography; `headingLevel` is the outline.** A monetary total wants
+`textRole: 'display'` with `headingLevel: 'none'`. Omitted, the level follows the text role
+(`display` → 1, `title` → 2, `heading` → 3), which is the 0.5.0 mapping kept for
+compatibility.
+
+**A control's internal arrangement comes from `theme.buttons`**, not from node
+presentation. An ordinary button — label only, or icon plus label, in any role — needs no
+corrective `layout` or `padding`.
 
 **PRESENTATION NEVER AUTHORIZES BEHAVIOR.** `hidden` ≠ forbidden. `role: 'destructive'` is
 not a constraint. Enforcement belongs to guards, constraints and transition constraints.

@@ -5,6 +5,7 @@ import type { TypeRef } from './type-ref.js';
 import { isUINode, uiChildIds } from './ui.js';
 import type { UINode } from './ui.js';
 import {
+  TEXT_ROLE_HEADING_LEVELS,
   normalizeDensity,
   normalizeLayout,
   normalizePadding,
@@ -13,6 +14,7 @@ import {
 import type {
   Density,
   DeviceClass,
+  HeadingLevel,
   Presentation,
   PresentationOrigin,
   ResolvedLayout,
@@ -66,6 +68,7 @@ interface Layer {
   emphasis?: ResolvedPresentation['emphasis'];
   density?: Density;
   textRole?: ResolvedPresentation['textRole'];
+  headingLevel?: HeadingLevel;
   uxRole?: UxRole;
   surface?: ResolvedPresentation['surface'];
   treatment?: ResolvedPresentation['treatment'];
@@ -136,8 +139,14 @@ function buildIndex(nodes: readonly AnyNode[]): Index {
   return { nodes: byId, parentOf, formOf, fieldTypes };
 }
 
-/** What a node's kind implies, before anything about the application is considered. */
-function kindLayer(node: UINode): Layer {
+/**
+ * What a node's kind implies, before anything about the application is considered.
+ *
+ * A control carries its own internal arrangement — a button is a centred row containing an
+ * icon and a label, not a bare box. Getting this right here is what stops every
+ * application from restating the same corrective layout and padding on every button.
+ */
+function kindLayer(node: UINode, theme: Theme): Layer {
   switch (node.kind) {
     case 'view':
       return { origin: 'inferred', layout: { kind: 'vertical', gap: 'large' }, sizing: { width: 'fill' } };
@@ -160,6 +169,8 @@ function kindLayer(node: UINode): Layer {
       return { origin: 'inferred', layout: { kind: 'vertical', gap: 'small' }, sizing: { width: 'fill' } };
     case 'conditional':
       return { origin: 'inferred', layout: { kind: 'vertical', gap: 'medium' }, sizing: { width: 'fill' } };
+    case 'diagnostic':
+      return { origin: 'inferred', layout: { kind: 'vertical', gap: 'xsmall' }, sizing: { width: 'fill' } };
     case 'field-display':
       return {
         origin: 'inferred',
@@ -170,8 +181,23 @@ function kindLayer(node: UINode): Layer {
       return { origin: 'inferred', sizing: { width: 'content' } };
     case 'input':
       return { origin: 'inferred', layout: { kind: 'vertical', gap: 'xsmall' }, sizing: { width: 'fill' } };
-    case 'button':
-      return { origin: 'inferred', role: 'secondary', sizing: { width: 'content' } };
+    case 'button': {
+      const buttons = theme.buttons;
+      return {
+        origin: 'inferred',
+        role: 'secondary',
+        sizing: { width: 'content' },
+        layout: {
+          kind: buttons.layout,
+          gap: buttons.gap,
+          align: buttons.align,
+          justify: buttons.justify,
+          wrap: false,
+        },
+        // Control padding comes from the theme's control metrics, not from spacing tokens.
+        padding: { horizontal: 'none', vertical: 'none' },
+      };
+    }
     default:
       return { origin: 'inferred' };
   }
@@ -284,6 +310,13 @@ function statusLayer(role: NonNullable<ResolvedPresentation['role']>, icon: Reso
  * destructive action is presented as destructive without the graph saying so twice.
  */
 function semanticLayer(node: UINode, index: Index): Layer {
+  if (node.kind === 'diagnostic') {
+    // A region that reports a refusal is a status region of the matching severity.
+    return {
+      origin: 'inferred',
+      uxRole: node.severity === 'warning' ? 'warning-state' : 'error-state',
+    };
+  }
   if (node.kind !== 'button') {
     return { origin: 'inferred' };
   }
@@ -354,6 +387,9 @@ function nodeLayer(presentation: Presentation | undefined): Layer {
   if (presentation.textRole) {
     layer.textRole = presentation.textRole;
   }
+  if (presentation.headingLevel !== undefined) {
+    layer.headingLevel = presentation.headingLevel;
+  }
   if (presentation.uxRole) {
     layer.uxRole = presentation.uxRole;
   }
@@ -410,6 +446,7 @@ function applyLayers(nodeId: NodeId, layers: Layer[]): ResolvedPresentation {
     emphasis: 'normal',
     density: 'comfortable',
     textRole: 'body',
+    headingLevel: 'none',
     surface: 'transparent',
     treatment: 'plain',
     layout: { ...DEFAULT_LAYOUT },
@@ -426,6 +463,7 @@ function applyLayers(nodeId: NodeId, layers: Layer[]): ResolvedPresentation {
     'emphasis',
     'density',
     'textRole',
+    'headingLevel',
     'uxRole',
     'surface',
     'treatment',
@@ -480,6 +518,15 @@ function applyLayers(nodeId: NodeId, layers: Layer[]): ResolvedPresentation {
     if (layer.padding) {
       resolved.padding = { ...layer.padding };
       origins.padding = layer.origin;
+    }
+  }
+
+  // The outline level follows the type scale unless something stated it. This is the
+  // 0.5.0 mapping, kept so an existing application does not lose its heading structure.
+  if (origins.headingLevel === undefined) {
+    resolved.headingLevel = TEXT_ROLE_HEADING_LEVELS[resolved.textRole];
+    if (resolved.headingLevel !== 'none') {
+      origins.headingLevel = 'inferred';
     }
   }
 
@@ -605,7 +652,7 @@ export function resolvePresentationMap(
     if (inherited) {
       layers.push(inherited);
     }
-    layers.push(kindLayer(node));
+    layers.push(kindLayer(node, theme));
     const uxRole = declared?.uxRole ?? semanticLayer(node, index).uxRole;
     if (uxRole) {
       layers.push(uxRoleLayer(uxRole));

@@ -1,6 +1,6 @@
 # Presentation
 
-Axiom 0.5.1-alpha.1. Presentation is **semantic UX intent**, expressed as data on a UI
+Axiom 0.5.2-alpha.1. Presentation is **semantic UX intent**, expressed as data on a UI
 node. It names roles, tokens and device classes. It never names a colour, a length, a media
 query or a CSS property.
 
@@ -85,6 +85,7 @@ because a renderer cannot act on a value it does not know.
 | `emphasis` | `subtle` `normal` `strong` | `EMPHASIS_LEVELS` |
 | `density` | `compact` `comfortable` `spacious` | `DENSITIES` |
 | `textRole` | `body` `caption` `label` `heading` `title` `display` | `TEXT_ROLES` |
+| `headingLevel` | `1` `2` `3` `4` `5` `6` `'none'` | `HEADING_LEVELS` |
 | `surface` | `transparent` `base` `subtle` `raised` `inset` | `SURFACE_ROLES` |
 | `treatment` | `plain` `badge` `pill` | `TREATMENTS` |
 | `control` | `default` `switch` `checkbox` `radio-group` `select` `multiline` `stepper` | `CONTROL_VARIANTS` |
@@ -114,6 +115,31 @@ layout: { kind: 'grid', columns: 3 }
 - `wrap` defaults to **`true`** for `horizontal` and `grid`, `false` otherwise. A row that cannot wrap is the most common way a layout becomes unusable on a narrow display, so refusing to wrap must be stated explicitly.
 - `columns: { mode: 'adaptive', minimum }` means "as many columns of at least this width as fit". Prefer it to a fixed count.
 - `stack` is a tight vertical column — the 0.2 meaning of `ContainerNode.layout: 'stack'`. It does **not** overlap children.
+
+### Type scale and document outline
+
+These are two decisions, and conflating them produces wrong document semantics.
+
+| | Decides | Property |
+| --- | --- | --- |
+| **Type scale** | how large and heavy the text is drawn | `textRole` |
+| **Outline** | whether it is a heading, and at which level | `headingLevel` |
+
+```ts
+// A dashboard statistic: drawn large, not a heading.
+presentation: { textRole: 'display', headingLevel: 'none' }
+
+// A section heading in ordinary body type.
+presentation: { textRole: 'body', headingLevel: 2 }
+```
+
+Omitted, the level follows the text role — `display` → 1, `title` → 2, `heading` → 3,
+everything else → `'none'`. That is the 0.5.0 mapping, kept so an application that declared
+only text roles keeps its outline. **An explicit `headingLevel` always wins**, and
+`TEXT_ROLE_HEADING_LEVELS` is the mapping as data.
+
+The rendered element follows the resolved level: `1`…`6` become `<h1>`…`<h6>`, and `'none'`
+is a `<span>` however large it is drawn.
 
 ### Sizing and spacing
 
@@ -153,6 +179,29 @@ agent.resolvePresentation(DELETE_BUTTON);
 `PresentationOrigin` is one of `renderer-default` `theme` `inherited` `inferred` `node`
 `responsive`.
 
+### Control affordances come from the theme
+
+An ordinary button needs a direction, an alignment, a gap and padding. None of that is
+application intent, so none of it belongs on a node: it comes from `theme.buttons`.
+
+```ts
+buttons: {
+  layout: 'horizontal',     // an icon sits beside its label, never above it
+  gap: 'xsmall',
+  align: 'center',
+  justify: 'center',
+  paddingScale: 1.15,       // relative to controls.paddingX
+  iconPlacement: 'leading', // or 'trailing'
+}
+```
+
+A button with a label, or an icon and a label, in any role, requires **zero** corrective
+presentation. If you find yourself writing the same `layout` and `padding` on every button,
+that is a theme change, not an application one.
+
+Padding and gap tokens resolved to `none` emit no class at all, so a control's own metrics
+are never overridden by the absence of a value.
+
 ### Inheritance
 
 **`density` is the only property that inherits.** `INHERITED_PROPERTIES` is `['density']`.
@@ -178,7 +227,7 @@ Inference runs in three ordered sub-steps, all reported as origin `inferred`.
 | `field-display` | horizontal, gap `xsmall`, align `center`, wrapping, width `content` |
 | `text` | width `content` |
 | `input` | vertical, gap `xsmall`, width `fill` |
-| `button` | role `secondary`, width `content` |
+| `button` | role `secondary`, width `content`, and its internal arrangement from `theme.buttons` |
 
 ### 2. From the UX role
 
@@ -373,7 +422,8 @@ Semantic roles produce accessible structure, so the two cannot drift apart.
 | `uxRole: 'toolbar'` | `role="toolbar"` |
 | `uxRole: 'error-state'` | `role="alert"` |
 | `uxRole: 'warning-state'` / `success-state` / `informational-state` | `role="status"` |
-| `textRole: 'display'` / `'title'` / `'heading'` | `<h1>` / `<h2>` / `<h3>` |
+| `headingLevel: 1`…`6` | `<h1>`…`<h6>` |
+| `headingLevel: 'none'` | `<span>`, whatever the type scale |
 
 Also automatic:
 
@@ -382,6 +432,10 @@ Also automatic:
 - `presentation.description` becomes help text related with `aria-describedby`.
 - A refused write marks the control `aria-invalid` and announces the reason next to it.
 - An icon is `aria-hidden`; an icon-only control needs `accessibleLabel`.
+
+Also automatic, per render instance rather than per node, so nothing leaks between repeated
+rows: element ids, `for`, `aria-describedby` and `aria-invalid`. See
+[`UI.md`](UI.md#render-instances).
 
 Validation reports only what it can determine reliably:
 `FORM_INPUT_MISSING_LABEL`, `INTERACTIVE_ELEMENT_MISSING_LABEL`,

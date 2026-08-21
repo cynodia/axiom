@@ -382,7 +382,7 @@ body {
 .axiom-input-description { color: var(--axiom-color-text-muted); font-size: ${theme.typography.roles.caption.size}px; }
 .axiom-required-marker { color: var(--axiom-color-destructive); margin-left: 2px; }
 
-.axiom-control {
+input.axiom-control, select.axiom-control, textarea.axiom-control, .axiom-control {
   font: inherit;
   color: var(--axiom-color-text);
   background: var(--axiom-color-surface);
@@ -401,24 +401,33 @@ input[type="checkbox"].axiom-control { width: 1.15em; height: 1.15em; min-height
 .axiom-control:disabled { opacity: 0.6; }
 .axiom-control[aria-invalid="true"] { border-color: var(--axiom-color-destructive); }
 
-.axiom-button {
+button.axiom-button {
   font: inherit;
   font-weight: 560;
+  /* The internal arrangement comes from the theme's button metrics, so no application
+     has to restate layout and padding on every control. */
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: ${space('xsmall')};
+  flex-direction: ${theme.buttons.layout === 'vertical' ? 'column' : 'row'};
+  align-items: ${ALIGN_VALUES[theme.buttons.align]};
+  justify-content: ${JUSTIFY_VALUES[theme.buttons.justify]};
+  gap: ${space(theme.buttons.gap)};
   min-height: var(--axiom-control-height);
-  padding: 0 calc(var(--axiom-control-padding-x) * 1.15);
+  padding: 0 calc(var(--axiom-control-padding-x) * ${theme.buttons.paddingScale});
   border: var(--axiom-control-border) solid transparent;
   border-radius: var(--axiom-control-radius);
   background: var(--axiom-color-surface);
   color: var(--axiom-color-text);
   cursor: pointer;
   white-space: nowrap;
+  text-align: center;
 }
-.axiom-button:hover { filter: brightness(0.96); }
-.axiom-button:active { transform: translateY(1px); }
+button.axiom-button:hover { filter: brightness(0.96); }
+button.axiom-button:active { transform: translateY(1px); }
+/* A button's own contents are laid out by the theme; a layout token on the node refines
+   the direction without giving up the control's metrics. */
+button.axiom-button.axiom-layout-vertical { flex-direction: column; }
+button.axiom-button.axiom-layout-horizontal { flex-direction: row; }
+.axiom-button > .axiom-button-label { white-space: nowrap; }
 
 :focus-visible { outline: var(--axiom-focus-width) solid var(--axiom-color-focus); outline-offset: 1px; }
 
@@ -426,6 +435,8 @@ input[type="checkbox"].axiom-control { width: 1.15em; height: 1.15em; min-height
 .axiom-ux-empty-state { text-align: center; }
 .axiom-ux-form-section + .axiom-ux-form-section { padding-top: ${space('small')}; border-top: 1px solid var(--axiom-color-border); }
 
+.axiom-diagnostic[data-empty="true"] { display: none; }
+.axiom-diagnostic-entry { color: inherit; }
 .axiom-no-route { padding: ${space('large')}; background: var(--axiom-color-surface); border-radius: var(--axiom-radius-medium); }
 .axiom-diagnostics { list-style: none; margin: 0; padding: 0; }
 `.trim();

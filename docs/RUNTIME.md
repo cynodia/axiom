@@ -1,6 +1,6 @@
 # Runtime
 
-Axiom 0.5.1-alpha.1. The runtime executes an `ApplicationIR`. It is domain-independent: it
+Axiom 0.5.2-alpha.1. The runtime executes an `ApplicationIR`. It is domain-independent: it
 contains no knowledge of any application.
 
 ## Constructing
@@ -14,7 +14,7 @@ const app = createAxiomRuntime({
   rootElement,                     // a DomElement
   host,                            // a HostEnvironment
   nativeOperations?: Record<string, (inputs) => unknown>,
-  inputValidation?: 'immediate' | 'deferred',   // default 'immediate'
+  inputValidation?: 'immediate' | 'deferred',   // DEFAULT: 'immediate'
   recordMutationValues?: boolean,               // default true
 });
 app.start();
@@ -67,7 +67,8 @@ carries `data-node="<node id>"`.
 | `navigate(path)` | — | Changes route. |
 | `currentRoute()` | — | `{ route, parameters } \| null`. |
 | `diagnostics()` | — | Every diagnostic reported so far. |
-| `clearDiagnostics()` | — | Empties the running log. |
+| `clearDiagnostics()` | — | Empties the running log **and** every recorded action outcome. |
+| `getActionOutcome(id)` | — | The outcome of that action's most recent invocation. See below. |
 | `getMutationLog()` | — | Every attempted mutation, with source, path and outcome. |
 | `registerNativeOperation(id, fn)` | — | Registers an implementation for a `native` operation. |
 
@@ -86,10 +87,51 @@ values are frozen on entry, and the write is logged with source `system`.
 
 Application behaviour belongs in actions and input bindings, which are governed.
 
+## Action diagnostics
+
+The runtime records the outcome of each action's **most recent invocation**, which is what a
+`diagnostic` UI node presents.
+
+```ts
+app.getActionOutcome(ACTION_CONFIRM_ORDER);
+// { actionId, outcome: 'ok' | 'failed' | 'cancelled', diagnostics }
+```
+
+| Event | `outcome` | `diagnostics` |
+| --- | --- | --- |
+| The invocation was refused | `'failed'` | that invocation's diagnostics |
+| The invocation succeeded | `'ok'` | empty |
+| A required confirmation was declined | `'cancelled'` | empty |
+
+- The record is **replaced** by the next invocation of the same action, whatever its outcome. There is no accumulation.
+- It is cleared by `clearDiagnostics()` and by **navigating to another route** — a refusal is about the screen that produced it.
+- `'ok'` and `'cancelled'` both carry no diagnostics, so a region presenting the action shows nothing after either. They are distinguished because the difference matters: `cancelled` means a person declined, not that the action was refused.
+- A refusal that happens before a transaction opens — a missing parameter, a failed precondition — is recorded like any other. The runtime re-renders after every top-level invocation, so a refusal reaches the screen without the application arranging it.
+- Diagnostics are **ephemeral runtime state**. They are not application state, are never persisted, and cannot be written.
+
+`inputValidation` is unrelated: it governs per-keystroke input writes, not action outcomes.
+
+## Input validation mode
+
+`inputValidation` **defaults to `'immediate'`**, in `createAxiomRuntime` and therefore in
+every generated page.
+
+| | `'immediate'` (default) | `'deferred'` |
+| --- | --- | --- |
+| Entity constraints per keystroke | evaluated against proposed state | **not** evaluated |
+| A write that breaks a hard invariant | rolled back; the control re-renders with what is stored | accepted into state until the next action |
+| Transition constraints | always evaluated | always evaluated |
+| `INPUT_REJECTED` | reported when a write is refused | reported only for a transition refusal |
+| `aria-invalid` on the control | set when its last write was refused | same |
+
+In both modes a write rooted in a `draft` or `ephemeral` state is unguarded per keystroke,
+and transition constraints still apply.
+
 ## Rendering
 
-- Rendering is a **full re-render** on every state change. Focus and caret position are restored by node id.
-- Only generic HTML elements are emitted: `div` `span` `form` `label` `input` `select` `option` `textarea` `button`, plus the landmark and heading elements a UX role or text role implies (`header` `footer` `nav` `main` `aside` `section` `h1` `h2` `h3`).
+- Rendering is a **full re-render** on every state change, and after every top-level action invocation. Focus and caret position are restored by **render instance**, so focus stays in the row it was in.
+- Only generic HTML elements are emitted: `div` `span` `form` `label` `input` `select` `option` `textarea` `button`, plus the landmark and heading elements a UX role or heading level implies (`header` `footer` `nav` `main` `aside` `section` `h1`…`h6`).
+- Every element carries `data-node` (the semantic node) and, inside a `repeat`, `data-instance` (this rendering of it). Renderer-generated ids and relationships are keyed by the instance — see [`UI.md`](UI.md#render-instances).
 - The renderer emits semantic class names and **no inline styles**. What a class means is decided by the theme stylesheet.
 - `MutationResult.affectedLocations` is recorded but not yet used for fine-grained updates.
 

@@ -1,4 +1,4 @@
-import type { DeviceClass, ResolvedPresentation, ResolvedResponsive, TextRole, UxRole } from '@cynodia/axiom-core';
+import type { DeviceClass, ResolvedPresentation, ResolvedResponsive, UxRole } from '@cynodia/axiom-core';
 
 /**
  * The web renderer's translation of resolved presentation into class names.
@@ -9,7 +9,12 @@ import type { DeviceClass, ResolvedPresentation, ResolvedResponsive, TextRole, U
  */
 
 function layoutClasses(prefix: string, layout: ResolvedPresentation['layout']): string[] {
-  const classes = [`axiom-${prefix}layout-${layout.kind}`, `axiom-${prefix}gap-${layout.gap}`];
+  // A `none` token is the absence of the property, not a value to assert. Emitting it
+  // would override the component rules that give a control its own metrics.
+  const classes = [`axiom-${prefix}layout-${layout.kind}`];
+  if (layout.gap !== 'none') {
+    classes.push(`axiom-${prefix}gap-${layout.gap}`);
+  }
   if (!prefix) {
     classes.push(`axiom-align-${layout.align}`, `axiom-justify-${layout.justify}`);
     classes.push(layout.wrap ? 'axiom-wrap' : 'axiom-nowrap');
@@ -39,7 +44,14 @@ function sizingClasses(prefix: string, sizing: ResolvedPresentation['sizing']): 
 }
 
 function paddingClasses(prefix: string, padding: ResolvedPresentation['padding']): string[] {
-  return [`axiom-${prefix}pad-x-${padding.horizontal}`, `axiom-${prefix}pad-y-${padding.vertical}`];
+  const classes: string[] = [];
+  if (padding.horizontal !== 'none') {
+    classes.push(`axiom-${prefix}pad-x-${padding.horizontal}`);
+  }
+  if (padding.vertical !== 'none') {
+    classes.push(`axiom-${prefix}pad-y-${padding.vertical}`);
+  }
+  return classes;
 }
 
 function responsiveClasses(device: DeviceClass, override: ResolvedResponsive): string[] {
@@ -127,20 +139,15 @@ export function landmarkTag(uxRole: UxRole | undefined): string | undefined {
 
 /**
  * Headings are real headings, so the document has an outline rather than a set of large
- * words. The three heading text roles are three levels: an application title, a title
- * within it, and a section heading under that.
+ * words.
+ *
+ * The element follows the resolved **`headingLevel`**, never the type scale: a value drawn
+ * at `display` size with `headingLevel: 'none'` is a `<span>`, which is what a monetary
+ * total or a dashboard statistic should be.
  */
-export function headingTag(textRole: TextRole | undefined): string | undefined {
-  switch (textRole) {
-    case 'display':
-      return 'h1';
-    case 'title':
-      return 'h2';
-    case 'heading':
-      return 'h3';
-    default:
-      return undefined;
-  }
+export function headingTag(resolved: ResolvedPresentation | undefined): string | undefined {
+  const level = resolved?.headingLevel;
+  return typeof level === 'number' ? `h${level}` : undefined;
 }
 
 /** The ARIA role a UX role implies, where one is warranted. */

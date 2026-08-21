@@ -1,6 +1,6 @@
 # Agent API
 
-Axiom 0.5.1-alpha.1. The machine-facing interface. Agents query semantics and apply
+Axiom 0.5.2-alpha.1. The machine-facing interface. Agents query semantics and apply
 structural transformations; they never edit generated code.
 
 ```ts
@@ -106,13 +106,23 @@ agent.getViewsUsingRole(role)                 // which views use this theme role
 agent.getPresentationWarnings(viewId?)        // what is wrong with this screen
 agent.getOpaquePresentationNodes()            // nodes semantic analysis cannot understand
 agent.getEphemeralStates()                    // UI state, told apart from domain state
+
+agent.getDiagnosticPresentations(actionId)         // which nodes present this action's failures
+agent.getActionsWithoutDiagnosticPresentation()    // which failures nothing explains
 ```
+
+`getActionsWithoutDiagnosticPresentation` reports actions that a control invokes, that can
+refuse — they declare a guard, a precondition or a postcondition — and whose refusal no
+`diagnostic` node presents. An action nothing invokes has no refusal to explain and is not
+reported.
 
 `getFormStructure` returns:
 
 ```ts
 {
-  formId, density, submitActionId?,
+  formId, density,
+  submitActionId?,          // submitActionId, or the declared submit button's own action
+  submitButtonId?,          // set when the form declares its submit control
   sections: [{ nodeId, name?, headings: string[], inputIds }],
   ungroupedInputIds,        // controls belonging to no section
   actionGroupIds,
@@ -121,6 +131,11 @@ agent.getEphemeralStates()                    // UI state, told apart from domai
   requiredInputIds,         // from the model's own `required`, not from presentation
 }
 ```
+
+It describes the form's **declared** structure — what the form contains — not what is on
+screen at this moment. It is read along the [primary render
+path](UI.md#the-primary-render-path), so a heading inside an empty template is not reported
+as one of the form's sections.
 
 Presentation resolution is recomputed per call rather than cached: a transaction mutates
 the graph underneath these queries, and a stale presentation answer would be worse than a

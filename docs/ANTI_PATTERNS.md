@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.5.1-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.5.2-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -279,7 +279,62 @@ const state = graph.getNode<StateDef>(STATE)!;
 graph.updateNode({ ...state, initialValue: 5 });
 ```
 
-## 22. Restating what the model already knows
+## 22. Duplicating an action's guards to explain them
+
+```ts
+// WRONG — the runtime already knows why the action refused. This is the same rule twice,
+// and the two will drift.
+{ id: STATE_CAN_CONFIRM, kind: 'state', derivation: binary('gt', call('count', lines), literal(0)) }
+{ kind: 'text', value: 'Add a line before confirming', visibleWhen: unary('not', ref(STATE_CAN_CONFIRM)) }
+
+// RIGHT — present the refusal the action already produced.
+{ kind: 'diagnostic', actionId: ACTION_CONFIRM_ORDER }
+```
+
+The message comes from the guard's own `failureMode.message`, so there is one place to
+change it.
+
+## 23. Correcting the same button in every button
+
+```ts
+// WRONG — if every button needs it, it is not application intent.
+presentation: { layout: { kind: 'horizontal' }, padding: { horizontal: 'medium' } }   // × 32
+
+// RIGHT — nothing on the node; the theme supplies control affordances.
+graph.setTheme({ buttons: { gap: 'small', paddingScale: 1.3 } });
+```
+
+## 24. Using the type scale to get a heading, or vice versa
+
+```ts
+// WRONG — a monetary total is now an <h2> in the document outline.
+presentation: { textRole: 'title' }
+
+// RIGHT — large type, not a heading.
+presentation: { textRole: 'title', headingLevel: 'none' }
+```
+
+```ts
+// WRONG — a section heading that is only a heading because it is big.
+presentation: { textRole: 'heading' }   // …for something that is not a section heading
+
+// RIGHT — state the outline explicitly where it matters.
+presentation: { textRole: 'body', headingLevel: 2 }
+```
+
+## 25. Assuming a node id identifies a rendered element
+
+```ts
+// WRONG — inside a repeat, one node is rendered once per member.
+document.getElementById(`axiom-control-${UI_LINE_QUANTITY}`);
+```
+
+Renderer-generated ids are keyed by **render instance**: `data-node` is the semantic node,
+`data-instance` is this rendering of it. Application logic should not be reading the DOM at
+all — see anti-pattern 3 — but a test or a host that must locate an element should select on
+`data-node` and pick the instance it means.
+
+## 26. Restating what the model already knows
 
 ```ts
 // UNNECESSARY — required comes from the field, the label from the field's name, the

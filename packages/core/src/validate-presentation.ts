@@ -1,8 +1,9 @@
 import { VALIDATION_CODES } from './diagnostics.js';
 import type { ValidationIssue } from './diagnostics.js';
-import type { NodeId } from './ids.js';
-import type { ActionDef } from './nodes.js';
+import type { FieldId, NodeId } from './ids.js';
+import type { ActionDef, EntityDef } from './nodes.js';
 import {
+  ACTION_UX_ROLES,
   ALIGNMENTS,
   BOUNDED_SIZES,
   CONTROL_VARIANTS,
@@ -18,15 +19,17 @@ import {
   SURFACE_ROLES,
   TEXT_ROLES,
   TREATMENTS,
+  HEADING_LEVELS,
   UX_ROLES,
   VALUE_FORMAT_KINDS,
 } from './presentation.js';
-import type { Presentation, ResolvedPresentation } from './presentation.js';
+import type { HeadingLevel, Presentation, ResolvedPresentation, ValueFormat } from './presentation.js';
 import { isDestructiveAction } from './resolve-presentation.js';
+import type { TypeRef } from './type-ref.js';
 import { APPEARANCES, RADIUS_TOKENS, SEMANTIC_COLOR_ROLES } from './theme.js';
 import type { ThemeInput } from './theme.js';
 import type { AnyNode } from './types.js';
-import { isUINode, uiChildIds } from './ui.js';
+import { isUINode, primaryChildIds, uiChildIds } from './ui.js';
 import type { UINode } from './ui.js';
 
 /**
@@ -54,6 +57,7 @@ const PRESENTATION_KEYS = [
   'emphasis',
   'density',
   'textRole',
+  'headingLevel',
   'uxRole',
   'surface',
   'treatment',
@@ -222,6 +226,9 @@ function checkPresentationTokens(bag: Bag, nodeId: NodeId, presentation: Present
   checkToken(bag, nodeId, `${path}.emphasis`, declared.emphasis, EMPHASIS_LEVELS);
   checkToken(bag, nodeId, `${path}.density`, declared.density, ACCEPTED_DENSITIES);
   checkToken(bag, nodeId, `${path}.textRole`, declared.textRole, TEXT_ROLES);
+  if (declared.headingLevel !== undefined && !HEADING_LEVELS.includes(declared.headingLevel as HeadingLevel)) {
+    unknown(bag, nodeId, `${path}.headingLevel`, declared.headingLevel, HEADING_LEVELS.map(String));
+  }
   checkToken(bag, nodeId, `${path}.uxRole`, declared.uxRole, UX_ROLES);
   checkToken(bag, nodeId, `${path}.surface`, declared.surface, SURFACE_ROLES);
   checkToken(bag, nodeId, `${path}.treatment`, declared.treatment, TREATMENTS);
@@ -281,6 +288,7 @@ function checkTheme(bag: Bag, theme: ThemeInput | undefined): void {
     'sizes',
     'surfaces',
     'controls',
+    'buttons',
     'density',
     'colors',
     'responsive',
@@ -340,6 +348,25 @@ function checkTheme(bag: Bag, theme: ThemeInput | undefined): void {
       checkKeys(bag, undefined, 'theme.typography.emphasis', declared.typography.emphasis, EMPHASIS_LEVELS);
     }
   }
+  if (isRecord(declared.buttons)) {
+    const buttons = declared.buttons;
+    checkKeys(bag, undefined, 'theme.buttons', buttons, [
+      'layout',
+      'gap',
+      'align',
+      'justify',
+      'paddingScale',
+      'iconPlacement',
+    ]);
+    checkToken(bag, undefined, 'theme.buttons.layout', buttons.layout, LAYOUT_KINDS);
+    checkToken(bag, undefined, 'theme.buttons.gap', buttons.gap, SPACING_TOKENS);
+    checkToken(bag, undefined, 'theme.buttons.align', buttons.align, ALIGNMENTS);
+    checkToken(bag, undefined, 'theme.buttons.justify', buttons.justify, JUSTIFICATIONS);
+    checkToken(bag, undefined, 'theme.buttons.iconPlacement', buttons.iconPlacement, [
+      'leading',
+      'trailing',
+    ]);
+  }
   if (isRecord(declared.responsive)) {
     checkKeys(bag, undefined, 'theme.responsive', declared.responsive, DEVICE_CLASSES);
   }
@@ -348,20 +375,52 @@ function checkTheme(bag: Bag, theme: ThemeInput | undefined): void {
 interface Index {
   nodes: Map<NodeId, AnyNode>;
   children: Map<NodeId, NodeId[]>;
+  /** Children on the path that renders when every collection is present and every condition true. */
+  primaryChildren: Map<NodeId, NodeId[]>;
+  fieldTypes: Map<FieldId, TypeRef>;
 }
 
 function buildIndex(nodes: readonly AnyNode[]): Index {
   const byId = new Map<NodeId, AnyNode>();
   const children = new Map<NodeId, NodeId[]>();
+  const primaryChildren = new Map<NodeId, NodeId[]>();
+  const fieldTypes = new Map<FieldId, TypeRef>();
   for (const node of nodes) {
     byId.set(node.id, node);
+    if (node.kind === 'entity') {
+      for (const field of (node as EntityDef).fields) {
+        fieldTypes.set(field.id, field.valueType);
+      }
+    }
   }
   for (const node of byId.values()) {
     if (isUINode(node)) {
       children.set(node.id, uiChildIds(node));
+      primaryChildren.set(node.id, primaryChildIds(node));
     }
   }
-  return { nodes: byId, children };
+  return { nodes: byId, children, primaryChildren, fieldTypes };
+}
+
+/** UI nodes along the primary render path, in render order. */
+function primaryDescendants(index: Index, id: NodeId): UINode[] {
+  const found: UINode[] = [];
+  const seen = new Set<NodeId>([id]);
+  const visit = (current: NodeId): void => {
+    for (const childId of index.primaryChildren.get(current) ?? []) {
+      if (seen.has(childId)) {
+        continue;
+      }
+      seen.add(childId);
+      const child = index.nodes.get(childId);
+      if (child && isUINode(child)) {
+        found.push(child);
+        visit(childId);
+      }
+    }
+  };
+  visit(id);
+  return found;
 }
 
 function descendants(index: Index, id: NodeId): UINode[] {
@@ -451,6 +510,7 @@ export function validatePresentation(
     checkRigidLayout(bag, index, node, view);
     checkAccessibleName(bag, node);
     checkDestructive(bag, node, view, actions);
+    checkNodeCompatibility(bag, index, node, actions);
     checkEmptyState(bag, index, node, view);
   }
 
@@ -524,6 +584,141 @@ function checkAccessibleName(bag: Bag, node: UINode): void {
     message: `${node.kind} ${node.name ?? node.id} has no accessible name`,
     nodeId: node.id,
   });
+}
+
+/** UX roles that describe a control's place in the action hierarchy. */
+const CONTROL_ONLY_UX_ROLES = new Set<string>(ACTION_UX_ROLES);
+
+/** UX roles that describe a region containing other nodes. */
+const REGION_UX_ROLES = new Set<string>([
+  'form-section',
+  'action-group',
+  'navigation-group',
+  'toolbar',
+  'sidebar',
+  'content-region',
+  'header-region',
+  'footer-region',
+]);
+
+/** Node kinds that can contain other UI nodes. */
+const CONTAINING_KINDS = new Set<string>(['view', 'container', 'form', 'conditional', 'repeat']);
+
+/** Node kinds that render a value, and can therefore be formatted or given a treatment. */
+const VALUE_KINDS = new Set<string>(['text', 'field-display']);
+
+/** Whether an action navigates, directly or through one level of invocation. */
+function navigates(action: ActionDef, actions: Map<NodeId, ActionDef>, depth = 1): boolean {
+  for (const operation of action.operations ?? []) {
+    if (operation.kind === 'navigate') {
+      return true;
+    }
+    if (operation.kind === 'invoke' && depth > 0) {
+      const target = actions.get(operation.actionId);
+      if (target && navigates(target, actions, depth - 1)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Whether a format could describe a value of this type. */
+function formatFits(format: ValueFormat, type: TypeRef | undefined): boolean {
+  if (!type) {
+    return true;
+  }
+  const resolved = type.kind === 'optional' ? type.valueType : type;
+  if (resolved.kind === 'collection' || resolved.kind === 'entity') {
+    return format.kind === 'text';
+  }
+  if (resolved.kind === 'enum') {
+    return format.kind === 'text' || format.kind === 'boolean';
+  }
+  if (resolved.kind !== 'primitive') {
+    return true;
+  }
+  switch (format.kind) {
+    case 'number':
+    case 'currency':
+    case 'percentage':
+      return resolved.primitive === 'number';
+    case 'boolean':
+      return resolved.primitive === 'boolean';
+    case 'date':
+    case 'datetime':
+      return resolved.primitive === 'date' || resolved.primitive === 'datetime';
+    default:
+      return true;
+  }
+}
+
+/**
+ * Presentation that contradicts what the node it sits on actually is.
+ *
+ * Every check here is decided from the graph alone — a role that only a control can have,
+ * a region role on something that holds no children, a format that could never describe
+ * the declared type. Nothing here is a heuristic about taste.
+ */
+function checkNodeCompatibility(
+  bag: Bag,
+  index: Index,
+  node: UINode,
+  actions: Map<NodeId, ActionDef>,
+): void {
+  const declared = node.presentation;
+  if (!declared) {
+    return;
+  }
+  const conflict = (message: string, details: Record<string, unknown>): void => {
+    bag.warnings.push({
+      code: VALIDATION_CODES.presentationSemanticConflict,
+      message: `${node.name ?? node.id} ${message}`,
+      nodeId: node.id,
+      details: { kind: node.kind, ...details },
+    });
+  };
+
+  if (declared.uxRole && CONTROL_ONLY_UX_ROLES.has(declared.uxRole) && node.kind !== 'button') {
+    conflict(`is a ${node.kind}, which cannot be a "${declared.uxRole}"`, { uxRole: declared.uxRole });
+  }
+  if (declared.uxRole && REGION_UX_ROLES.has(declared.uxRole) && !CONTAINING_KINDS.has(node.kind)) {
+    conflict(`is presented as a "${declared.uxRole}" but holds no children`, {
+      uxRole: declared.uxRole,
+    });
+  }
+  if (declared.uxRole === 'navigation-action' && node.kind === 'button') {
+    const action = actions.get(node.actionId);
+    if (action && !navigates(action, actions)) {
+      conflict(`is presented as navigation but ${action.name ?? action.id} does not navigate`, {
+        uxRole: 'navigation-action',
+        actionId: node.actionId,
+      });
+    }
+  }
+  if (declared.treatment && declared.treatment !== 'plain' && !VALUE_KINDS.has(node.kind)) {
+    conflict(`is a ${node.kind}, which renders no value to present as a "${declared.treatment}"`, {
+      treatment: declared.treatment,
+    });
+  }
+  if (declared.format && !VALUE_KINDS.has(node.kind)) {
+    conflict(`is a ${node.kind}, which renders no value to format`, { format: declared.format.kind });
+  }
+  if (declared.format && node.kind === 'field-display') {
+    const type = index.fieldTypes.get(node.fieldId);
+    if (!formatFits(declared.format, type)) {
+      conflict(`formats ${node.fieldId} as ${declared.format.kind}, which its declared type is not`, {
+        format: declared.format.kind,
+        fieldId: node.fieldId,
+      });
+    }
+  }
+  if (declared.control && node.kind !== 'input') {
+    conflict(`is a ${node.kind}, which is not edited by a control`, { control: declared.control });
+  }
+  if (typeof declared.headingLevel === 'number' && node.kind !== 'text') {
+    conflict(`is a ${node.kind}, which cannot be a heading`, { headingLevel: declared.headingLevel });
+  }
 }
 
 function checkDestructive(
@@ -620,21 +815,55 @@ function checkPrimaryActions(bag: Bag, index: Index, resolved: Record<NodeId, Re
   }
 }
 
-/** A view that has section headings but no title of its own has no top of the outline. */
+/**
+ * The document outline of each view, checked on **resolved heading levels** rather than on
+ * rendered markup.
+ *
+ * Only the primary render path is walked: an empty template and a false branch are
+ * alternatives to the outline, not part of it, so including them would report headings
+ * that are never on screen together.
+ */
 function checkHeadingStructure(bag: Bag, index: Index, resolved: Record<NodeId, ResolvedPresentation>): void {
   for (const node of index.nodes.values()) {
     if (!isUINode(node) || node.kind !== 'view') {
       continue;
     }
-    const roles = descendants(index, node.id)
-      .filter((child) => child.kind === 'text')
-      .map((child) => resolved[child.id]?.textRole);
-    if (roles.includes('heading') && !roles.includes('title') && !roles.includes('display')) {
+    const levels: number[] = [];
+    for (const child of primaryDescendants(index, node.id)) {
+      const level = resolved[child.id]?.headingLevel;
+      if (typeof level === 'number') {
+        levels.push(level);
+      }
+    }
+
+    if (levels.length === 0) {
+      // A view with no headings at all has no outline to be wrong about.
+      continue;
+    }
+
+    const report = (message: string, details: Record<string, unknown>): void => {
       bag.warnings.push({
         code: VALIDATION_CODES.invalidHeadingStructure,
-        message: `View ${node.name ?? node.id} has section headings but no title above them`,
+        message: `View ${node.name ?? node.id} ${message}`,
         nodeId: node.id,
+        details: { levels: [...levels], ...details },
       });
+    };
+
+    const primary = levels.filter((level) => level === 1).length;
+    if (primary === 0) {
+      report('has headings but no level-1 heading', { primaryHeadings: 0 });
+    } else if (primary > 1) {
+      report(`has ${primary} level-1 headings`, { primaryHeadings: primary });
+    }
+
+    let previous = 0;
+    for (const level of levels) {
+      if (previous !== 0 && level > previous + 1) {
+        report(`skips from heading level ${previous} to ${level}`, { from: previous, to: level });
+        break;
+      }
+      previous = level;
     }
   }
 }

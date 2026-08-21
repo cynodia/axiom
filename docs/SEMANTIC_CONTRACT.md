@@ -1,6 +1,6 @@
 # Semantic contract
 
-Axiom 0.5.1-alpha.1. Runtime guarantees, stated formally. This file defines behavior; it
+Axiom 0.5.2-alpha.1. Runtime guarantees, stated formally. This file defines behavior; it
 does not teach. Where this file and any specification in `doc/` disagree, this file
 describes the implementation and is authoritative.
 
@@ -181,12 +181,34 @@ location.
 
 Full per-kind semantics: [`EXPRESSIONS.md`](EXPRESSIONS.md).
 
+## Diagnostics as semantic UI
+
+- The runtime MUST record the outcome of each action's most recent invocation: `'ok'`, `'failed'` or `'cancelled'`, with that invocation's diagnostics.
+- The record MUST be replaced by the next invocation of the same action, whatever its outcome. It does not accumulate.
+- `'ok'` and `'cancelled'` MUST carry no diagnostics.
+- The record MUST be cleared by `clearDiagnostics()` and by navigating to another route.
+- A `diagnostic` UI node MUST present the diagnostics of its action's record at or above its own severity, and nothing else.
+- Diagnostics are ephemeral runtime state. They are not application state, are never persisted, and cannot be written.
+- The runtime MUST re-render after every top-level action invocation, including one refused before a transaction was opened, so a refusal reaches the interface without the application arranging it.
+- An application MUST NOT need to duplicate an action's guards, read console output, copy an `ActionResult` into its own state, or install a renderer-specific handler in order to present a refusal.
+
+## Render identity
+
+- A UI node inside a `repeat` is rendered once per member. `NodeId` MUST NOT be used alone to identify a rendered element.
+- Every renderer-generated identity and relationship — element id, label association, described-by relationships, error-region ids, control lookup, focus restoration — MUST be keyed by the render instance.
+- A rendered identity MUST be unique within the document, deterministic, and stable while the member's identity is stable. Nested repeats MUST compose rather than collide.
+- Where the collection's member type carries an identity field, that identity MUST be preferred, so the identity follows a member through reordering. Otherwise a deterministic index is used.
+- Refusing a write in one rendered instance MUST NOT affect the accessibility state of another.
+- The graph still contains one semantic node. `AgentAPI` reasons about the node, never about instances.
+
 ## Presentation
 
 - Presentation MUST NOT affect behavior. Changing presentation or the theme cannot change an action, a constraint, a transition constraint, a location, state or routing.
 - Presentation MUST NOT authorize behavior. `visibleWhen`, a hidden responsive override and a `destructive` role are all presentation; none is an authorization decision.
 - Resolution precedence is: renderer defaults → theme → inherited → semantic inference → node → responsive. `ResolvedPresentation.origins` records the deciding layer for each property.
 - `density` is the only property that inherits from a parent.
+- `textRole` decides the type scale. `headingLevel` decides the document outline. Omitted, the level follows the text role (`display` → 1, `title` → 2, `heading` → 3); an explicit level always wins.
+- A control's internal arrangement MUST come from the theme, not from node presentation. An ordinary button MUST render correctly with no corrective `layout` or `padding`.
 - A token outside the published vocabulary is a validation **error**. Presentation and UX findings are warnings and MUST NOT make a graph invalid.
 - A graph with no presentation metadata MUST still render as a usable application.
 

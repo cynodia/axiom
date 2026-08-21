@@ -169,6 +169,15 @@ export function inferExpressionType(
           return primitiveType('string');
         case 'now':
           return primitiveType('datetime');
+        case 'coalesce': {
+          // The type of the first argument, with its optionality removed: a fallback is
+          // what makes the value present. Inferring this is what lets a repeat over
+          // `coalesce(field(...), [])` still know how to identify its members.
+          const first = expression.arguments[0]
+            ? inferExpressionType(expression.arguments[0], context, scope)
+            : undefined;
+          return first?.kind === 'optional' ? first.valueType : first;
+        }
         default:
           return undefined;
       }

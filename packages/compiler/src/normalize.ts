@@ -1,6 +1,8 @@
 import {
   actionGuards,
+  inferExpressionType,
   inferLocationType,
+  itemTypeOf,
   locationFieldIds,
   locationRootStateId,
   resolvePresentationMap,
@@ -157,6 +159,25 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
       : resolved !== undefined && resolved.kind !== 'optional';
   }
 
+  // Which field distinguishes the members of each repeat, so the renderer can give every
+  // rendered instance a stable identity without inferring anything itself.
+  const repeatIdentityFields: Record<NodeId, FieldId> = {};
+  for (const node of Object.values(uiNodes)) {
+    if (node.kind !== 'repeat') {
+      continue;
+    }
+    const sourceType = inferExpressionType(node.source, semantics);
+    const item = itemTypeOf(sourceType);
+    const resolved = item?.kind === 'optional' ? item.valueType : item;
+    if (resolved?.kind !== 'entity') {
+      continue;
+    }
+    const identity = graph.getNode<EntityDef>(resolved.entityId)?.identityFieldId;
+    if (identity) {
+      repeatIdentityFields[node.id] = identity;
+    }
+  }
+
   // Presentation is normalized here, once: renderer defaults, theme, inheritance,
   // semantic inference, node declarations and responsive overrides are all decided before
   // a renderer sees them. What lands in the IR is still semantic — roles and tokens, not
@@ -184,6 +205,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
     locationTypes,
     locationRoots,
     locationRequired,
+    repeatIdentityFields,
     theme,
     presentation,
   };

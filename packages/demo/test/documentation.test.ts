@@ -8,6 +8,7 @@ import {
   ApplicationGraph,
   AgentAPI,
   BUILTIN_FUNCTIONS,
+  UI_NODE_KINDS,
   CONTROL_VARIANTS,
   DENSITIES,
   DEVICE_CLASSES,
@@ -180,7 +181,7 @@ test('every validation code is documented, and every documented code exists', ()
     'SURFACE_ROLES', 'TREATMENTS', 'CONTROL_VARIANTS', 'ICON_NAMES', 'LAYOUT_KINDS',
     'SPACING_TOKENS', 'SIZING_VALUES', 'BOUNDED_SIZES', 'ALIGNMENTS', 'JUSTIFICATIONS',
     'DEVICE_CLASSES', 'VALUE_FORMAT_KINDS', 'SEMANTIC_COLOR_ROLES', 'EDGE_KINDS',
-    'INHERITED_PROPERTIES', 'MUST', 'MUST_NOT',
+    'INHERITED_PROPERTIES', 'HEADING_LEVELS', 'TEXT_ROLE_HEADING_LEVELS', 'MUST', 'MUST_NOT',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });
@@ -214,6 +215,7 @@ test('every construct in the public vocabulary is documented', () => {
   require_(expressions, 'EXPRESSIONS.md', BUILTIN_FUNCTIONS, 'builtin');
   require_(expressions, 'EXPRESSIONS.md', EXPRESSION_KINDS, 'expression kind');
   require_(actions, 'ACTIONS_TRANSACTIONS.md', OPERATION_KINDS, 'operation');
+  require_(ALL_DOCS.get('docs/UI.md') ?? '', 'UI.md', UI_NODE_KINDS, 'UI node kind');
   require_(presentation, 'PRESENTATION.md', PRESENTATION_ROLES, 'role');
   require_(presentation, 'PRESENTATION.md', UX_ROLES, 'UX role');
   require_(presentation, 'PRESENTATION.md', EMPHASIS_LEVELS, 'emphasis');
@@ -395,14 +397,22 @@ test('the documentation states the version it describes', () => {
   }
 });
 
-test('no document names a version other than the current one', () => {
+test('no document claims to describe a version other than the current one', () => {
   const version = JSON.parse(read('package.json')).version as string;
   const release = version.replace(/-.*$/, '');
   const stale = new Set<string>();
   for (const [file, source] of ALL_DOCS) {
     // Links to the specification documents carry their own historical version numbers.
     const prose = source.replace(/doc\/spec[\d.]+\.md/g, '');
-    for (const match of prose.matchAll(/(\d+\.\d+\.\d+)(-alpha\.[\dx]+)?/g)) {
+    // A document "names a version" when it states which one it describes, or names a
+    // published release. Prose about an earlier release — "the 0.5.0 mapping" — is history,
+    // not a claim, and stays legitimate.
+    for (const match of prose.matchAll(/(?:Axiom |@cynodia\/axiom@)(\d+\.\d+\.\d+)/g)) {
+      if (match[1] !== release) {
+        stale.add(`${file}: ${match[0]}`);
+      }
+    }
+    for (const match of prose.matchAll(/(\d+\.\d+\.\d+)-alpha\.[\dx]+/g)) {
       if (match[1] !== release) {
         stale.add(`${file}: ${match[0]}`);
       }

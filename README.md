@@ -6,8 +6,8 @@ Axiom represents application behavior, state, UI structure and presentation as s
 semantic data executed by generic runtimes. An application is a typed graph, not source
 files: the JavaScript and HTML that reach a browser are output, and are never edited.
 
-**Status: experimental / alpha (0.5.1-alpha.x).** The API may change between alpha
-releases. This documentation describes 0.5.1-alpha.1.
+**Status: experimental / alpha (0.5.2-alpha.x).** The API may change between alpha
+releases. This documentation describes 0.5.2-alpha.1.
 
 ## Canonical mental model
 

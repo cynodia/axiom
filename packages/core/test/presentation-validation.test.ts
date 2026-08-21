@@ -340,30 +340,267 @@ test('conflicting sizing is reported', () => {
   assert.deepEqual(findings(graph).warnings, [VALIDATION_CODES.conflictingSizing]);
 });
 
-/** Section 36: a view with section headings and no title has no top to its outline. */
-test('headings with no title above them are reported', () => {
+/**
+ * Sections 19 and 20: the outline is checked on resolved heading levels, not on rendered
+ * markup, and a level comes from `headingLevel` when it is stated.
+ */
+function withHeadings(levels: Array<number | 'none'>): ApplicationGraph {
   const graph = baseGraph();
-  graph.addNode<TextNode>({
-    id: nodeId('ui_heading'),
-    kind: 'text',
-    value: 'Details',
-    presentation: { textRole: 'heading' },
+  const ids = levels.map((level, index) => {
+    const id = nodeId(`ui_heading_${index}`);
+    graph.addNode<TextNode>({
+      id,
+      kind: 'text',
+      value: `Heading ${index}`,
+      presentation: { headingLevel: level as never },
+    });
+    return id;
   });
   const view = graph.getNode<ViewNode>(VIEW);
   assert.ok(view);
-  graph.updateNode({ ...view, children: [nodeId('ui_heading'), ...view.children] });
-  assert.deepEqual(findings(graph).warnings, [VALIDATION_CODES.invalidHeadingStructure]);
+  graph.updateNode({ ...view, children: [...ids, ...view.children] });
+  return graph;
+}
 
+function headingFindings(graph: ApplicationGraph): string[] {
+  return validateGraph(graph)
+    .warnings.filter((finding) => finding.code === VALIDATION_CODES.invalidHeadingStructure)
+    .map((finding) => finding.message);
+}
+
+test('a well-formed outline is not reported', () => {
+  assert.deepEqual(headingFindings(withHeadings([1, 2, 3, 2])), []);
+});
+
+test('a view with no headings at all has no outline to be wrong about', () => {
+  assert.deepEqual(headingFindings(withHeadings([])), []);
+  assert.deepEqual(headingFindings(withHeadings(['none', 'none'])), []);
+});
+
+test('a missing level-1 heading is reported', () => {
+  const findings = headingFindings(withHeadings([2, 3]));
+  assert.equal(findings.length, 1);
+  assert.match(findings[0], /no level-1 heading/);
+});
+
+test('more than one level-1 heading is reported', () => {
+  const findings = headingFindings(withHeadings([1, 1, 2]));
+  assert.equal(findings.length, 1);
+  assert.match(findings[0], /2 level-1 headings/);
+});
+
+test('a skipped heading level is reported', () => {
+  const findings = headingFindings(withHeadings([1, 3]));
+  assert.equal(findings.length, 1);
+  assert.match(findings[0], /skips from heading level 1 to 3/);
+});
+
+/** Section 16. */
+test('a large value that is not a heading does not enter the outline', () => {
+  const graph = baseGraph();
   graph.addNode<TextNode>({
-    id: nodeId('ui_title'),
+    id: nodeId('ui_total'),
+    kind: 'text',
+    value: 'NOK 1,250.00',
+    presentation: { textRole: 'display', headingLevel: 'none' },
+  });
+  const view = graph.getNode<ViewNode>(VIEW);
+  assert.ok(view);
+  graph.updateNode({ ...view, children: [nodeId('ui_total'), ...view.children] });
+
+  assert.deepEqual(headingFindings(graph), [], 'it is not a heading, so there is no outline');
+});
+
+/** Section 18. */
+test('the 0.5.0 mapping from text role to heading level still applies', () => {
+  const graph = baseGraph();
+  for (const [index, role] of (['display', 'title', 'heading'] as const).entries()) {
+    graph.addNode<TextNode>({
+      id: nodeId(`ui_role_${index}`),
+      kind: 'text',
+      value: role,
+      presentation: { textRole: role },
+    });
+  }
+  const view = graph.getNode<ViewNode>(VIEW);
+  assert.ok(view);
+  graph.updateNode({
+    ...view,
+    children: [nodeId('ui_role_0'), nodeId('ui_role_1'), nodeId('ui_role_2'), ...view.children],
+  });
+  assert.deepEqual(headingFindings(graph), [], 'display, title and heading are levels 1, 2 and 3');
+});
+
+test('an outline is read along the primary render path only', () => {
+  const graph = baseGraph();
+  graph.addNode<TextNode>({ id: nodeId('ui_row'), kind: 'text', value: 'Row' });
+  graph.addNode<TextNode>({
+    id: nodeId('ui_empty_heading'),
+    kind: 'text',
+    value: 'Nothing yet',
+    presentation: { headingLevel: 1 },
+  });
+  graph.addNode({
+    id: nodeId('ui_rows'),
+    kind: 'repeat',
+    source: ref(STATE),
+    templateId: nodeId('ui_row'),
+    emptyTemplateId: nodeId('ui_empty_heading'),
+  } as never);
+  graph.addNode<TextNode>({
+    id: nodeId('ui_page_title'),
     kind: 'text',
     value: 'Records',
-    presentation: { textRole: 'title' },
+    presentation: { headingLevel: 1 },
   });
-  const withTitle = graph.getNode<ViewNode>(VIEW);
-  assert.ok(withTitle);
-  graph.updateNode({ ...withTitle, children: [nodeId('ui_title'), ...withTitle.children] });
-  assert.deepEqual(findings(graph).warnings, []);
+  const view = graph.getNode<ViewNode>(VIEW);
+  assert.ok(view);
+  graph.updateNode({
+    ...view,
+    children: [nodeId('ui_page_title'), nodeId('ui_rows'), ...view.children],
+  });
+
+  // Two level-1 headings exist in the graph, but never on screen at the same time.
+  assert.deepEqual(headingFindings(graph), []);
+});
+
+/**
+ * Section 21: the conflict diagnostic had no reachable condition beyond two narrow cases.
+ * Every check below is decided from the graph alone — no heuristics about taste.
+ */
+function conflicts(graph: ApplicationGraph): string[] {
+  return validateGraph(graph)
+    .warnings.filter((finding) => finding.code === VALIDATION_CODES.presentationSemanticConflict)
+    .map((finding) => finding.message);
+}
+
+test('a control-only UX role on something that is not a control is reported', () => {
+  const graph = present(baseGraph(), 'ui_input', { uxRole: 'primary-action' });
+  assert.equal(conflicts(graph).length, 1);
+  assert.match(conflicts(graph)[0], /cannot be a "primary-action"/);
+});
+
+test('a region role on something that holds no children is reported', () => {
+  const graph = present(baseGraph(), 'ui_input', { uxRole: 'form-section' });
+  assert.equal(conflicts(graph).length, 1);
+  assert.match(conflicts(graph)[0], /holds no children/);
+});
+
+test('a navigation role over an action that does not navigate is reported', () => {
+  const graph = present(baseGraph(), 'ui_drop', { uxRole: 'navigation-action' });
+  assert.match(conflicts(graph).join(' '), /does not navigate/);
+
+  // An action that navigates is not reported.
+  const navigating = baseGraph();
+  navigating.addNode<ActionDef>({
+    id: nodeId('action_go'),
+    kind: 'action',
+    name: 'go',
+    operations: [{ kind: 'navigate', routeId: ROUTE }],
+  });
+  const button = navigating.getNode<ButtonNode>(DROP);
+  assert.ok(button);
+  navigating.updateNode({
+    ...button,
+    actionId: nodeId('action_go'),
+    arguments: {},
+    presentation: { uxRole: 'navigation-action' },
+  });
+  assert.deepEqual(conflicts(navigating), []);
+});
+
+test('a navigation role over an action that navigates indirectly is not reported', () => {
+  const graph = baseGraph();
+  graph.addNode<ActionDef>({
+    id: nodeId('action_go'),
+    kind: 'action',
+    name: 'go',
+    operations: [{ kind: 'navigate', routeId: ROUTE }],
+  });
+  graph.addNode<ActionDef>({
+    id: nodeId('action_finish'),
+    kind: 'action',
+    name: 'finish',
+    operations: [{ kind: 'invoke', actionId: nodeId('action_go') }],
+  });
+  const button = graph.getNode<ButtonNode>(DROP);
+  assert.ok(button);
+  graph.updateNode({
+    ...button,
+    actionId: nodeId('action_finish'),
+    arguments: {},
+    presentation: { uxRole: 'navigation-action' },
+  });
+  assert.deepEqual(conflicts(graph), []);
+});
+
+test('a value treatment or format on a node that renders no value is reported', () => {
+  assert.match(conflicts(present(baseGraph(), 'ui_form', { treatment: 'badge' }))[0], /renders no value/);
+  assert.match(
+    conflicts(present(baseGraph(), 'ui_form', { format: { kind: 'text' } }))[0],
+    /renders no value to format/,
+  );
+});
+
+test('a format the declared type could never be is reported', () => {
+  const graph = baseGraph();
+  graph.addNode({
+    id: nodeId('ui_name_display'),
+    kind: 'field-display',
+    source: ref(DRAFT),
+    fieldId: F_NAME,
+    // Name is a string; a currency it is not.
+    presentation: { format: { kind: 'currency', currency: 'NOK' } },
+  } as never);
+  const form = graph.getNode<FormNode>(FORM);
+  assert.ok(form);
+  graph.updateNode({ ...form, children: [...form.children, nodeId('ui_name_display')] });
+
+  assert.equal(conflicts(graph).length, 1);
+  assert.match(conflicts(graph)[0], /which its declared type is not/);
+});
+
+test('a format the declared type can be is not reported', () => {
+  const graph = baseGraph();
+  graph.addNode({
+    id: nodeId('ui_name_display'),
+    kind: 'field-display',
+    source: ref(DRAFT),
+    fieldId: F_NAME,
+    presentation: { format: { kind: 'text' } },
+  } as never);
+  const form = graph.getNode<FormNode>(FORM);
+  assert.ok(form);
+  graph.updateNode({ ...form, children: [...form.children, nodeId('ui_name_display')] });
+  assert.deepEqual(conflicts(graph), []);
+});
+
+test('a control variant on something that is not edited is reported', () => {
+  assert.match(conflicts(present(baseGraph(), 'ui_drop', { control: 'switch' }))[0], /not edited by a control/);
+});
+
+test('a heading level on something that is not text is reported', () => {
+  assert.match(conflicts(present(baseGraph(), 'ui_form', { headingLevel: 2 }))[0], /cannot be a heading/);
+});
+
+test('the two 0.5.0 conflict cases still hold', () => {
+  const pretending = baseGraph();
+  const save = pretending.getNode<InputNode>(INPUT);
+  void save;
+  pretending.addNode<ButtonNode>({
+    id: nodeId('ui_pretend'),
+    kind: 'button',
+    label: 'Save',
+    actionId: ACTION_SAVE,
+    presentation: { uxRole: 'destructive-action' },
+  });
+  const form = pretending.getNode<FormNode>(FORM);
+  assert.ok(form);
+  pretending.updateNode({ ...form, children: [...form.children, nodeId('ui_pretend')] });
+  assert.match(conflicts(pretending).join(' '), /declares no destructive intent/);
+
+  const muted = present(baseGraph(), 'ui_drop', { uxRole: 'primary-action', role: 'muted' });
+  assert.match(conflicts(muted).join(' '), /primary action but is presented as muted/);
 });
 
 /** Sections 50 and 51. */

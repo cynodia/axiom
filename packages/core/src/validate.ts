@@ -636,12 +636,38 @@ function validateUiNode(node: UINode, context: Context): void {
       validateExpression(node.source, node.id, context, new Set());
       requireField(node.fieldId, node.id, context);
       return;
-    case 'form':
+    case 'form': {
       validateExpression(node.target, node.id, context, new Set());
       if (node.submitActionId) {
         requireKind(node.submitActionId, 'action', node.id, context, VALIDATION_CODES.invalidActionRef);
       }
+      if (node.submitButtonId) {
+        const button = context.nodes.get(node.submitButtonId);
+        if (button?.kind !== 'button') {
+          context.errors.push({
+            code: VALIDATION_CODES.invalidUiChild,
+            message: `Form ${node.id} names ${node.submitButtonId} as its submit control, which is not a button`,
+            nodeId: node.id,
+          });
+        } else {
+          if (!uiDescendants(node.id, context).has(node.submitButtonId)) {
+            context.errors.push({
+              code: VALIDATION_CODES.invalidUiChild,
+              message: `Form ${node.id} names ${node.submitButtonId} as its submit control, but that button is not inside the form`,
+              nodeId: node.id,
+            });
+          }
+          if (node.submitActionId && button.actionId !== node.submitActionId) {
+            context.errors.push({
+              code: VALIDATION_CODES.invalidActionRef,
+              message: `Form ${node.id} submits ${node.submitActionId} but its submit control invokes ${button.actionId}`,
+              nodeId: node.id,
+            });
+          }
+        }
+      }
       return;
+    }
     case 'input':
       if (!node.binding?.location) {
         context.errors.push({
@@ -681,8 +707,31 @@ function validateUiNode(node: UINode, context: Context): void {
     case 'conditional':
       validateExpression(node.condition, node.id, context, new Set());
       return;
+    case 'diagnostic':
+      requireKind(node.actionId, 'action', node.id, context, VALIDATION_CODES.invalidActionRef);
+      return;
     default:
   }
+}
+
+/** Every UI node beneath this one, for checks that must know what a subtree contains. */
+function uiDescendants(id: NodeId, context: Context): Set<NodeId> {
+  const found = new Set<NodeId>();
+  const visit = (current: NodeId): void => {
+    const node = context.nodes.get(current);
+    if (!node || !isUINode(node)) {
+      return;
+    }
+    for (const childId of uiChildIds(node)) {
+      if (found.has(childId)) {
+        continue;
+      }
+      found.add(childId);
+      visit(childId);
+    }
+  };
+  visit(id);
+  return found;
 }
 
 function validateEdges(context: Context): void {

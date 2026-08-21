@@ -277,7 +277,9 @@ test('every horizontal arrangement is usable on a compact display', () => {
 
   for (const node of uiNodes(graph)) {
     const view = resolved[node.id];
-    if (view.layout.kind !== 'horizontal') {
+    // A control arranges its own contents from the theme's metrics; the invariant is about
+    // nodes that lay out children.
+    if (view.layout.kind !== 'horizontal' || (children.get(node.id) ?? 0) === 0) {
       continue;
     }
     const collapses = view.responsive.compact?.layout?.kind === 'vertical';

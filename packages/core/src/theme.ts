@@ -1,9 +1,12 @@
 import type {
+  Alignment,
   BoundedSize,
   Density,
   DeviceClass,
   Emphasis,
   IconName,
+  Justification,
+  LayoutKind,
   SpacingToken,
   SurfaceRole,
   TextRole,
@@ -107,6 +110,24 @@ export interface SurfaceStyle {
   radius: RadiusToken;
 }
 
+/**
+ * How an ordinary button is put together internally.
+ *
+ * These are the affordances every button needs and none should have to restate. An
+ * application annotates a button only where it differs from this.
+ */
+export interface ButtonTheme {
+  /** Direction of a button's own contents. Horizontal keeps an icon beside its label. */
+  layout: LayoutKind;
+  gap: SpacingToken;
+  align: Alignment;
+  justify: Justification;
+  /** Horizontal padding, relative to `controls.paddingX`. */
+  paddingScale: number;
+  /** Where an icon sits relative to the label. */
+  iconPlacement: 'leading' | 'trailing';
+}
+
 export interface ControlTheme {
   /** Control height per density. */
   height: Record<Density, number>;
@@ -148,6 +169,8 @@ export interface Theme {
   sizes: Record<BoundedSize, number>;
   surfaces: Record<SurfaceRole, SurfaceStyle>;
   controls: ControlTheme;
+  /** Internal arrangement of an ordinary button. See `ButtonTheme`. */
+  buttons: ButtonTheme;
   /** How much the density scales spacing and control metrics. */
   density: Record<Density, { scale: number }>;
   colors: Record<'light' | 'dark', SemanticColorSet>;
@@ -211,6 +234,14 @@ export const DEFAULT_THEME: Theme = {
     radius: 'small',
     borderWidth: 1,
     focusWidth: 3,
+  },
+  buttons: {
+    layout: 'horizontal',
+    gap: 'xsmall',
+    align: 'center',
+    justify: 'center',
+    paddingScale: 1.15,
+    iconPlacement: 'leading',
   },
   density: { compact: { scale: 0.7 }, comfortable: { scale: 1 }, spacious: { scale: 1.35 } },
   colors: {
