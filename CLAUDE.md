@@ -114,14 +114,22 @@ override), `npm whoami` to be `cynodia`, and a pre-release version, and publishe
 verified tarballs under the `alpha` dist-tag — never `latest`.
 
 **Two-factor authentication.** The npm account has 2FA, so publishing *and* moving a
-dist-tag each need a one-time password. `scripts/otp.mjs` handles this for both: it
-prompts, or takes `--otp=<code>`, and because a code lasts about 30 seconds while five
-packages go out in sequence, it asks for a fresh one and retries when a command is
-rejected. Both scripts skip work already done — a version already on the registry, a tag
-already pointing at this release — so re-running after a partial failure is safe.
-These scripts need a real terminal for the prompt to appear. Automation should instead
-authenticate with a granular access token that has "bypass 2FA" enabled — never commit
-that token, or any credential, including to `.npmrc`.
+dist-tag are both write operations that need it. Let npm authenticate on its own terms:
+run the scripts in a real terminal and npm prints a URL, waits for the browser, and the
+registry then treats the session as 2FA-satisfied for a few minutes — enough for all five
+packages in one go.
+
+Do not reach for `--otp=<code>` unless npm's own flow is unavailable. A typed one-time
+password authenticates a *single request*, so a five-package release would need five codes
+in sequence, each expiring in about thirty seconds. `scripts/otp.mjs` therefore passes
+nothing by default and only falls back to prompting if a command is rejected — pre-empting
+npm with `--otp` was exactly what made `release:dist-tag` more painful than
+`release:publish`.
+
+Both scripts skip work already done — a version already on the registry, a tag already
+pointing at this release — so re-running after a partial failure is safe. Unattended
+automation should authenticate with a granular access token that has "bypass 2FA" enabled
+instead; never commit that token, or any credential, including to `.npmrc`.
 
 ## Working agreements
 

@@ -98,10 +98,6 @@ function alreadyPublished(name) {
   }
 }
 
-if (!dryRun) {
-  await otp.prime();
-}
-
 console.log(`\n${dryRun ? 'Dry run:' : 'Publishing:'}`);
 const published = [];
 

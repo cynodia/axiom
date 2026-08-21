@@ -56,8 +56,9 @@ if (dryRun) {
   process.exit(0);
 }
 
+// No code is asked for up front: npm authenticates once, its own way, and the registry
+// keeps the session 2FA-satisfied for the rest of the run.
 const otp = createOtpSession(otpFromArgv());
-await otp.prime();
 
 const moved = [];
 try {

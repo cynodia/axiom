@@ -2,9 +2,14 @@ import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 
 /**
- * npm asks for a one-time password on publish and on dist-tag changes when the account
- * has 2FA. A code lasts about 30 seconds while a release touches several packages, so a
- * session asks for a fresh one and retries rather than abandoning the run.
+ * Two-factor authentication for npm write commands.
+ *
+ * By default this passes nothing and lets npm authenticate the way it prefers: in a
+ * terminal it prints a URL, waits for the browser, and the registry then treats the
+ * session as 2FA-satisfied for a few minutes — long enough for a whole release. Supplying
+ * `--otp=<code>` instead forces a classic one-time password, which npm applies to a single
+ * request, so a five-package release would need five codes. The typed code is therefore a
+ * fallback, not the normal path.
  */
 export function otpFromArgv(argv = process.argv) {
   return argv.find((argument) => argument.startsWith('--otp='))?.slice('--otp='.length);
@@ -27,14 +32,7 @@ export function createOtpSession(initial) {
   let otp = initial;
 
   return {
-    /** Asks for a code up front, so the first command does not fail just to ask. */
-    async prime() {
-      if (otp === undefined) {
-        otp = await prompt('');
-      }
-    },
-
-    /** Runs an npm command, retrying with a fresh code if it is rejected. */
+    /** Runs an npm command, falling back to a typed code if npm's own flow does not run. */
     async run(label, args, cwd) {
       for (let attempt = 1; ; attempt += 1) {
         try {
