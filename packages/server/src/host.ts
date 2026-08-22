@@ -68,6 +68,23 @@ export function createServerHost(overrides: Partial<ServerHost> = {}): ServerHos
  * A deterministic host, for conformance runs and tests. `now` and `uuid` count rather than
  * varying, so an expected result is stable.
  */
+/**
+ * The host model the conformance suite runs against.
+ *
+ * `now()` and `uuid()` are the only two places semantics can depend on something outside the
+ * graph, so a portable fixture needs both pinned. The model is one counter, shared, starting
+ * at zero and incremented **before** each value is produced, so the nth host call in an
+ * execution — whichever of the two it is — is always the same value:
+ *
+ * ```
+ * uuid()  → "id-<n>"
+ * now()   → "2026-01-01T00:00:<n, two digits>.000Z"
+ * ```
+ *
+ * A runtime in another language reproduces this exactly by counting host calls in execution
+ * order. The counter is per host instance, and a fixture that restarts the authority keeps
+ * the same host — a restart does not rewind it.
+ */
 export function createDeterministicServerHost(overrides: Partial<ServerHost> = {}): ServerHost {
   let counter = 0;
   return {

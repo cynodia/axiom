@@ -29,7 +29,7 @@ import type { TypeRef } from './type-ref.js';
 import { APPEARANCES, RADIUS_TOKENS, SEMANTIC_COLOR_ROLES } from './theme.js';
 import type { ThemeInput } from './theme.js';
 import type { AnyNode } from './types.js';
-import { isUINode, primaryChildIds, uiChildIds } from './ui.js';
+import { formSubmitActionId, isUINode, primaryChildIds, uiChildIds } from './ui.js';
 import type { UINode } from './ui.js';
 
 /**
@@ -789,8 +789,11 @@ function checkPrimaryActions(bag: Bag, index: Index, resolved: Record<NodeId, Re
       continue;
     }
     const primary = new Set<NodeId>();
-    if (isForm && node.kind === 'form' && node.submitActionId) {
-      primary.add(node.submitActionId);
+    if (isForm && node.kind === 'form') {
+      const submitActionId = formSubmitActionId(node, (id) => index.nodes.get(id) as never);
+      if (submitActionId) {
+        primary.add(submitActionId);
+      }
     }
     for (const child of descendants(index, node.id)) {
       if (child.kind === 'button' && resolved[child.id]?.uxRole === 'primary-action') {

@@ -1,6 +1,6 @@
 # UI
 
-Axiom 0.6.0-alpha.1. Ten semantic UI node kinds describe **what exists and what it does**.
+Axiom 0.6.1-alpha.1. Ten semantic UI node kinds describe **what exists and what it does**.
 How it looks is [presentation](PRESENTATION.md).
 
 All nine share `UIBase`:
@@ -110,9 +110,25 @@ graph.addNode<FormNode>({
 ```
 
 - `submitButtonId` MUST name a `ButtonNode` among the form's descendants.
-- The submit action is `submitActionId ?? <that button>.actionId`. If both are given they MUST agree.
+- The submit action is `submitActionId ?? <that button>.actionId`. If both are given they MUST agree. **That one resolution is used everywhere** — execution, validation, presentation inference, `AgentAPI` form structure and UX warnings — so a form with a declared submit button is a form with a primary action, and nothing has to infer it a second way.
 - The declared control is rendered with `type="submit"` and no click handler of its own, so a click runs the action exactly once.
 - `submitLabel` is ignored when `submitButtonId` is given.
+
+**A declared submit button keeps its arguments.** Submitting the form and clicking the button
+are the same invocation: the same `arguments`, evaluated in the same scope, at the moment the
+control is used. This matters most inside a `repeat`, where the button's arguments are what
+say *which row* — a submit path that ignored them would invoke a parameterized action with
+nothing bound and be refused.
+
+```ts
+graph.addNode<ButtonNode>({
+  id: UI_CONFIRM, kind: 'button', label: 'Confirm', actionId: ACTION_CONFIRM,
+  arguments: { [PARAM_ORDER]: field(ref(UI_ORDER_ROW), F_ORDER_ID) },   // survives form submit
+});
+```
+
+An action parameter that is `required` and never supplied is `MISSING_ACTION_ARGUMENT` at
+authoring time — from a `button`, and from a `form` that submits an action without one.
 
 ### `input`
 
@@ -162,8 +178,26 @@ the two. All three are keyed by render instance, so only the refused row is affe
 ```
 
 Invokes an action. `arguments` is keyed by the **action parameter id**; passing an unknown
-parameter is a validation error. `destructive` may be declared here, but declaring it on
-the action is enough — presentation is inferred from the action.
+parameter is a validation error, and omitting a required one is `MISSING_ACTION_ARGUMENT`.
+`destructive` may be declared here, but declaring it on the action is enough — presentation
+is inferred from the action.
+
+#### Pending actions
+
+An action the authority executes is not finished when the button is released. While its
+answer is outstanding the control renders:
+
+```html
+<button data-node="ui_place" data-control="ui_place"
+        data-pending="true" aria-busy="true" disabled>Place order</button>
+```
+
+and a second press does nothing — a second press is a second transaction, not a retry of the
+first, and by the time it reached the authority it would be a legitimately different request.
+The outcome is the ordinary `ActionOutcome` lifecycle (`pending` → `ok` / `failed`), so a
+`diagnostic` node presents a server refusal exactly as it presents a local one. There is no
+async vocabulary in the graph: `pending` is a runtime outcome, and this is the whole of its
+presentation.
 
 ### `diagnostic`
 
@@ -238,6 +272,7 @@ identify a rendered element, and two concepts are kept distinct:
 ```text
 NodeId          = semantic graph identity        → data-node
 RenderInstance  = runtime presentation identity  → data-instance
+Control         = the element a person operates  → data-control
 ```
 
 Every renderer-generated identity and relationship is keyed by the render instance:
@@ -256,13 +291,38 @@ Instance identity is:
 - **composing** for nested repeats, rather than colliding.
 
 ```html
-<input data-node="ui_line_quantity"
-       data-instance="ui_line_quantity--line-7f3a"
-       id="axiom-control-ui_line_quantity--line-7f3a">
+<label data-node="ui_line_quantity" data-instance="ui_line_quantity--line-7f3a"
+       for="axiom-control-ui_line_quantity--line-7f3a">
+  <span class="axiom-input-label">Quantity</span>
+  <input data-node="ui_line_quantity" data-control="ui_line_quantity"
+         data-instance="ui_line_quantity--line-7f3a"
+         id="axiom-control-ui_line_quantity--line-7f3a" type="number">
+</label>
 ```
 
 The exact encoding is an implementation detail; the properties above are the contract. The
 graph still holds one node, and `AgentAPI` reasons about that node.
+
+### `data-node` and `data-control`
+
+One semantic node can render as more than one element: an input is a label wrapping a control,
+and **both carry `data-node`, because both are that node**. Only one of them can be typed into,
+and `data-node` cannot say which.
+
+| Attribute | Selects | Cardinality |
+| --- | --- | --- |
+| `data-node` | every element that is this semantic node | one or more per rendering |
+| `data-control` | the single element a person operates | exactly one, on nodes that have one |
+| `data-instance` | this rendering of the node | one per element, inside a `repeat` |
+| `data-variant` | the control variant chosen from presentation intent — `switch`, `stepper`, `radio-group` | on the control |
+
+So `[data-control="ui_line_quantity"]` is the input, `[data-node="ui_line_quantity"]` is the
+input and its label, and inside a repeat `[data-control="…"][data-instance="…"]` is one row's.
+A `button` is its own control, so both attributes name the same element. A radio group has no
+single element to operate, so the group itself carries `data-control`.
+
+Semantic identity stays on the wrappers: `AgentAPI` and any tooling that reasons about the
+graph needs to find every element a node produced, not only the interactive one.
 
 ## Visibility is not authorization
 

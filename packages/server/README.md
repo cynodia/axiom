@@ -18,11 +18,28 @@ SQLite), `TransportAdapter` (in-process and HTTP), and `ServerHost` for time, id
 and authentication. Nothing in an ApplicationGraph mentions HTTP, SQL or a route.
 
 Main exports: `createAxiomServer`, `createMemoryPersistence`, `createSqlitePersistence`,
-`createServerHost`, `createDirectTransport`, `createHttpTransport`, `createRemoteGateway`,
-`serveOverHttp`, `SERVER_DIAGNOSTIC_CODES`.
+`createServerHost`, `createDeterministicServerHost`, `createDirectTransport`,
+`createHttpTransport`, `createRemoteGateway`, `serveOverHttp`, `serveAxiomApplication`,
+`SERVER_DIAGNOSTIC_CODES`.
 
-`conformance/*.json` ships with this package: portable fixtures — a Server IR, the state to
-start from, invocations and expected results — that any conforming runtime can be held to.
+`serveAxiomApplication` is the whole deployment story: it serves the generated page at `GET /`
+and the semantic endpoint at `POST /axiom`, from one process, for any Axiom application. No
+route, controller, handler or SQL statement is written by an application author.
+
+### Portable artifacts
+
+`axiom.server.v1` is a frozen, language-independent contract, and this package ships what an
+implementation in another language needs to conform to it:
+
+```
+@cynodia/axiom-server/conformance                       the fixture manifest
+@cynodia/axiom-server/conformance/<name>.json           one fixture: IR, state, invocations, expectations
+@cynodia/axiom-server/schema/server-ir.v1.schema.json   JSON Schema for the IR
+@cynodia/axiom-server/schema/protocol.v1.schema.json    JSON Schema for the protocol
+```
+
+The fixtures are pure data. Running them requires no part of this implementation — which is
+the point: the semantic contract, the schemas and these files are the whole specification.
 
 ## Installation
 

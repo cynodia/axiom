@@ -4,6 +4,7 @@ export * from './mutation/store.js';
 export * from './mutation/transaction.js';
 export * from './mutation/resolve-location.js';
 export * from './mutation/mutation-engine.js';
+export * from './remote.js';
 export * from './format.js';
 export * from './presentation-classes.js';
 export * from './runtime.js';

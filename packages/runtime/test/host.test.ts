@@ -10,6 +10,23 @@ test('the browser bundle is the compiled runtime with module syntax stripped', (
   assert.doesNotMatch(source, /^import /m, 'the runtime resolves no modules at run time');
 });
 
+test('the browser bundle depends on nothing a browser does not have', () => {
+  // The client path is not "mostly browser-safe". A single Node reference in it — a
+  // `node:` import, a filesystem call, `process`, `require` — is a page that throws on load,
+  // and the failure appears in a browser rather than in this build.
+  const source = createRuntimeModuleSource();
+  for (const forbidden of [
+    /\bnode:[a-z_]+/,
+    /\brequire\s*\(/,
+    /\bprocess\.[a-z]/i,
+    /\b__dirname\b/,
+    /\bBuffer\b/,
+  ]) {
+    assert.doesNotMatch(source, forbidden, `the bundle must not reference ${String(forbidden)}`);
+  }
+  assert.match(source, /function createHttpRemoteGateway/, 'the remote gateway is bundled');
+});
+
 test('the memory host records navigation, confirmation and reports', () => {
   const host = createMemoryHost({ path: '/start', confirm: false });
   let changes = 0;

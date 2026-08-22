@@ -1,6 +1,6 @@
 # Runtime
 
-Axiom 0.6.0-alpha.1. The runtime executes an `ApplicationIR`. It is domain-independent: it
+Axiom 0.6.1-alpha.1. The runtime executes an `ApplicationIR`. It is domain-independent: it
 contains no knowledge of any application.
 
 ## Constructing
@@ -14,7 +14,8 @@ const app = createAxiomRuntime({
   rootElement,                     // a DomElement
   host,                            // a HostEnvironment
   nativeOperations?: Record<string, (inputs) => unknown>,
-  remote?: RemoteGateway,                       // required for server-authoritative state
+  remote?: RemoteGateway,                       // required for server-authoritative state,
+                                                // and required *before* start()
   inputValidation?: 'immediate' | 'deferred',   // DEFAULT: 'immediate'
   recordMutationValues?: boolean,               // default true
 });
@@ -60,7 +61,7 @@ carries `data-node="<node id>"`.
 
 | Member | Governed | Semantics |
 | --- | --- | --- |
-| `start()` | — | Subscribes to path changes and renders. Idempotent. |
+| `start()` | — | The whole startup sequence: render, restore, then load authoritative state. Returns a promise; awaiting it means authoritative state has been applied. Idempotent. See [Startup](#startup). |
 | `render()` | — | Re-renders from current state. |
 | `getState(id)` | — | A **deep clone** of the value. Derived state is recomputed. |
 | `invokeAction(id, args?)` | **yes** | Runs the action as a transaction. Returns `{ ok, diagnostics }` for that invocation. |
@@ -73,7 +74,9 @@ carries `data-node="<node id>"`.
 | `getMutationLog()` | — | Every attempted mutation, with source, path and outcome. |
 | `registerNativeOperation(id, fn)` | — | Registers an implementation for a `native` operation. |
 | `invokeActionAsync(id, args?)` | **yes** | Awaits the outcome, including an authority's answer. |
-| `syncAuthoritativeState()` | — | Loads the authoritative snapshot and applies it. See [`AUTHORITY.md`](AUTHORITY.md). |
+| `syncAuthoritativeState()` | — | Loads the authoritative snapshot and applies it. Idempotent; may be called at any time. See [`AUTHORITY.md`](AUTHORITY.md). |
+| `authoritativeStateLoaded()` | — | Whether a snapshot has been applied. `false` also after a failed load, which is why it is not the same question as "is this collection empty". |
+| `settled()` | — | Resolves when no remote invocation is outstanding. An action started by a click or a form submit leaves no promise for a caller to hold; this is how to wait for it without guessing a delay. |
 | `evaluate(expression)` | — | Evaluates in the root scope, reporting rather than throwing. A pure read. |
 
 ### `hydrateState` bypasses semantic enforcement
@@ -210,6 +213,7 @@ interface RuntimeDiagnostic {
 | `ROUTE_NOT_FOUND` | A `navigate` operation naming an unresolvable route. | action | — |
 | `NATIVE_OPERATION_MISSING` | No implementation registered for an `implementationId`. | `native` operation | — |
 | `REMOTE_ACTION_UNAVAILABLE` | An action belonging to the authority was invoked with no gateway configured, or the transport failed. | remote invocation | — |
+| `AUTHORITY_UNREACHABLE` | **Warning.** `start()` could not load authoritative state: no answer from the authority. The page renders with what it has, and `authoritativeStateLoaded()` stays false. | startup | — |
 | `UI_NODE_MISSING` | A child id that is not a UI node in the IR. | render | — |
 | `UNSUPPORTED_UI_NODE` | An unknown UI node kind. | render | — |
 | `PERSISTED_STATE_UNREADABLE` | **Warning.** A stored value could not be parsed; the initial value was used. | startup | — |
@@ -250,19 +254,43 @@ app.getMutationLog();
 - Only the outermost transaction decides an outcome, so the log never suggests that early iterations of a failed loop committed.
 - `recordMutationValues: false` omits `oldValue` / `newValue`.
 
+## Startup
+
+`start()` is the whole startup sequence, and it is the same three steps whether or not there
+is an authority:
+
+1. **Render**, synchronously, from the client IR's initial values. A page is on screen before any network call.
+2. **Restore** persisted client state, where a state declares persistence.
+3. **Load authoritative state**, when a gateway is configured — one snapshot request, applied through the ordinary write path, then one re-render.
+
+```ts
+const app = createAxiomRuntime({ ir, rootElement, host, remote });
+await app.start();              // rendered, restored, synchronized
+app.authoritativeStateLoaded(); // true
+```
+
+- `start()` returns a promise that settles when step 3 has settled. Not awaiting it is a legitimate choice for a page that renders progressively; the first two steps have already happened synchronously by the time it returns.
+- **A gateway must be configured before `start()`.** Adding one afterwards does not retroactively synchronize — call `syncAuthoritativeState()`.
+- **A failed load is a diagnostic, not an exception.** `AUTHORITY_UNREACHABLE` is reported, `start()` still resolves, the page still renders, and `authoritativeStateLoaded()` stays `false`. An empty authoritative collection and an unreachable authority are different situations, and the runtime does not conflate them.
+- `start()` is idempotent: calling it twice does not re-render twice or fetch twice.
+
 ## Reaching an authority
 
 An application with server-authoritative state gives the runtime a gateway:
 
 ```ts
 const app = createAxiomRuntime({ ir, rootElement, host, remote: createRemoteGateway(transport) });
-app.start();
-await app.syncAuthoritativeState();
+await app.start();
 ```
+
+A generated page does this for itself — `compileToHtml` wires the browser-safe gateway into
+the bootstrap whenever the IR contains a remote action, so an application author writes no
+JavaScript at all. See [`AUTHORITY.md`](AUTHORITY.md#running-one).
 
 `invokeAction` on a remote action returns `{ ok: false, pending: true }` immediately — a
 click never blocks on the network — and the outcome arrives through the ordinary
-action-outcome lifecycle. Full model: [`AUTHORITY.md`](AUTHORITY.md).
+action-outcome lifecycle. While it is outstanding the control that started it renders
+`aria-busy` and refuses a second press. Full model: [`AUTHORITY.md`](AUTHORITY.md).
 
 ## The browser bundle
 

@@ -727,7 +727,12 @@
         "param_qty": 3
       },
       "expect": {
-        "ok": true
+        "ok": true,
+        "changedStates": [
+          "state_parts",
+          "state_ledger",
+          "state_total"
+        ]
       }
     },
     {
@@ -737,7 +742,8 @@
         "param_qty": 99
       },
       "expect": {
-        "ok": false
+        "ok": false,
+        "changedStates": []
       }
     }
   ],

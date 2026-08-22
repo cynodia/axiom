@@ -190,6 +190,7 @@ test('every validation code is documented, and every documented code exists', ()
     // Authority vocabulary: exported constants, not diagnostic codes.
     'PRINCIPAL', 'AUTHORITIES', 'SERVER_IR_CONTRACT', 'SERVER_DIAGNOSTIC_CODES', 'PROTOCOL_VERSION',
     'AUTHORITY', 'EXECUTION', 'TRUST', 'TRANSACTION', 'CONCURRENCY', 'PROTOCOL', 'SERIALIZATION',
+    'DISCLOSABLE_DETAIL_KEYS', 'PORTABILITY', 'IDEMPOTENCY', 'STARTUP', 'CHANGES',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });
@@ -420,7 +421,7 @@ test('no document claims to describe a version other than the current one', () =
   const stale = new Set<string>();
   for (const [file, source] of ALL_DOCS) {
     // Links to the specification documents carry their own historical version numbers.
-    const prose = source.replace(/doc\/spec[\d.]+\.md/g, '');
+    const prose = source.replace(/specs\/spec[\d.]*\.md/g, '');
     // A document "names a version" when it states which one it describes, or names a
     // published release. Prose about an earlier release — "the 0.5.0 mapping" — is history,
     // not a claim, and stays legitimate.
@@ -470,4 +471,146 @@ test('the facade ships the documentation set', () => {
   for (const name of DOC_FILES) {
     readFileSync(path.join(repoRoot, 'packages/axiom/docs', name));
   }
+});
+
+// ------------------------------------------------- 0.6.1 consistency checks
+
+test('the documentation names no package that is not published', () => {
+  // Documenting a CLI that is not on npm sent an external implementer looking for it. Every
+  // `@cynodia/…` the documentation names must be something a reader can actually install.
+  const published = new Set(
+    readdirSync(path.join(repoRoot, 'packages'))
+      .map((directory) => {
+        const manifest = path.join(repoRoot, 'packages', directory, 'package.json');
+        try {
+          return JSON.parse(readFileSync(manifest, 'utf8')) as { name: string; private?: boolean };
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((manifest): manifest is { name: string; private?: boolean } => Boolean(manifest))
+      .filter((manifest) => !manifest.private)
+      .map((manifest) => manifest.name),
+  );
+
+  const named = new Set<string>();
+  for (const match of EVERY_DOC.matchAll(/@cynodia\/[a-z-]+/g)) {
+    named.add(match[0]);
+  }
+  assert.deepEqual(
+    [...named].filter((name) => !published.has(name)).sort(),
+    [],
+    'documented packages that are not published',
+  );
+});
+
+test('the documentation does not promise a CLI this project does not ship', () => {
+  // `packages/cli` is private. It may appear in the README's instructions for working in
+  // this repository, where it is what a contributor actually runs — but only alongside a
+  // statement that it is not published. It may not appear in the contract documentation at
+  // all: a reader of docs/ is a reader of the published packages.
+  const promises = /packages\/cli\/dist\/index\.js|npx @cynodia|\baxiom (serve|build|inspect|validate)\b/;
+  const promised: string[] = [];
+  for (const [file, source] of ALL_DOCS) {
+    if (file !== 'README.md' && promises.test(source)) {
+      promised.push(file);
+    }
+  }
+  assert.deepEqual(promised, [], 'contract documents referring to an unpublished CLI');
+
+  if (promises.test(README)) {
+    assert.match(
+      README,
+      /packages\/cli is a private development tool|There is no published Axiom CLI/,
+      'the README names the CLI without saying it is unpublished',
+    );
+  }
+});
+
+test('the conformance and schema subpaths a document names actually resolve', () => {
+  const manifest = JSON.parse(
+    readFileSync(path.join(repoRoot, 'packages/server/package.json'), 'utf8'),
+  ) as { exports: Record<string, unknown> };
+  const patterns = Object.keys(manifest.exports);
+
+  const resolves = (subpath: string): boolean =>
+    patterns.some((pattern) =>
+      pattern.includes('*')
+        ? new RegExp(`^${pattern.replace('*', '.*')}$`).test(subpath)
+        : pattern === subpath,
+    );
+
+  for (const match of EVERY_DOC.matchAll(/@cynodia\/axiom-server(\/[\w./*-]+)/g)) {
+    assert.ok(resolves(`.${match[1]}`), `${match[0]} is not exported by @cynodia/axiom-server`);
+  }
+});
+
+test('every startup step the documentation states is stated the same way everywhere', () => {
+  // RUNTIME.md, AUTHORITY.md and the runtime's own declaration comments describe one
+  // lifecycle. Three descriptions of it are three chances for them to disagree.
+  const runtimeDoc = ALL_DOCS.get('docs/RUNTIME.md') as string;
+  const authorityDoc = ALL_DOCS.get('docs/AUTHORITY.md') as string;
+  const declaration = readFileSync(
+    path.join(repoRoot, 'packages/runtime/dist/runtime.d.ts'),
+    'utf8',
+  );
+
+  for (const [where, source] of [
+    ['docs/RUNTIME.md', runtimeDoc],
+    ['docs/AUTHORITY.md', authorityDoc],
+    ['runtime.d.ts', declaration],
+  ] as const) {
+    assert.match(source, /[Rr]ender/, `${where} describes the render step`);
+    assert.match(source, /authoritative state/i, `${where} describes the synchronization step`);
+  }
+
+  // The three specific promises, each of which a reader will rely on.
+  for (const [where, source] of [['docs/RUNTIME.md', runtimeDoc], ['docs/AUTHORITY.md', authorityDoc]] as const) {
+    assert.match(source, /gateway .*before .*`?start\(\)`?|before `start\(\)`/i, `${where} states the bootstrap invariant`);
+    assert.match(source, /authoritativeStateLoaded/, `${where} names the predicate for a failed load`);
+    assert.match(source, /AUTHORITY_UNREACHABLE/, `${where} names the diagnostic for a failed load`);
+  }
+  assert.match(declaration, /authoritativeStateLoaded/, 'the runtime declares the predicate');
+});
+
+test('every protocol field the documentation names exists in the protocol declaration', () => {
+  const declaration = readFileSync(
+    path.join(repoRoot, 'packages/server/dist/protocol.d.ts'),
+    'utf8',
+  );
+  const authorityDoc = ALL_DOCS.get('docs/AUTHORITY.md') as string;
+
+  // The message shapes as AUTHORITY.md prints them, field by field.
+  for (const match of authorityDoc.matchAll(/\{ kind: '(snapshot|invoke|result|error)',([^}]*)\}/g)) {
+    for (const field of match[2].split(',').map((entry) => entry.trim().replace(/[?:].*$/, ''))) {
+      if (!field || field === 'protocol' || field === 'snapshot') continue;
+      assert.ok(
+        declaration.includes(`${field}?:`) || declaration.includes(`${field}:`),
+        `AUTHORITY.md names "${field}" on a ${match[1]} message; the protocol does not declare it`,
+      );
+    }
+  }
+});
+
+test('the changes contract is described identically by the docs, the runtime and the fixtures', () => {
+  const authorityDoc = ALL_DOCS.get('docs/AUTHORITY.md') as string;
+  const serverSource = readFileSync(
+    path.join(repoRoot, 'packages/server/src/server.ts'),
+    'utf8',
+  );
+
+  // The rule in one sentence: difference from transaction entry, over observable states.
+  const rule = /whose value differs from\s+what it was when the transaction opened/;
+  assert.match(authorityDoc.replace(/\s+/g, ' '), /whose value differs from what it was when the transaction opened/);
+  assert.match(serverSource.replace(/\s+\*?\s*/g, ' '), rule);
+
+  // And the fixtures state it exhaustively rather than as a subset, which is what makes the
+  // conformance suite able to catch a runtime that over-reports.
+  const fixture = JSON.parse(
+    readFileSync(path.join(repoRoot, 'packages/server/conformance/mutation-commits.json'), 'utf8'),
+  ) as { invocations: { expect?: { changedStates?: string[] } }[] };
+  assert.ok(
+    (fixture.invocations[0].expect?.changedStates?.length ?? 0) > 0,
+    'the fixtures declare which states changed',
+  );
 });

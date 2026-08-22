@@ -2,7 +2,7 @@ import type { FieldId, NodeId } from './ids.js';
 import type { ActionDef, EntityDef } from './nodes.js';
 import type { AnyNode } from './types.js';
 import type { TypeRef } from './type-ref.js';
-import { isUINode, uiChildIds } from './ui.js';
+import { formSubmitActionId, isUINode, uiChildIds } from './ui.js';
 import type { UINode } from './ui.js';
 import {
   TEXT_ROLE_HEADING_LEVELS,
@@ -323,7 +323,11 @@ function semanticLayer(node: UINode, index: Index): Layer {
   const layer: Layer = { origin: 'inferred' };
   const formId = index.formOf.get(node.id);
   const form = formId ? index.nodes.get(formId) : undefined;
-  if (form && form.kind === 'form' && form.submitActionId === node.actionId) {
+  const submitActionId =
+    form && form.kind === 'form'
+      ? formSubmitActionId(form, (id) => index.nodes.get(id) as never)
+      : undefined;
+  if (submitActionId !== undefined && submitActionId === node.actionId) {
     layer.role = 'primary';
     layer.emphasis = 'strong';
     layer.uxRole = 'primary-action';

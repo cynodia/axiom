@@ -727,6 +727,7 @@
       },
       "expect": {
         "ok": false,
+        "changedStates": [],
         "diagnosticCodes": [
           "TRANSITION_CONSTRAINT_VIOLATION"
         ]
@@ -740,7 +741,11 @@
         "param_stock": 4
       },
       "expect": {
-        "ok": true
+        "ok": true,
+        "changedStates": [
+          "state_parts",
+          "state_total"
+        ]
       }
     }
   ],

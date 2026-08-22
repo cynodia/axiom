@@ -259,6 +259,28 @@ export function primaryChildIds(node: UINode): NodeId[] {
   }
 }
 
+/**
+ * The action a form submits, however it was declared.
+ *
+ * A form may name the action directly (`submitActionId`) or name a declared button that
+ * invokes it (`submitButtonId`). Every layer — execution, validation, presentation
+ * inference, `AgentAPI` — must resolve it the same way, or a form's primary action means
+ * one thing to the renderer and another to an agent.
+ */
+export function formSubmitActionId(
+  form: FormNode,
+  lookup: (id: NodeId) => { kind: string; actionId?: NodeId } | undefined,
+): NodeId | undefined {
+  if (form.submitActionId) {
+    return form.submitActionId;
+  }
+  if (!form.submitButtonId) {
+    return undefined;
+  }
+  const button = lookup(form.submitButtonId);
+  return button?.kind === 'button' ? button.actionId : undefined;
+}
+
 /** Child ids declared by a UI node, in render order. */
 export function uiChildIds(node: UINode): NodeId[] {
   switch (node.kind) {

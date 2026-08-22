@@ -558,6 +558,19 @@ function validateUiNode(node: UINode, context: Context): void {
       if (node.submitActionId) {
         requireKind(node.submitActionId, 'action', node.id, context, VALIDATION_CODES.invalidActionRef);
       }
+      if (!node.submitButtonId && node.submitActionId) {
+        // A generated submit button carries no arguments, so an action needing any of them
+        // could never be satisfied. Silent omission is what produced ARGUMENT_TYPE_MISMATCH
+        // at run time; it is rejected here instead.
+        requireArguments(
+          node.submitActionId,
+          {},
+          node.id,
+          context,
+          `Form ${node.id} submits ${node.submitActionId}, whose generated button cannot supply arguments;` +
+            ' declare a submit button with submitButtonId and give it',
+        );
+      }
       if (node.submitButtonId) {
         const button = context.nodes.get(node.submitButtonId);
         if (button?.kind !== 'button') {
@@ -605,6 +618,7 @@ function validateUiNode(node: UINode, context: Context): void {
       return;
     case 'button': {
       requireKind(node.actionId, 'action', node.id, context, VALIDATION_CODES.invalidActionRef);
+      requireArguments(node.actionId, node.arguments ?? {}, node.id, context, `Button ${node.id}`);
       if (typeof node.label !== 'string') {
         validateExpression(node.label, node.id, context, new Set());
       }
@@ -628,6 +642,35 @@ function validateUiNode(node: UINode, context: Context): void {
       requireKind(node.actionId, 'action', node.id, context, VALIDATION_CODES.invalidActionRef);
       return;
     default:
+  }
+}
+
+/**
+ * Every required parameter of an action must have an argument. A missing one is statically
+ * knowable, and would otherwise surface as a refusal at invocation time — on the authority,
+ * for a remote action.
+ */
+function requireArguments(
+  actionId: NodeId,
+  args: Record<string, unknown>,
+  ownerId: NodeId,
+  context: Context,
+  where: string,
+): void {
+  const action = context.nodes.get(actionId);
+  if (action?.kind !== 'action') {
+    return;
+  }
+  const missing = (action.parameters ?? [])
+    .filter((parameter) => parameter.required && !(String(parameter.id) in args))
+    .map((parameter) => String(parameter.id));
+  if (missing.length > 0) {
+    context.errors.push({
+      code: VALIDATION_CODES.missingActionArgument,
+      message: `${where} ${missing.length === 1 ? 'no argument for' : 'no arguments for'} ${missing.join(', ')}`,
+      nodeId: ownerId,
+      details: { actionId, missing },
+    });
   }
 }
 

@@ -85,13 +85,34 @@ export function toText(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/**
+ * Lexicographic order by Unicode code point.
+ *
+ * Not locale collation, and deliberately not the language's default string comparison:
+ * ordering is part of the semantic contract, so two conforming runtimes must agree on it
+ * character for character. Code points are the one ordering every language can reproduce
+ * exactly — a UTF-16 comparison, which is what `<` does here, disagrees with a UTF-8 one
+ * whenever a string mixes astral characters with U+E000..U+FFFF.
+ */
+export function compareText(left: string, right: string): number {
+  const leftPoints = Array.from(left);
+  const rightPoints = Array.from(right);
+  const shared = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < shared; index += 1) {
+    const leftPoint = leftPoints[index].codePointAt(0) as number;
+    const rightPoint = rightPoints[index].codePointAt(0) as number;
+    if (leftPoint !== rightPoint) {
+      return leftPoint < rightPoint ? -1 : 1;
+    }
+  }
+  return leftPoints.length === rightPoints.length ? 0 : leftPoints.length < rightPoints.length ? -1 : 1;
+}
+
 export function compareValues(left: unknown, right: unknown): number {
   if (typeof left === 'number' && typeof right === 'number') {
     return left === right ? 0 : left < right ? -1 : 1;
   }
-  const leftText = toText(left);
-  const rightText = toText(right);
-  return leftText === rightText ? 0 : leftText < rightText ? -1 : 1;
+  return compareText(toText(left), toText(right));
 }
 
 /** A stable serialization, so record comparison does not depend on key order. */

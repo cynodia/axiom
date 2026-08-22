@@ -1,6 +1,6 @@
 # Actions and transactions
 
-Axiom 0.6.0-alpha.1. An action is behavior expressed as data, executed as a transaction.
+Axiom 0.6.1-alpha.1. An action is behavior expressed as data, executed as a transaction.
 
 ```ts
 {
@@ -39,6 +39,22 @@ result.diagnostics[0].details  // { preconditionIndex: 2, failureMode: 'insuffic
 ```
 
 `actionGuards(action)` returns the conditions however they were written.
+
+### Guards evaluate in order, and the first failure stops
+
+Declaration order is evaluation order. The first guard that does not hold refuses the
+invocation, and evaluation stops there: later guards are not evaluated, and exactly one
+`PRECONDITION_FAILED` is reported, naming that guard by position and by failure mode.
+
+This is the contract, not an implementation detail, and it has three consequences worth
+writing an action around:
+
+- **A guard may rely on the guards before it.** Ordering `required(x)` ahead of a guard that reads a field of `x` is how the second one is kept evaluable.
+- **A refusal names one cause.** Failures are not aggregated. An interface that wants to show every problem at once should express them as constraints, which are evaluated over the whole proposed state, rather than as guards.
+- **A guard that cannot be evaluated fails.** It refuses, exactly as an unevaluable constraint counts as violated — never passes.
+
+Aggregating guard failures would be a different feature with a different diagnostic shape,
+and is deliberately not this one.
 
 ## Lifecycle
 

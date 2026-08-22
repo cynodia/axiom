@@ -102,14 +102,20 @@ for (const { name } of publishable) {
   const has = (file) => files.includes(`package/${file}`);
   const entryPoints = new Set();
   for (const target of Object.values(manifest.exports ?? {})) {
-    for (const value of Object.values(target ?? {})) {
+    // A subpath maps either to a file, or to a set of conditions each mapping to one.
+    for (const value of typeof target === 'string' ? [target] : Object.values(target ?? {})) {
       entryPoints.add(String(value).replace(/^\.\//, ''));
     }
   }
   entryPoints.add(String(manifest.main ?? '').replace(/^\.\//, ''));
   entryPoints.add(String(manifest.types ?? '').replace(/^\.\//, ''));
+  /** A wildcard subpath is satisfied by any file it can resolve to. */
+  const hasMatch = (pattern) => {
+    const expression = new RegExp(`^package/${pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.+')}$`);
+    return files.some((file) => expression.test(file));
+  };
   for (const entry of entryPoints) {
-    if (entry && !has(entry)) {
+    if (entry && !(entry.includes('*') ? hasMatch(entry) : has(entry))) {
       report(name, `declares ${entry} but the tarball does not contain it`);
     }
   }

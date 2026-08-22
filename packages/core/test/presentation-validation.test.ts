@@ -176,6 +176,7 @@ test('two primary actions in one form are reported', () => {
     kind: 'button',
     label: 'Publish',
     actionId: ACTION_DROP,
+    arguments: { [PARAM_DROP]: literal('r1') },
     presentation: { uxRole: 'primary-action' },
   });
   const form = graph.getNode<FormNode>(FORM);

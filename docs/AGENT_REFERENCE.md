@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.6.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.6.1-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -408,12 +408,21 @@ not a constraint. Enforcement belongs to guards, constraints and transition cons
 
 ```ts
 const ir = compileToIR(graph);                  // throws GraphValidationError if invalid
-const html = compileToHtml(graph, { title?, appearance? });
+const html = compileToHtml(graph, { title?, appearance?, remote? });
 const css = createThemeStylesheet(ir.theme);
 
-const app = createAxiomRuntime({ ir, rootElement, host, nativeOperations?, inputValidation?, recordMutationValues? });
-app.start();
+const app = createAxiomRuntime({ ir, rootElement, host, remote?, nativeOperations?, inputValidation?, recordMutationValues? });
+await app.start();                              // render → restore → load authoritative state
 ```
+
+`start()` renders synchronously and then loads authoritative state when a gateway is
+configured; awaiting it means that has happened. **The gateway must be passed to
+`createAxiomRuntime`, before `start()`.** A failed load reports `AUTHORITY_UNREACHABLE` and
+leaves `authoritativeStateLoaded()` false — it never throws, and never looks like empty data.
+
+`compileToHtml` wires the browser-safe gateway into the generated page whenever the IR
+contains a remote action, so a server-authoritative application needs no client JavaScript
+of its own. `remote: { endpoint }` points it elsewhere; `remote: false` switches it off.
 
 `compileToIR` refuses an invalid graph. Pass `{ validate: false }` only for diagnostics.
 
@@ -431,7 +440,11 @@ reads nothing from globals.
 | `diagnostics()` / `clearDiagnostics()` | — | Running log. |
 | `getMutationLog()` | — | Every attempted mutation with source, path and `outcome`. |
 | `registerNativeOperation(id, fn)` | — | |
-| `start()` / `render()` | — | Rendering is a full re-render; focus and caret are restored by node id. |
+| `start()` / `render()` | — | `start()` is render → restore → synchronize, and returns a promise. Rendering is a full re-render; focus and caret are restored by node id. |
+| `invokeActionAsync(id, args?)` | yes | Awaits the outcome, an authority's answer included. |
+| `syncAuthoritativeState()` | — | Loads and applies the authoritative snapshot. Idempotent. |
+| `authoritativeStateLoaded()` | — | Whether a snapshot has been applied. Not the same question as "is this collection empty". |
+| `settled()` | — | Resolves when no remote invocation is outstanding — how to await an action a click or a form submit started. |
 
 ## Diagnostics
 
@@ -481,6 +494,12 @@ authoring an application that crosses the trust boundary.
 5. **CONCURRENCY** — two actions cannot both commit from incompatible snapshots.
 6. **PROTOCOL** — a client requests semantic actions, never mutation programs.
 7. **SERIALIZATION** — authoritative behavior is data. No closure, no arbitrary code.
+8. **BOOTSTRAP** — a remote client is given its gateway before it starts.
+9. **STARTUP** — `start()` renders, then synchronizes; a failed load is a diagnostic.
+10. **FORM SUBMIT** — a declared submit button invokes with its own arguments, clicked or submitted.
+11. **IDEMPOTENCY** — a generated request id is unique across runtime instances; records are scoped by principal.
+12. **CHANGES** — `changes` names every observable state whose value moved, and no others.
+13. **PORTABILITY** — `axiom.server.v1` is frozen and language-independent.
 
 ```ts
 { id: STATE_PRODUCTS, kind: 'state', authority: 'server' }                  // the authority owns it
@@ -506,23 +525,50 @@ graph.setPrincipalEntity(ENTITY_USER);
 ```
 
 `PRINCIPAL` is bound to a record keyed by the principal entity's field ids, and **only where
-an authority evaluates**. A rule that cannot be evaluated denies. `requiresConfirmation` is
-interaction, not authorization.
+an authority evaluates** — which is everywhere on the authority, not only in `authorization`:
+guards, operation values, postconditions and constraints alike. That is how a record says who
+caused it without a client being asked to claim an identity:
+
+```ts
+{ fieldId: F_ORDER_PLACED_BY, value: field(ref(PRINCIPAL), F_USER_ID) }
+```
+
+Reading it anywhere a client evaluates is `PRINCIPAL_REFERENCE_ON_CLIENT`. A rule that cannot
+be evaluated denies. An anonymous caller has no principal: attributes read from it are absent,
+so any rule naming one is false. `requiresConfirmation` is interaction, not authorization.
 
 ### Running one
 
-```ts
-const server = createAxiomServer({ ir: compileToServerIR(graph), persistence, host });
-await server.start();
-await serveOverHttp({ server, port: 3000 });
+One graph, one process — the generated page and the authority that answers it:
 
-const app = createAxiomRuntime({ ir, rootElement, host, remote: createRemoteGateway(transport) });
-await app.syncAuthoritativeState();
+```ts
+await serveAxiomApplication({
+  serverIR: compileToServerIR(graph),
+  page: compileToHtml(graph),
+  persistence: await createSqlitePersistence({ location: 'app.db' }),
+  authenticate: (credential) => resolveUser(credential),
+  port: 3000,
+});
 ```
+
+`GET /` is the page, `POST /axiom` the semantic endpoint. No route, controller, handler, SQL
+or client JavaScript is authored. **There is no published Axiom CLI.** The halves also run
+separately: `serveOverHttp({ server, port })` is the bare authority, and
+`createDirectTransport(server)` drives one in-process for tests.
 
 A remote invocation returns `{ ok: false, pending: true }` and its outcome arrives later,
 through the same action-outcome lifecycle a local refusal uses — so a `diagnostic` node
-presents a server refusal exactly as it presents a local one.
+presents a server refusal exactly as it presents a local one, and the control that started it
+renders `aria-busy` and refuses a second press until it settles.
+
+Portable artifacts, for a runtime written in another language:
+
+```
+@cynodia/axiom-server/conformance                     the fixture manifest
+@cynodia/axiom-server/conformance/<name>.json         one fixture, pure data
+@cynodia/axiom-server/schema/server-ir.v1.schema.json JSON Schema for the IR
+@cynodia/axiom-server/schema/protocol.v1.schema.json  JSON Schema for the protocol
+```
 
 Boundary diagnostics: `UNKNOWN_SERVER_ACTION` `ARGUMENT_TYPE_MISMATCH` `AUTHORIZATION_DENIED`
 `CONCURRENCY_CONFLICT` `MALFORMED_REQUEST` `AUTHORITY_UNREACHABLE`, plus `SERVER_STATE_WRITE`

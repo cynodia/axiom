@@ -6,8 +6,8 @@ Axiom represents application behavior, state, UI structure and presentation as s
 semantic data executed by generic runtimes. An application is a typed graph, not source
 files: the JavaScript and HTML that reach a browser are output, and are never edited.
 
-**Status: experimental / alpha (0.6.0-alpha.x).** The API may change between alpha
-releases. This documentation describes 0.6.0-alpha.1.
+**Status: experimental / alpha (0.6.1-alpha.x).** The API may change between alpha
+releases. This documentation describes 0.6.1-alpha.1.
 
 ## Canonical mental model
 
@@ -26,8 +26,13 @@ releases. This documentation describes 0.6.0-alpha.1.
 | Renderer | Platform-specific materialization. Not part of the graph. |
 
 ```text
-ApplicationGraph → validateGraph → compileToIR → runtime (+ theme → renderer) → application
+ApplicationGraph → validateGraph → compileToIR       → client runtime (+ theme → renderer) → page
+                                 ↘ compileToServerIR → authority (+ PersistenceAdapter)
 ```
+
+One graph produces both halves. A `StateDef` says who owns its value (`authority: 'server'`),
+and everything else follows: which actions execute where, what a client is even told, and what
+a page has to ask an authority for. See [`docs/AUTHORITY.md`](docs/AUTHORITY.md).
 
 ## Load-bearing invariants
 
@@ -55,6 +60,11 @@ full in the linked contract.
 19. **A client cannot commit server-authoritative state**, by any path. An action that writes it executes on the authority.
 20. **The client is untrusted.** Its validation results, derived values and claims are never authoritative; guards, authorization and argument types are checked again on the authority.
 21. **A client requests semantic actions, never mutation programs.** The protocol carries no way to send operations.
+22. **A remote client is given its gateway before it starts.** A generated page wires its own; a hand-built runtime must pass `remote` to `createAxiomRuntime`, not add one afterwards.
+23. **`start()` renders first, then synchronizes.** Awaiting it means authoritative state has been applied; an unreachable authority is a diagnostic, not an exception, and `authoritativeStateLoaded()` says which happened.
+24. **A declared submit button invokes its action with its own arguments**, whether clicked or submitted through the form.
+25. **`InvokeResponse.changes` names every observable state whose value moved, and no others.** Not what was written, not what was recomputed — what changed.
+26. **`axiom.server.v1` is frozen and language-independent.** Its semantics are defined by [`docs/AUTHORITY.md`](docs/AUTHORITY.md#server-ir-v1-is-frozen), the published JSON Schemas and the conformance fixtures — not by this implementation.
 
 ## Installation
 
@@ -202,7 +212,7 @@ export function runMinimalExample(): number {
 | `@cynodia/axiom-compiler` | Validation, normalization into `ApplicationIR`, theme stylesheet, page emission. |
 | `@cynodia/axiom-runtime` | State store, evaluation, mutation engine, constraint checking, renderer, routing. |
 | `@cynodia/axiom-agent-api` | Semantic and presentation queries, mutation impact, transactional transformations. |
-| `@cynodia/axiom-server` | The authoritative runtime: Server IR execution, persistence, protocol and transports. Installed separately, since it imports `node:http` and `node:sqlite`. |
+| `@cynodia/axiom-server` | The authoritative runtime: Server IR execution, persistence, the semantic protocol, transports, and the reference full-stack host. Installed separately, since it imports `node:http` and `node:sqlite`. Also ships the portable [conformance fixtures](docs/AUTHORITY.md#conformance) and the [JSON Schemas](docs/AUTHORITY.md#machine-readable-contracts) for `axiom.server.v1`. |
 
 ## Working in this repository
 
@@ -213,6 +223,8 @@ npm install
 npm run build      # compiles every package and writes the three demo applications
 npm test           # unit, validation, runtime, presentation, agent, architecture, documentation
 
+# packages/cli is a private development tool of this repository. It is not published, and
+# nothing outside this checkout should depend on it.
 node packages/cli/dist/index.js inspect  packages/demo/dist/order-system.js --export=createOrderSystemGraph
 node packages/cli/dist/index.js validate packages/demo/dist/order-system.js --export=createOrderSystemGraph
 node packages/cli/dist/index.js serve    packages/demo/dist/order-system.js --export=createOrderSystemGraph
@@ -223,15 +235,25 @@ same compiler and runtime with no application-specific framework code. The order
 the acceptance fixture for the 0.4 collection semantics and the 0.5 presentation layer; the
 order desk is the 0.6 fixture, with stock and orders owned by an authority.
 
-```bash
-# The client page and the authority, from one graph, with durable state.
-node packages/cli/dist/index.js serve packages/demo/dist/order-server.js \
-  --export=createOrderServerGraph --port=3000 --store=desk.db
+```ts
+// The client page and the authority, from one graph, in one process, with durable state.
+const running = await serveAxiomApplication({
+  serverIR: compileToServerIR(graph),
+  page: compileToHtml(graph),
+  persistence: await createSqlitePersistence({ location: 'desk.db' }),
+  authenticate: (credential) => resolveUser(credential),
+  port: 3000,
+});
 ```
 
-Specifications, in order: `doc/spec.md`, `doc/spec2.md`, `doc/spec3.md`, `doc/spec4.md`,
-`doc/spec4.1.md`, `doc/spec5.md`, `doc/spec5.1.md`. `CLAUDE.md` orients work in the
-codebase. **The implementation is authoritative over the specifications for existing
+`GET /` is the generated page and `POST /axiom` is the semantic endpoint, for every Axiom
+application. No route, controller, handler, SQL statement or line of client JavaScript is
+written by an application author. There is no published Axiom CLI: `packages/cli` is a private
+development tool of this repository.
+
+Specifications live in `specs/`, in order: `spec.md`, `spec2.md`, `spec3.md`, `spec4.md`,
+`spec4.1.md`, `spec5.md`, `spec5.1.md`, `spec5.2.md`, `spec6.md`, `spec6.1.md`. `CLAUDE.md`
+orients work in the codebase. **The implementation is authoritative over the specifications for existing
 behavior**; where they disagree, the documentation above describes the implementation.
 
 ## Releasing

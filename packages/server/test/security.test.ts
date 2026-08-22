@@ -348,3 +348,31 @@ test('the direct transport still copies the request, so no live reference crosse
   args[ids.PARAM_QUANTITY] = 999;
   assert.equal(stockOf(server, 'bolt'), 9);
 });
+
+test('PRINCIPAL resolves inside operations, not only inside authorization rules', async () => {
+  // An authoritative record that says who caused it is the reason this matters: the client
+  // passes no user id, so it cannot claim one. Binding the caller only while an
+  // authorization rule is being checked would leave an unauthorized action writing whatever
+  // the previous caller left behind.
+  const server = await authority();
+  await invoke(
+    server,
+    ids.ACTION_PLACE_ORDER,
+    { [ids.PARAM_PRODUCT]: 'bolt', [ids.PARAM_QUANTITY]: 1 },
+    'clerk',
+  );
+  await invoke(
+    server,
+    ids.ACTION_PLACE_ORDER,
+    { [ids.PARAM_PRODUCT]: 'bolt', [ids.PARAM_QUANTITY]: 1 },
+    'admin',
+  );
+
+  const orders = server.getState(ids.STATE_ORDERS) as Array<Record<string, unknown>>;
+  assert.deepEqual(
+    orders.map((order) => order[ids.F_ORDER_PLACED_BY]),
+    ['u1', 'u2'],
+    'each order records the caller who actually placed it',
+  );
+});
+

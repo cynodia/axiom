@@ -730,7 +730,8 @@
         "ok": true,
         "changedStates": [
           "state_parts",
-          "state_ledger"
+          "state_ledger",
+          "state_total"
         ]
       }
     }

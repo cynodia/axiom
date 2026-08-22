@@ -13,6 +13,7 @@ const RUNTIME_MODULES = [
   './mutation/resolve-location.js',
   './mutation/mutation-engine.js',
   './format.js',
+  './remote.js',
   './presentation-classes.js',
   './runtime.js',
 ];

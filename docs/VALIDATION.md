@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.6.0-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.6.1-alpha.1. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -79,6 +79,7 @@ non-numeric collections, and obviously incompatible assignments.
 | `INVALID_SELECTOR_TYPE` | An index selector that is statically not a number. |
 | `EPHEMERAL_STATE_PERSISTED` | `ephemeral: true` together with `persistence`. |
 | `CLIENT_WRITE_TO_SERVER_STATE` | An input bound into server-authoritative state. See [Authority](#authority). |
+| `MISSING_ACTION_ARGUMENT` | A control invokes an action without supplying a required parameter. |
 
 ### Initial values
 
@@ -148,6 +149,7 @@ client commit authoritative state does not compile. Full model:
 | `SERVER_ONLY_STATE_OBSERVED` | Something the client receives reads a `serverOnly` state — an input, a derivation, a UI expression. | error |
 | `AUTHORIZATION_WITHOUT_PRINCIPAL` | An `authorization` expression with no principal entity declared. **Also raised as a warning** when an application has server state but no action declares authorization, so every caller may invoke everything. | error / warning |
 | `PRINCIPAL_REFERENCE_ON_CLIENT` | `PRINCIPAL` is read where a client evaluates, or an `authorization` sits on an action no authority executes. | error |
+| `MISSING_ACTION_ARGUMENT` | A `button`, or a `form` submitting without one, invokes an action with a required parameter it never supplies. The invocation would always be refused for a missing argument, so it is refused here instead. | error |
 | `INVALID_PRINCIPAL_ENTITY` | `principalEntityId` names something that is not an entity. | error |
 
 ### Accessibility

@@ -15,7 +15,7 @@ import type {
   ServerIR,
   StateDef,
 } from '@cynodia/axiom-core';
-import { MemoryElement, createAxiomRuntime, createMemoryHost } from '@cynodia/axiom-runtime';
+import { MemoryElement, createAxiomRuntime, createMemoryHost, valuesEqual } from '@cynodia/axiom-runtime';
 import type { AxiomRuntime, MutationLogEntry, RuntimeDiagnostic } from '@cynodia/axiom-runtime';
 import { createMemoryPersistence } from './persistence.js';
 import type { PersistenceAdapter } from './persistence.js';
@@ -104,6 +104,47 @@ function diagnostic(
  * Requests are serialized. One action runs at a time, and its persistence commit completes
  * before the next begins, so two callers cannot both commit from the same snapshot.
  */
+/**
+ * Detail keys an authority may return to a client.
+ *
+ * A whitelist, not a blacklist, because the cost of the two mistakes is not symmetric: a
+ * missing key is an inconvenience, an unlisted one added later is a disclosure. Everything
+ * here is structural — which rule, which record, which guard — and nothing here is a **state
+ * value**. A transition rule's `previousValue` and `proposedValue` are exactly the kind of
+ * thing that must not cross: the rule may govern an entity the client never sees, and a
+ * refusal would otherwise hand over the very record `serverOnly` withholds.
+ */
+const DISCLOSABLE_DETAIL_KEYS: readonly string[] = [
+  'actionId',
+  'code',
+  'conflicts',
+  'constraintId',
+  'entityId',
+  'failureMode',
+  'identity',
+  'preconditionIndex',
+  'principal',
+  'severity',
+  'source',
+  'stateId',
+  'transitionConstraintId',
+];
+
+/** Strips state values out of a diagnostic on its way across the trust boundary. */
+function disclosable(diagnostic: RuntimeDiagnostic): RuntimeDiagnostic {
+  if (!diagnostic.details) {
+    return diagnostic;
+  }
+  const details: Record<string, unknown> = {};
+  for (const key of DISCLOSABLE_DETAIL_KEYS) {
+    if (key in diagnostic.details) {
+      details[key] = diagnostic.details[key];
+    }
+  }
+  return { ...diagnostic, details };
+}
+
+
 export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   if (options.ir.contract !== SERVER_IR_CONTRACT) {
     throw new Error(
@@ -215,7 +256,6 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     if (!action.authorization) {
       return null;
     }
-    runtime.hydrateState(PRINCIPAL, context.principal);
     const outcome = runtime.evaluate(action.authorization);
     if (!outcome.ok) {
       // A rule that cannot be evaluated denies, exactly as an unevaluable constraint is
@@ -236,12 +276,54 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         );
   }
 
-  function snapshotOf(): StateSnapshot {
+  /** Observable states the authority recomputes rather than stores. */
+  const derivedObservables = new Set<NodeId>(
+    ir.observableStateIds.filter(
+      (stateId) => ir.states.find((state) => state.id === stateId)?.derivation !== undefined,
+    ),
+  );
+
+  /**
+   * The snapshot a caller receives.
+   *
+   * With no `sinceRevision` this is every observable state. With one, it is every observable
+   * state the authority cannot prove unchanged since that revision: each stored state whose
+   * last committed revision is later, and every derived state — because a derived value
+   * follows states this response may not even be allowed to disclose, and the authority will
+   * not guess. That direction of caution is the whole contract: a partial snapshot may name
+   * a state that did not move, and may never omit one that did.
+   */
+  function snapshotOf(sinceRevision?: number): StateSnapshot {
+    // A revision the authority has not issued yet says nothing about what changed, so the
+    // complete snapshot — always a correct answer — is what it can honestly give.
+    const incremental = sinceRevision !== undefined && sinceRevision <= storeRevision;
     const states: Record<NodeId, unknown> = {};
     for (const stateId of ir.observableStateIds) {
+      if (
+        incremental &&
+        !derivedObservables.has(stateId) &&
+        (revisions.get(stateId) ?? 0) <= (sinceRevision as number)
+      ) {
+        continue;
+      }
       states[stateId] = runtime.getState(stateId);
     }
-    return { revision: storeRevision, states };
+    return { revision: storeRevision, states, ...(incremental ? { partial: true } : {}) };
+  }
+
+  /**
+   * The key an idempotency record is filed under.
+   *
+   * Scoped by principal as well as request id. A replay is a caller retrying *their own*
+   * request, so a request id that one principal happened to choose must never hand them
+   * another principal's answer — a request id is client-chosen and therefore not a secret.
+   * Anonymous callers share a single scope, because there is nothing to tell them apart; an
+   * application that needs replay isolation between anonymous callers has to authenticate
+   * them.
+   */
+  function recordKey(principal: PrincipalRecord | null, requestId: string): string {
+    const identity = principalIdentity(principal);
+    return `${identity === undefined ? '' : JSON.stringify(identity)}\u0000${requestId}`;
   }
 
   function remember(requestId: string, response: InvokeResponse): void {
@@ -256,8 +338,22 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
   async function invoke(request: InvokeRequest): Promise<ServerResponse> {
     const startedAt = Date.now();
-    if (request.requestId) {
-      const previous = replies.get(request.requestId);
+
+    // Who is calling is established before anything is answered, because the idempotency
+    // record is scoped to them. Authenticating first discloses nothing: it is the same work
+    // whether or not the action turns out to exist.
+    const context: ExecutionContext = {
+      principal: await resolvePrincipal(request),
+      ...(request.credential !== undefined ? { credential: request.credential } : {}),
+      ...(request.requestId ? { requestId: request.requestId } : {}),
+    };
+    // The caller is bound for the whole invocation, not only for the authorization check.
+    // An operation that records who acted — `field(ref(PRINCIPAL), F_USER_ID)` — must resolve
+    // whether or not the action also happens to carry an authorization rule.
+    runtime.hydrateState(PRINCIPAL, context.principal);
+    const replayKey = request.requestId ? recordKey(context.principal, request.requestId) : undefined;
+    if (replayKey) {
+      const previous = replies.get(replayKey);
       if (previous) {
         // A retry after a lost response must not execute the action a second time.
         report({ kind: 'replay', actionId: request.actionId, requestId: request.requestId });
@@ -279,12 +375,6 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       report({ kind: 'reject', actionId: request.actionId, ok: false, diagnostics });
       return refusal(diagnostics, request.requestId);
     }
-
-    const context: ExecutionContext = {
-      principal: await resolvePrincipal(request),
-      ...(request.credential !== undefined ? { credential: request.credential } : {}),
-      ...(request.requestId ? { requestId: request.requestId } : {}),
-    };
 
     const argumentProblems = checkArguments(action, request.arguments ?? {});
     if (argumentProblems.length > 0) {
@@ -309,6 +399,13 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     const before = new Map<NodeId, LiteralValue>();
     for (const stateId of durableStateIds) {
       before.set(stateId, runtime.getState(stateId) as LiteralValue);
+    }
+    // Observable values as they stood at transaction entry. `changes` reports what a client
+    // can actually see change, which is not the same as what the transaction touched: a
+    // derived state is recomputed on every read whether or not its value moved.
+    const observedBefore = new Map<NodeId, unknown>();
+    for (const stateId of ir.observableStateIds) {
+      observedBefore.set(stateId, runtime.getState(stateId));
     }
     const mark = runtime.getMutationLog().length;
 
@@ -336,8 +433,8 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         diagnostics: result.diagnostics,
         committed: [],
       });
-      if (request.requestId) {
-        remember(request.requestId, response as InvokeResponse);
+      if (replayKey) {
+        remember(replayKey, response as InvokeResponse);
       }
       return response;
     }
@@ -365,8 +462,8 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       ];
       report({ kind: 'conflict', actionId: action.id, ok: false, diagnostics, revision: outcome.revision });
       const response = refusal(diagnostics, request.requestId);
-      if (request.requestId) {
-        remember(request.requestId, response as InvokeResponse);
+      if (replayKey) {
+        remember(replayKey, response as InvokeResponse);
       }
       return response;
     }
@@ -376,12 +473,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       revisions.set(stateId, outcome.revision);
     }
 
-    const changes: Record<NodeId, unknown> = {};
-    for (const stateId of ir.observableStateIds) {
-      if (written.has(stateId) || ir.states.find((state) => state.id === stateId)?.derivation) {
-        changes[stateId] = runtime.getState(stateId);
-      }
-    }
+    const changes: Record<NodeId, unknown> = changedObservables(observedBefore);
 
     const response = respond(true, result.diagnostics, changes, request.requestId);
     report({
@@ -394,10 +486,30 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       revision: storeRevision,
       committed: writes,
     });
-    if (request.requestId) {
-      remember(request.requestId, response as InvokeResponse);
+    if (replayKey) {
+      remember(replayKey, response as InvokeResponse);
     }
     return response;
+  }
+
+  /**
+   * The `changes` map of an `InvokeResponse`: every observable state whose value differs from
+   * what it was when the transaction opened, and no others.
+   *
+   * Difference, not provenance, is the criterion. A stored state that was written back to
+   * the value it already held is absent; a derived state that was recomputed to the same
+   * value is absent; a derived state whose recomputation moved is present even though no
+   * mutation named it. `serverOnly` states are never observable and so never appear.
+   */
+  function changedObservables(entry: Map<NodeId, unknown>): Record<NodeId, unknown> {
+    const changes: Record<NodeId, unknown> = {};
+    for (const stateId of ir.observableStateIds) {
+      const current = runtime.getState(stateId);
+      if (!valuesEqual(current, entry.get(stateId))) {
+        changes[stateId] = current;
+      }
+    }
+    return changes;
   }
 
   function respond(
@@ -410,7 +522,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       kind: 'result',
       protocol: PROTOCOL_VERSION,
       ok,
-      diagnostics,
+      diagnostics: diagnostics.map(disclosable),
       changes,
       revision: storeRevision,
       ...(requestId ? { requestId } : {}),
@@ -453,11 +565,24 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
           };
         }
         if (request.kind === 'snapshot') {
+          const since = request.sinceRevision;
+          if (since !== undefined && (!Number.isSafeInteger(since) || since < 0)) {
+            return {
+              kind: 'error' as const,
+              protocol: PROTOCOL_VERSION,
+              diagnostics: [
+                diagnostic(
+                  SERVER_DIAGNOSTIC_CODES.MALFORMED_REQUEST,
+                  `sinceRevision must be a non-negative integer, not ${String(since)}`,
+                ),
+              ],
+            };
+          }
           report({ kind: 'snapshot', revision: storeRevision });
           const response: SnapshotResponse = {
             kind: 'snapshot',
             protocol: PROTOCOL_VERSION,
-            snapshot: snapshotOf(),
+            snapshot: snapshotOf(since),
           };
           return response;
         }

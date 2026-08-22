@@ -44,6 +44,7 @@ import { compileToHtml, compileToIR, createThemeStylesheet } from '@cynodia/axio
 import {
   createAxiomRuntime,
   createMemoryHost,
+  findAll,
   findByNodeId,
   findByTag,
   textOf,
@@ -554,7 +555,7 @@ test('semantic control intent chooses the control', () => {
   assert.equal(active.tagName, 'input');
   assert.equal(active.getAttribute('type'), 'checkbox');
   assert.equal(active.getAttribute('role'), 'switch');
-  assert.equal(active.getAttribute('data-control'), 'switch');
+  assert.equal(active.getAttribute('data-variant'), 'switch');
 });
 
 test('a stepper and a radio group are real controls, not decoration', () => {
@@ -568,7 +569,7 @@ test('a stepper and a radio group are real controls, not decoration', () => {
 
   const stepper = elementFor(host.root, NAME_INPUT);
   assert.equal(stepper.getAttribute('type'), 'number');
-  assert.equal(stepper.getAttribute('data-control'), 'stepper');
+  assert.equal(stepper.getAttribute('data-variant'), 'stepper');
 });
 
 /** Sections 29 and 36: a refusal is related to the control that was refused. */
@@ -701,4 +702,24 @@ test('a host that can only ask a plain question still gets a sentence', () => {
   app.invokeAction(ACTION_DROP, { [PARAM_DROP]: 'r1' });
 
   assert.deepEqual(host.confirmations, ['Delete this record? — It cannot be brought back.']);
+});
+
+test('data-control names the element a person operates, data-node the semantic node', () => {
+  // An input renders as a label wrapping a control, and both *are* that node, so both carry
+  // `data-node`. Only one of them can be typed into, and until 0.6.1 nothing in the DOM said
+  // which — tooling had to guess by tag name.
+  const { host } = createApp();
+
+  assert.equal(findByNodeId(host.root, NAME_INPUT).length, 2, 'wrapper and control, both the node');
+  const controls = findAll(
+    host.root,
+    (element) => element.getAttribute('data-control') === NAME_INPUT,
+  );
+  assert.equal(controls.length, 1, 'exactly one of them is the control');
+  assert.equal(controls[0].tagName, 'input');
+
+  // A button is its own control, so the two attributes name the same element.
+  const button = elementFor(host.root, DROP);
+  assert.equal(button.tagName, 'button');
+  assert.equal(button.getAttribute('data-control'), DROP);
 });

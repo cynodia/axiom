@@ -738,6 +738,7 @@
       },
       "expect": {
         "ok": false,
+        "changedStates": [],
         "diagnosticCodes": [
           "CONSTRAINT_VIOLATION"
         ]

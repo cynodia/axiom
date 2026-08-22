@@ -1,0 +1,342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cynodia.github.io/axiom/schema/protocol.v1.schema.json",
+  "title": "Axiom semantic protocol v1",
+  "description": "What a client may send an authority and what it may receive back. A client requests semantic operations — \"invoke action X with arguments Y\" — never a mutation program. Nothing here mentions a transport.",
+  "contract": "axiom.protocol.v1",
+  "release": "0.6.1-alpha.1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ServerRequest"
+    },
+    {
+      "$ref": "#/$defs/ServerResponse"
+    }
+  ],
+  "$defs": {
+    "NodeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "RuntimeDiagnostic": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ]
+        },
+        "nodeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "constraintId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stateId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transactionId": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "severity"
+      ],
+      "additionalProperties": false
+    },
+    "Credential": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ServerRequest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SnapshotRequest"
+        },
+        {
+          "$ref": "#/$defs/InvokeRequest"
+        }
+      ]
+    },
+    "SnapshotRequest": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "snapshot"
+        },
+        "protocol": {
+          "const": "axiom.protocol.v1"
+        },
+        "credential": {
+          "$ref": "#/$defs/Credential"
+        },
+        "sinceRevision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "protocol"
+      ],
+      "additionalProperties": false
+    },
+    "InvokeRequest": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "invoke"
+        },
+        "protocol": {
+          "const": "axiom.protocol.v1"
+        },
+        "actionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "credential": {
+          "$ref": "#/$defs/Credential"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "actionId"
+      ],
+      "additionalProperties": false
+    },
+    "ServerResponse": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SnapshotResponse"
+        },
+        {
+          "$ref": "#/$defs/InvokeResponse"
+        },
+        {
+          "$ref": "#/$defs/ErrorResponse"
+        }
+      ]
+    },
+    "StateSnapshot": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "states": {
+          "type": "object"
+        },
+        "partial": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "revision",
+        "states"
+      ],
+      "additionalProperties": false
+    },
+    "SnapshotResponse": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "snapshot"
+        },
+        "protocol": {
+          "const": "axiom.protocol.v1"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/StateSnapshot"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "snapshot"
+      ],
+      "additionalProperties": false
+    },
+    "InvokeResponse": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "result"
+        },
+        "protocol": {
+          "const": "axiom.protocol.v1"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "nodeId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "actionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "constraintId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "stateId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "transactionId": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "severity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "changes": {
+          "type": "object",
+          "description": "Every observable state whose value differs from what it was when the transaction opened. Empty for a refused or a no-op invocation."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "replayed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "ok",
+        "diagnostics",
+        "changes",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "error"
+        },
+        "protocol": {
+          "const": "axiom.protocol.v1"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "nodeId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "actionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "constraintId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "stateId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "transactionId": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "severity"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "diagnostics"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

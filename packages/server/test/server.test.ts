@@ -601,3 +601,4 @@ test('the authority reports structured execution information', async () => {
   assert.equal(rejected?.actionId, ACTION_ADMIN_ONLY);
   assert.equal(rejected?.principal, 'u1', 'the identity, not the whole principal record');
 });
+

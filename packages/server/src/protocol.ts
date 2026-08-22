@@ -17,7 +17,15 @@ export interface SnapshotRequest {
   kind: 'snapshot';
   protocol: typeof PROTOCOL_VERSION;
   credential?: Credential;
-  /** When given, only states changed after this revision are returned. */
+  /**
+   * Ask for an incremental snapshot: a revision this caller already holds.
+   *
+   * The response then omits every observable state the authority can **prove** has not
+   * changed since that revision, and sets `partial`. Omission always means unchanged;
+   * inclusion never promises changed. A value that is not a non-negative safe integer is a
+   * malformed request; a value the authority cannot reason about — ahead of its own
+   * revision — is answered with a complete snapshot, which is always a valid answer.
+   */
   sinceRevision?: number;
 }
 
@@ -37,10 +45,19 @@ export interface InvokeRequest {
 
 export type ServerRequest = SnapshotRequest | InvokeRequest;
 
-/** The authoritative value of every observable state the caller may see. */
+/**
+ * The authoritative value of the observable states the caller may see.
+ *
+ * Complete unless `partial` is set. A complete snapshot names every observable state; a
+ * partial one names those that may have changed since the `sinceRevision` that was asked
+ * for, and a state it does not name is unchanged since then. `revision` is the authority's
+ * current revision either way, so a client can use it as the next `sinceRevision`.
+ */
 export interface StateSnapshot {
   revision: number;
   states: Record<NodeId, unknown>;
+  /** Present and true only for the answer to a `sinceRevision` request. */
+  partial?: boolean;
 }
 
 export interface InvokeResponse {

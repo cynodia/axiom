@@ -727,6 +727,7 @@
       },
       "expect": {
         "ok": false,
+        "changedStates": [],
         "diagnosticCodes": [
           "AUTHORIZATION_DENIED"
         ]
@@ -740,6 +741,7 @@
       },
       "expect": {
         "ok": false,
+        "changedStates": [],
         "diagnosticCodes": [
           "AUTHORIZATION_DENIED"
         ]
@@ -753,7 +755,11 @@
         "param_stock": 1
       },
       "expect": {
-        "ok": true
+        "ok": true,
+        "changedStates": [
+          "state_parts",
+          "state_total"
+        ]
       }
     }
   ],

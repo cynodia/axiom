@@ -80,4 +80,5 @@ export const VALIDATION_CODES = {
   principalReferenceOnClient: 'PRINCIPAL_REFERENCE_ON_CLIENT',
   serverOnlyStateObserved: 'SERVER_ONLY_STATE_OBSERVED',
   invalidPrincipalEntity: 'INVALID_PRINCIPAL_ENTITY',
+  missingActionArgument: 'MISSING_ACTION_ARGUMENT',
 } as const;

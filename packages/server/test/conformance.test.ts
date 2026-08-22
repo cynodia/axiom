@@ -3,6 +3,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { SERVER_IR_CONTRACT } from '@cynodia/axiom-core';
 import {
   PROTOCOL_VERSION,
   createAxiomServer,
@@ -54,9 +55,24 @@ interface Fixture {
 
 /** Resolved from the compiled test, which sits in `dist-test/` beside `conformance/`. */
 const directory = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../conformance');
-const files = (await readdir(directory)).filter((name) => name.endsWith('.json')).sort();
+const files = (await readdir(directory))
+  .filter((name) => name.endsWith('.json') && name !== 'manifest.json')
+  .sort();
 
 assert.ok(files.length > 0, 'there are conformance fixtures to run');
+
+/** The manifest is the entry point a non-JavaScript implementation is expected to read. */
+interface Manifest {
+  conformance: string;
+  contract: string;
+  protocol: string;
+  release: string;
+  areas: string[];
+  fixtures: { name: string; file: string; covers: string[]; description: string }[];
+}
+const manifest = JSON.parse(
+  await readFile(path.join(directory, 'manifest.json'), 'utf8'),
+) as Manifest;
 
 for (const file of files) {
   const fixture = JSON.parse(await readFile(path.join(directory, file), 'utf8')) as Fixture;
@@ -118,8 +134,14 @@ for (const file of files) {
           `${where} should report failure mode ${mode}`,
         );
       }
-      for (const stateId of expected.changedStates ?? []) {
-        assert.ok(stateId in answer.changes || true, `${where} changed ${stateId}`);
+      if (expected.changedStates) {
+        // Exhaustive, not a subset: a runtime that reports a state as changed when its value
+        // did not move is as wrong as one that omits a state that did.
+        assert.deepEqual(
+          Object.keys(answer.changes).sort(),
+          [...expected.changedStates].sort(),
+          `${where}: changes must name exactly the observable states whose value moved`,
+        );
       }
       if (expected.replayed !== undefined) {
         assert.equal(answer.replayed ?? false, expected.replayed, `${where} replay`);
@@ -187,4 +209,28 @@ test('a fixture is self-contained data, with nothing of this implementation in i
     assert.ok(fixture.serverIR.states.length > 0);
     assert.deepEqual(JSON.parse(JSON.stringify(fixture)), fixture);
   }
+});
+
+test('the manifest describes exactly the fixtures that ship', () => {
+  // An implementer who reads only the manifest must see the whole suite: a fixture missing
+  // from it is a fixture nobody outside this repository knows to run.
+  assert.equal(manifest.conformance, 'axiom.conformance.v1');
+  assert.equal(manifest.contract, SERVER_IR_CONTRACT);
+  assert.equal(manifest.protocol, PROTOCOL_VERSION);
+  assert.deepEqual(
+    manifest.fixtures.map((entry) => entry.file).sort(),
+    files,
+    'every fixture file is listed, and every listed file exists',
+  );
+});
+
+test('the manifest is reachable through the package export map', async () => {
+  // Shipping the files is not the same as making them addressable: an exports map without
+  // a conformance subpath hides them from every consumer, which is what 0.6.0 did.
+  const manifestPath = JSON.parse(
+    await readFile(path.resolve(directory, '../package.json'), 'utf8'),
+  ) as { exports: Record<string, unknown>; files: string[] };
+  assert.equal(manifestPath.exports['./conformance'], './conformance/manifest.json');
+  assert.equal(manifestPath.exports['./conformance/*'], './conformance/*');
+  assert.ok(manifestPath.files.includes('conformance/*.json'));
 });

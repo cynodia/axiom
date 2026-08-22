@@ -75,6 +75,8 @@ export const RUNTIME_DIAGNOSTIC_CODES = {
   SERVER_STATE_WRITE: 'SERVER_STATE_WRITE',
   /** An action belongs to the authority, but no gateway to it was configured. */
   REMOTE_ACTION_UNAVAILABLE: 'REMOTE_ACTION_UNAVAILABLE',
+  /** The authority could not be reached. Authoritative state was not loaded. */
+  AUTHORITY_UNREACHABLE: 'AUTHORITY_UNREACHABLE',
 } as const;
 
 export type RuntimeDiagnosticCode =
@@ -173,7 +175,35 @@ export interface AxiomRuntimeOptions {
 }
 
 export interface AxiomRuntime {
-  start(): void;
+  /**
+   * Brings the runtime to its initial usable state.
+   *
+   * The lifecycle is fixed and does not depend on whether a gateway is configured:
+   *
+   * 1. local state is initialized from `initialValue` and persistence, before anything else;
+   * 2. route matching is resolved and the application renders once, so a slow authority
+   *    never leaves a blank page;
+   * 3. if a `remote` gateway with a snapshot is configured, authoritative state is loaded
+   *    and applied, and the application renders again.
+   *
+   * `start()` returns a promise that settles when step 3 has completed. Awaiting it is the
+   * whole startup sequence: **there is no second call to remember.** Ignoring the promise
+   * is safe — steps 1 and 2 have already run synchronously — but authoritative state may
+   * not have arrived yet.
+   *
+   * If synchronization fails, the failure is reported as an `AUTHORITY_UNREACHABLE`
+   * diagnostic and `authoritativeStateLoaded()` stays false, so an empty authoritative
+   * collection is never mistaken for a loaded one.
+   */
+  start(): Promise<void>;
+  /**
+   * Whether authoritative state has been loaded successfully.
+   *
+   * `false` with a configured gateway means the authority has not answered — which is not
+   * the same as an authoritative collection that is genuinely empty. Applications with no
+   * remote gateway are always `true`: all their state is local.
+   */
+  authoritativeStateLoaded(): boolean;
   render(): void;
   /** A deep clone of the value. Derived state is recomputed. */
   getState(id: NodeId): unknown;
@@ -216,6 +246,14 @@ export interface AxiomRuntime {
    * provides one.
    */
   syncAuthoritativeState(): Promise<void>;
+  /**
+   * Resolves when no remote invocation is outstanding.
+   *
+   * An action started from the interface has no promise the caller can hold; this is how a
+   * test, a script or a host waits for the authority to have answered without guessing a
+   * delay. Resolves immediately when nothing is in flight.
+   */
+  settled(): Promise<void>;
   /**
    * Evaluates an expression in the root scope, reporting rather than throwing. It is a
    * pure read: an expression cannot change state.
@@ -289,6 +327,18 @@ function describeValue(value: unknown): string {
   return `${typeof value} ${JSON.stringify(value)}`;
 }
 
+/**
+ * Distinguishes runtimes that share a process.
+ *
+ * `host.uuid()` is the only entropy a runtime has, and a deterministic host — the memory
+ * host, a conformance host, a test double — hands every runtime it constructs the same
+ * sequence. Two clients would then generate the same request id for their first remote
+ * invocation, and the authority would answer the second from the first one's idempotency
+ * record. A counter that lives above the host closes that: within a process it is what
+ * separates two runtimes, and across processes a real host's uuid is.
+ */
+let runtimeSessions = 0;
+
 export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   const { ir, rootElement, host } = options;
   const store = createStateStore();
@@ -299,6 +349,15 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   const diagnostics: RuntimeDiagnostic[] = [];
   /** Rendered controls, keyed by render instance — not by node id. */
   const inputElements = new Map<string, DomElement>();
+  /**
+   * How each rendered form submits, keyed by the form's render instance.
+   *
+   * A form with a declared submit control must invoke the action **exactly** as that button
+   * would on its own — same arguments, evaluated in the button's own scope. Registering the
+   * button's invocation here is what makes the two paths literally the same code, rather
+   * than two that have to be kept in step.
+   */
+  const submitInvokers = new Map<string, () => void>();
   let focusedInstance: string | null = null;
   let focusedCaret: number | null = null;
   let started = false;
@@ -314,6 +373,11 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
    */
   let applyingAuthoritative = false;
   let remoteRequests = 0;
+  /** Generated once, and only when this runtime can actually talk to an authority. */
+  const sessionId = remote ? `s${(runtimeSessions += 1)}-${host.uuid()}` : '';
+  /** False until the authority has answered, when one is configured. */
+  let authoritativeLoaded = options.remote?.snapshot === undefined;
+  let startup: Promise<void> = Promise.resolve();
   const theme = ir.theme;
   const locale = theme?.locale ?? 'en-US';
   /**
@@ -1342,8 +1406,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
 
     remoteRequests += 1;
-    // A stable key, so a retry after a lost answer cannot execute the action twice.
-    const requestId = `${ir.id}:${action.id}:${remoteRequests}:${host.uuid()}`;
+    // A stable key, so a retry after a lost answer cannot execute the action twice — and one
+    // carrying this runtime's own session identity, so two clients never claim the same key.
+    const requestId = `${ir.id}:${sessionId}:${action.id}:${remoteRequests}:${host.uuid()}`;
     recordOutcome(action.id, 'pending', []);
     renderApplication();
 
@@ -1371,11 +1436,56 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return { ok: false, diagnostics: [failure] };
       });
     pending.set(action.id, settle);
+    void settle.finally(() => {
+      if (pending.get(action.id) === settle) {
+        pending.delete(action.id);
+      }
+    });
     return { ok: false, pending: true, diagnostics: [] };
   }
 
   /** In-flight remote invocations, so `invokeActionAsync` can await one. */
   const pending = new Map<string, Promise<ActionResult>>();
+
+  /**
+   * Waits until nothing is outstanding with an authority.
+   *
+   * A remote action started from the interface — a click, a form submit — returns to the
+   * event handler immediately, so there is no promise for the caller to hold. Without this,
+   * anything driving the UI has to guess a delay. It loops because settling one invocation
+   * may start another.
+   */
+  async function allSettled(): Promise<void> {
+    while (pending.size > 0) {
+      await Promise.allSettled([...pending.values()]);
+    }
+  }
+
+  /**
+   * Loads authoritative state and applies it.
+   *
+   * A failure is a diagnostic, not an exception, and leaves `authoritativeLoaded` false —
+   * so an application can tell "the authority has not answered" from "the collection is
+   * empty", which are very different things to show a person.
+   */
+  async function syncAuthoritative(): Promise<void> {
+    if (!remote?.snapshot) {
+      return;
+    }
+    try {
+      const snapshot = await remote.snapshot();
+      applyAuthoritative(snapshot.states ?? {});
+      authoritativeLoaded = true;
+    } catch (error) {
+      authoritativeLoaded = false;
+      report({
+        code: RUNTIME_DIAGNOSTIC_CODES.AUTHORITY_UNREACHABLE,
+        message: `Authoritative state could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
+        severity: 'error',
+      });
+    }
+    renderApplication();
+  }
 
   function runAction(actionId: string, args: Record<string, unknown> = {}): ActionResult {
     const remoteAction = remoteActionIds.has(actionId) ? ir.actions[actionId as NodeId] : undefined;
@@ -1840,6 +1950,18 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       }
       return target;
     };
+    /**
+     * `data-control` names the one element a person actually operates.
+     *
+     * A single semantic node can render as more than one element — an input is a label
+     * wrapping a control, and both carry `data-node`, because both are that node. Anything
+     * that wants to type into it, click it or read its value needs the inner one, and
+     * `data-node` cannot say which that is. This can.
+     */
+    const asControl = (target: DomElement): DomElement => {
+      target.setAttribute('data-control', node.id);
+      return target;
+    };
 
     switch (node.kind) {
       case 'view': {
@@ -1949,8 +2071,15 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
             actions.appendChild(submit);
             form.appendChild(actions);
           }
+          const formInstance = instanceKey(node.id, path);
           form.addEventListener('submit', (event: DomEvent) => {
             event.preventDefault?.();
+            // A declared control carries the arguments; a generated one has none to carry.
+            const declared = submitInvokers.get(formInstance);
+            if (declared) {
+              declared();
+              return;
+            }
             runAction(submitActionId);
           });
         }
@@ -1988,7 +2117,10 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           element(grouped ? 'div' : descriptor.tag, grouped ? 'axiom-radio-group' : 'axiom-control'),
         );
         if (descriptor.variant) {
-          control.setAttribute('data-control', descriptor.variant);
+          control.setAttribute('data-variant', descriptor.variant);
+        }
+        if (!grouped) {
+          asControl(control);
         }
         if (!grouped) {
           control.setAttribute('id', controlId);
@@ -2006,7 +2138,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           }
         }
         if (grouped) {
-          wrapper.setAttribute('data-control', descriptor.variant ?? 'radio-group');
+          // A radio group has no single element to operate, so the group itself is it.
+          wrapper.setAttribute('data-variant', descriptor.variant ?? 'radio-group');
+          asControl(wrapper);
         }
         if (descriptor.variant === 'switch') {
           control.setAttribute('role', 'switch');
@@ -2158,8 +2292,8 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       }
       case 'button': {
         const submits = submitControls.get(node.id);
-        const button = identify(
-          element('button', nodeClasses(node, 'axiom-button', submits ? 'axiom-submit' : '')),
+        const button = asControl(
+          identify(element('button', nodeClasses(node, 'axiom-button', submits ? 'axiom-submit' : ''))),
         );
         button.setAttribute('type', 'button');
         const label = typeof node.label === 'string' ? node.label : toText(evaluate(node.label, scope));
@@ -2184,18 +2318,41 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         if (reporting) {
           button.setAttribute('aria-describedby', reporting);
         }
-        if (submits) {
-          // Native form submission runs the action; a click handler here would run it twice.
-          button.setAttribute('type', 'submit');
-          return button;
+        // A remote action is in flight until the authority answers, and a person watching a
+        // button that does nothing will press it again. `pending` is already a semantic
+        // runtime outcome; this is the whole of its presentation — the control says it is
+        // working, and refuses a second invocation until it is not. No async model, no
+        // spinner vocabulary, nothing an author writes.
+        const pending = actionOutcomes.get(node.actionId)?.outcome === 'pending';
+        if (pending) {
+          button.setAttribute('data-pending', 'true');
+          button.setAttribute('aria-busy', 'true');
+          button.setAttribute('disabled', 'true');
         }
-        button.addEventListener('click', (event: DomEvent) => {
-          event.preventDefault?.();
+        /** What this button does, wherever the interaction came from. */
+        const invoke = (): void => {
+          if (pending) {
+            // The authority has not answered the last one. Pressing again would be a second
+            // transaction, not a retry of the first.
+            return;
+          }
           const args: Record<string, unknown> = {};
           for (const [parameterId, argument] of Object.entries(node.arguments ?? {})) {
             args[parameterId] = evaluate(argument, scope);
           }
           runAction(node.actionId, args);
+        };
+
+        if (submits) {
+          // Native form submission runs the action; a click handler here would run it twice.
+          // The form invokes exactly this, so the button's arguments are not lost.
+          button.setAttribute('type', 'submit');
+          submitInvokers.set(instanceKey(submits.formId, path), invoke);
+          return button;
+        }
+        button.addEventListener('click', (event: DomEvent) => {
+          event.preventDefault?.();
+          invoke();
         });
         return button;
       }
@@ -2244,6 +2401,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
 
   function renderApplication(): void {
     inputElements.clear();
+    submitInvokers.clear();
     const scope = rootScope();
     if (!activeRoute) {
       const missing = element('div', 'axiom-no-route');
@@ -2279,9 +2437,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   initializeStore();
 
   return {
-    start(): void {
+    start(): Promise<void> {
       if (started) {
-        return;
+        return startup;
       }
       started = true;
       host.onPathChange(() => {
@@ -2292,7 +2450,14 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         inputErrors.clear();
         renderApplication();
       });
+      // Local state and a first render happen synchronously, so an application is on screen
+      // before the authority is consulted.
       syncRoute();
+      startup = remote?.snapshot ? syncAuthoritative() : Promise.resolve();
+      return startup;
+    },
+    authoritativeStateLoaded(): boolean {
+      return authoritativeLoaded;
     },
     render: renderApplication,
     getState(id: NodeId): unknown {
@@ -2348,13 +2513,11 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       }
       return (await pending.get(id)) ?? result;
     },
-    async syncAuthoritativeState(): Promise<void> {
-      if (!remote?.snapshot) {
-        return;
-      }
-      const snapshot = await remote.snapshot();
-      applyAuthoritative(snapshot.states ?? {});
-      renderApplication();
+    syncAuthoritativeState(): Promise<void> {
+      return syncAuthoritative();
+    },
+    settled(): Promise<void> {
+      return allSettled();
     },
     evaluate(expression: Expression) {
       const outcome = tryEvaluate(expression, rootScope(), {});

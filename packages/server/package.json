@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom-server",
-  "version": "0.6.0-alpha.1",
+  "version": "0.6.1-alpha.1",
   "description": "Authoritative server runtime that executes an Axiom Server IR.",
   "license": "MIT",
   "author": "AskTech AS",
@@ -20,6 +20,7 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "conformance/*.json",
+    "schema/*.json",
     "README.md",
     "LICENSE"
   ],
@@ -29,11 +30,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./conformance": "./conformance/manifest.json",
+    "./conformance/*": "./conformance/*",
+    "./schema/*": "./schema/*"
   },
   "dependencies": {
-    "@cynodia/axiom-core": "0.6.0-alpha.1",
-    "@cynodia/axiom-runtime": "0.6.0-alpha.1"
+    "@cynodia/axiom-core": "0.6.1-alpha.1",
+    "@cynodia/axiom-runtime": "0.6.1-alpha.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",

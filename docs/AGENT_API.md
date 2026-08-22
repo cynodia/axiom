@@ -1,6 +1,6 @@
 # Agent API
 
-Axiom 0.6.0-alpha.1. The machine-facing interface. Agents query semantics and apply
+Axiom 0.6.1-alpha.1. The machine-facing interface. Agents query semantics and apply
 structural transformations; they never edit generated code.
 
 ```ts
@@ -121,7 +121,8 @@ reported.
 ```ts
 {
   formId, density,
-  submitActionId?,          // submitActionId, or the declared submit button's own action
+  submitActionId?,          // submitActionId, or the declared submit button's own action —
+                            // the same resolution execution, validation and presentation use
   submitButtonId?,          // set when the form declares its submit control
   sections: [{ nodeId, name?, headings: string[], inputIds }],
   ungroupedInputIds,        // controls belonging to no section

@@ -1,6 +1,6 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { repoRoot } from './packages.mjs';
+import { repoRoot, version } from './packages.mjs';
 
 /**
  * Writes the portable conformance fixtures.
@@ -147,7 +147,7 @@ const fixtures = [
     initialState: [{ stateId: S_PARTS, value: parts(10, 5), revision: 1 }],
     invocations: [
       { actionId: A_TAKE, arguments: { [P_PART]: 'bolt', [P_QTY]: 3 },
-        expect: { ok: true, changedStates: [S_PARTS, S_LEDGER] } }],
+        expect: { ok: true, changedStates: [S_PARTS, S_LEDGER, S_TOTAL] } }],
     expectedState: { [S_PARTS]: parts(7, 5), [S_LEDGER]: [3], [S_TOTAL]: 12 },
   },
   {
@@ -157,9 +157,9 @@ const fixtures = [
     initialState: [{ stateId: S_PARTS, value: parts(10, 5), revision: 1 }],
     invocations: [
       { actionId: A_TAKE, arguments: { [P_PART]: 'bolt', [P_QTY]: 99 },
-        expect: { ok: false, diagnosticCodes: ['PRECONDITION_FAILED'], failureModes: ['insufficient-stock'] } },
+        expect: { ok: false, changedStates: [], diagnosticCodes: ['PRECONDITION_FAILED'], failureModes: ['insufficient-stock'] } },
       { actionId: A_TAKE, arguments: { [P_PART]: 'bolt', [P_QTY]: 0 },
-        expect: { ok: false, diagnosticCodes: ['PRECONDITION_FAILED'], failureModes: ['invalid-quantity'] } }],
+        expect: { ok: false, changedStates: [], diagnosticCodes: ['PRECONDITION_FAILED'], failureModes: ['invalid-quantity'] } }],
     expectedState: { [S_PARTS]: parts(10, 5), [S_LEDGER]: [] },
   },
   {
@@ -173,7 +173,7 @@ const fixtures = [
         arguments: { [P_LINES]: [
           { [F_LINE_ID]: 'l1', [F_LINE_PART]: 'nut', [F_LINE_QTY]: 3 },
           { [F_LINE_ID]: 'l2', [F_LINE_PART]: 'nut', [F_LINE_QTY]: 3 }] },
-        expect: { ok: false, diagnosticCodes: ['CONSTRAINT_VIOLATION'] } }],
+        expect: { ok: false, changedStates: [], diagnosticCodes: ['CONSTRAINT_VIOLATION'] } }],
     expectedState: { [S_PARTS]: parts(10, 5) },
   },
   {
@@ -186,7 +186,7 @@ const fixtures = [
         arguments: { [P_LINES]: [
           { [F_LINE_ID]: 'l1', [F_LINE_PART]: 'bolt', [F_LINE_QTY]: 4 },
           { [F_LINE_ID]: 'l2', [F_LINE_PART]: 'bolt', [F_LINE_QTY]: 4 }] },
-        expect: { ok: true } }],
+        expect: { ok: true, changedStates: [S_PARTS, S_TOTAL] } }],
     expectedState: { [S_PARTS]: parts(2, 5) },
   },
   {
@@ -196,9 +196,9 @@ const fixtures = [
     initialState: [{ stateId: S_PARTS, value: parts(10, 5), revision: 1 }],
     invocations: [
       { actionId: A_SET, credential: 'admin', arguments: { [P_PART]: 'bolt', [P_STOCK]: 50 },
-        expect: { ok: false, diagnosticCodes: ['TRANSITION_CONSTRAINT_VIOLATION'] } },
+        expect: { ok: false, changedStates: [], diagnosticCodes: ['TRANSITION_CONSTRAINT_VIOLATION'] } },
       { actionId: A_SET, credential: 'admin', arguments: { [P_PART]: 'bolt', [P_STOCK]: 4 },
-        expect: { ok: true } }],
+        expect: { ok: true, changedStates: [S_PARTS, S_TOTAL] } }],
     expectedState: { [S_PARTS]: parts(4, 5) },
   },
   {
@@ -208,11 +208,11 @@ const fixtures = [
     initialState: [{ stateId: S_PARTS, value: parts(10, 5), revision: 1 }],
     invocations: [
       { actionId: A_SET, credential: 'clerk', arguments: { [P_PART]: 'bolt', [P_STOCK]: 1 },
-        expect: { ok: false, diagnosticCodes: ['AUTHORIZATION_DENIED'] } },
+        expect: { ok: false, changedStates: [], diagnosticCodes: ['AUTHORIZATION_DENIED'] } },
       { actionId: A_SET, arguments: { [P_PART]: 'bolt', [P_STOCK]: 1 },
-        expect: { ok: false, diagnosticCodes: ['AUTHORIZATION_DENIED'] } },
+        expect: { ok: false, changedStates: [], diagnosticCodes: ['AUTHORIZATION_DENIED'] } },
       { actionId: A_SET, credential: 'admin', arguments: { [P_PART]: 'bolt', [P_STOCK]: 1 },
-        expect: { ok: true } }],
+        expect: { ok: true, changedStates: [S_PARTS, S_TOTAL] } }],
     expectedState: { [S_PARTS]: parts(1, 5) },
   },
   {
@@ -237,9 +237,10 @@ const fixtures = [
     description: 'A repeated request id is answered from the record, not executed again.',
     initialState: [{ stateId: S_PARTS, value: parts(10, 5), revision: 1 }],
     invocations: [
-      { actionId: A_TAKE, requestId: 'r-1', arguments: { [P_PART]: 'bolt', [P_QTY]: 3 }, expect: { ok: true } },
       { actionId: A_TAKE, requestId: 'r-1', arguments: { [P_PART]: 'bolt', [P_QTY]: 3 },
-        expect: { ok: true, replayed: true } }],
+        expect: { ok: true, changedStates: [S_PARTS, S_LEDGER, S_TOTAL] } },
+      { actionId: A_TAKE, requestId: 'r-1', arguments: { [P_PART]: 'bolt', [P_QTY]: 3 },
+        expect: { ok: true, replayed: true, changedStates: [S_PARTS, S_LEDGER, S_TOTAL] } }],
     expectedState: { [S_PARTS]: parts(7, 5), [S_LEDGER]: [3] },
   },
   {
@@ -263,8 +264,10 @@ const fixtures = [
       'Committed state is restored exactly on restart, and a rolled-back write never reappears.',
     initialState: [{ stateId: S_PARTS, value: parts(10, 5), revision: 1 }],
     invocations: [
-      { actionId: A_TAKE, arguments: { [P_PART]: 'bolt', [P_QTY]: 3 }, expect: { ok: true } },
-      { actionId: A_TAKE, arguments: { [P_PART]: 'bolt', [P_QTY]: 99 }, expect: { ok: false } }],
+      { actionId: A_TAKE, arguments: { [P_PART]: 'bolt', [P_QTY]: 3 },
+        expect: { ok: true, changedStates: [S_PARTS, S_LEDGER, S_TOTAL] } },
+      { actionId: A_TAKE, arguments: { [P_PART]: 'bolt', [P_QTY]: 99 },
+        expect: { ok: false, changedStates: [] } }],
     restartAndReassert: true,
     expectedState: { [S_PARTS]: parts(7, 5), [S_LEDGER]: [3] },
   },
@@ -279,6 +282,7 @@ for (const existing of await readdir(directory).catch(() => [])) {
 }
 
 const written = [];
+const manifestEntries = [];
 for (const fixture of fixtures) {
   const document = {
     conformance: 'axiom.conformance.v1',
@@ -297,6 +301,39 @@ for (const fixture of fixtures) {
   const file = path.join(directory, `${fixture.name}.json`);
   await writeFile(file, `${JSON.stringify(document, null, 2)}\n`);
   written.push(`${fixture.name}.json`);
+  manifestEntries.push({
+    name: fixture.name,
+    file: `${fixture.name}.json`,
+    covers: fixture.covers,
+    description: fixture.description,
+    concurrent: Boolean(fixture.concurrent),
+    restartAndReassert: Boolean(fixture.restartAndReassert),
+    invocations: fixture.invocations.length,
+  });
 }
+
+/**
+ * The manifest is how an implementation in another language enumerates the suite without
+ * listing a directory or knowing anything about npm. It names the contracts the fixtures
+ * are written against, so a runtime can refuse a suite it does not implement rather than
+ * discovering the mismatch one assertion at a time.
+ */
+const manifest = {
+  conformance: 'axiom.conformance.v1',
+  contract: 'axiom.server.v1',
+  protocol: 'axiom.protocol.v1',
+  release: version,
+  description:
+    'Portable conformance fixtures for the Axiom Server IR. Each entry is a self-contained ' +
+    'JSON document: the Server IR, the state to start from, the principals, the invocations ' +
+    'to perform and the results required. Running them needs no part of this implementation.',
+  areas: [...new Set(fixtures.flatMap((fixture) => fixture.covers))].sort(),
+  fixtures: manifestEntries,
+};
+await writeFile(
+  path.join(directory, 'manifest.json'),
+  `${JSON.stringify(manifest, null, 2)}\n`,
+);
+written.push('manifest.json');
 
 console.log(`Wrote ${written.length} conformance fixtures:\n  ${written.join('\n  ')}`);

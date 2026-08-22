@@ -1,0 +1,143 @@
+{
+  "conformance": "axiom.conformance.v1",
+  "contract": "axiom.server.v1",
+  "protocol": "axiom.protocol.v1",
+  "release": "0.6.1-alpha.1",
+  "description": "Portable conformance fixtures for the Axiom Server IR. Each entry is a self-contained JSON document: the Server IR, the state to start from, the principals, the invocations to perform and the results required. Running them needs no part of this implementation.",
+  "areas": [
+    "action guards",
+    "argument validation",
+    "authorization",
+    "concurrent mutation",
+    "constraints",
+    "derived state",
+    "expression evaluation",
+    "failure modes",
+    "for-each provisional writes",
+    "idempotency",
+    "mutation",
+    "persistence",
+    "restart",
+    "rollback",
+    "transition constraints"
+  ],
+  "fixtures": [
+    {
+      "name": "mutation-commits",
+      "file": "mutation-commits.json",
+      "covers": [
+        "expression evaluation",
+        "mutation",
+        "derived state"
+      ],
+      "description": "An action within its guards commits every write, and derived state follows.",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "guard-refuses",
+      "file": "guard-refuses.json",
+      "covers": [
+        "action guards",
+        "failure modes"
+      ],
+      "description": "A guard that does not hold refuses the invocation, naming its failure mode.",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "constraint-rolls-back",
+      "file": "constraint-rolls-back.json",
+      "covers": [
+        "constraints",
+        "rollback",
+        "for-each provisional writes"
+      ],
+      "description": "Iteration N sees the writes of iterations before it, so two lines for one part are counted together — and the invariant then rolls the whole action back.",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "for-each-provisional",
+      "file": "for-each-provisional.json",
+      "covers": [
+        "for-each provisional writes"
+      ],
+      "description": "The same two-line shape, within stock: 10 − 4 − 4, not 10 − 4 twice.",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "transition-constraint",
+      "file": "transition-constraint.json",
+      "covers": [
+        "transition constraints"
+      ],
+      "description": "A rule about how state may change refuses a raise, and permits a fall.",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "authorization",
+      "file": "authorization.json",
+      "covers": [
+        "authorization"
+      ],
+      "description": "Authorization is evaluated on the authority, with the caller bound to PRINCIPAL.",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 3
+    },
+    {
+      "name": "argument-validation",
+      "file": "argument-validation.json",
+      "covers": [
+        "argument validation"
+      ],
+      "description": "Untrusted arguments are checked against declared parameter types.",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 4
+    },
+    {
+      "name": "idempotent-retry",
+      "file": "idempotent-retry.json",
+      "covers": [
+        "persistence",
+        "idempotency"
+      ],
+      "description": "A repeated request id is answered from the record, not executed again.",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "concurrent-invocations",
+      "file": "concurrent-invocations.json",
+      "covers": [
+        "concurrent mutation"
+      ],
+      "description": "Three callers each want four of a stock of five. Exactly one may commit; the rest are refused by the guard against authoritative state.",
+      "concurrent": true,
+      "restartAndReassert": false,
+      "invocations": 3
+    },
+    {
+      "name": "restart",
+      "file": "restart.json",
+      "covers": [
+        "persistence",
+        "restart"
+      ],
+      "description": "Committed state is restored exactly on restart, and a rolled-back write never reappears.",
+      "concurrent": false,
+      "restartAndReassert": true,
+      "invocations": 2
+    }
+  ]
+}

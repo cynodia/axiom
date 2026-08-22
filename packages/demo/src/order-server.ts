@@ -635,6 +635,7 @@ export const orderServerIds = {
   UI_PRODUCTS,
   UI_PRODUCT_STOCK,
   UI_ORDERS,
+  UI_PRODUCT_INPUT,
   UI_QUANTITY_INPUT,
   UI_STOCK_TOTAL,
 } as const;

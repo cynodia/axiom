@@ -9,24 +9,28 @@ hypothesis is that an application should be stored as a **typed semantic graph**
 human-oriented source files: agents modify the graph, and a generic compiler and runtime
 turn it into a working browser application whose generated JavaScript nobody reads.
 
-* `doc/spec.md` — the 0.1 vision, research goals and metrics.
-* `doc/spec2.md` — the 0.2 architecture: domain-independent compiler and runtime.
-* `doc/spec3.md` — the 0.3 architecture: semantic mutation and addressing.
-* `doc/spec4.md` — the 0.4 architecture: collection semantics and transactional iteration.
-* `doc/spec4.1.md` — the 0.4.1 hardening release: mutation-path-independent rules,
+* `specs/spec.md` — the 0.1 vision, research goals and metrics.
+* `specs/spec2.md` — the 0.2 architecture: domain-independent compiler and runtime.
+* `specs/spec3.md` — the 0.3 architecture: semantic mutation and addressing.
+* `specs/spec4.md` — the 0.4 architecture: collection semantics and transactional iteration.
+* `specs/spec4.1.md` — the 0.4.1 hardening release: mutation-path-independent rules,
   presence semantics, strict collection nulls and trustworthy dependency analysis.
-* `doc/spec5.md` — the 0.5 presentation & UX semantic layer: semantic roles, layout and
+* `specs/spec5.md` — the 0.5 presentation & UX semantic layer: semantic roles, layout and
   spacing tokens, device classes, themes, value formatting and accessible structure.
-* `doc/spec5.1.md` — the agent-optimized documentation overhaul: `docs/` is a machine-facing
+* `specs/spec5.1.md` — the agent-optimized documentation overhaul: `docs/` is a machine-facing
   operational contract, not a tutorial set.
-* `doc/spec5.2.md` — the 0.5.2 presentation & UX hardening: render-instance identity, action
+* `specs/spec5.2.md` — the 0.5.2 presentation & UX hardening: render-instance identity, action
   diagnostics as semantic UI, theme-owned control affordances, and a type scale separate
   from the document outline.
-* `doc/spec6.md` — the **0.6 server authority & persistent runtime: state authority, a
+* `specs/spec6.md` — the 0.6 server authority & persistent runtime: state authority, a
   portable Server IR, an authoritative runtime, persistence, a semantic protocol and
-  authorization**.
+  authorization.
+* `specs/spec6.1.md` — the **0.6.1 server runtime hardening & IR contract freeze: a working
+  generated browser client for remote authority, a defined startup lifecycle, the `changes`
+  contract, request-identity isolation, and `axiom.server.v1` frozen as a language-independent
+  contract with published schemas and addressable conformance fixtures**.
 
-Together, spec2–spec5 are the authority on design decisions — **except where the
+Together, spec2–spec6.1 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 
@@ -77,7 +81,11 @@ npm install
 npm run build               # tsc -b across all workspaces; also writes both demo pages
 npm test                    # runs node:test over COMPILED output — build first, always
 
-# CLI (after a build) — takes a compiled module that exports a graph or a builder
+npm run conformance:generate # rewrite packages/server/conformance/*.json + manifest.json
+npm run schema:generate      # rewrite packages/server/schema/*.json
+
+# CLI (after a build) — a PRIVATE development tool of this repository, never published.
+# Takes a compiled module that exports a graph or a builder.
 node packages/cli/dist/index.js inspect  packages/demo/dist/inventory.js --export=createInventoryGraph
 node packages/cli/dist/index.js validate packages/demo/dist/issue-tracker.js --export=createIssueTrackerGraph
 node packages/cli/dist/index.js build    packages/demo/dist/issue-tracker.js --export=createIssueTrackerGraph
@@ -473,11 +481,30 @@ server-authoritative state unless `applyingAuthoritative` is set, and applying a
 authoritative answer still goes through it — `packages/runtime/test/store.test.ts` fails if a
 second `store.write(` call site appears anywhere in `runtime.ts`.
 
-**Server IR is portable data.** No closure, no host object, no presentation, no UI. It
-declares `contract: 'axiom.server.v1'`, and `packages/server/conformance/*.json` are
-committed fixtures — Server IR plus expected results — that an independent runtime in
-another language can be held to. Regenerate them with `npm run conformance:generate` after
-changing the semantics they cover.
+**Server IR is portable data, and `axiom.server.v1` is now frozen.** No closure, no host
+object, no presentation, no UI. `packages/server/conformance/*.json` are committed fixtures —
+Server IR plus expected results — and `packages/server/schema/*.json` are the generated JSON
+Schemas for the IR and the protocol. Both ship, both are addressable through the package's
+`exports` map, and both are checked against the runtime by tests. Regenerate with
+`npm run conformance:generate` and `npm run schema:generate` after changing the semantics or
+the vocabulary they cover.
+
+A frozen contract means the semantics in `docs/AUTHORITY.md` — IEEE-754 binary64 arithmetic,
+Unicode code-point text ordering, the deterministic host model, the JSON serialization
+constraints, the diagnostic codes — may not change under this identifier. An incompatible
+change needs `axiom.server.v2`, not a version bump. Fixture expectations are exhaustive
+(a fixture that names changed states names all of them and no others), and no fixture may be
+edited to match the runtime without deciding and documenting the intended semantics first.
+
+**The client's write path must stay browser-only.** `packages/runtime/src/remote.ts` is the
+gateway a generated page uses, and `packages/runtime/test/host.test.ts` fails if any `node:`
+import, `require`, `process` or `Buffer` reference reaches the bundle. When the runtime needs
+a type from core, `runtime-types.ts` holds a local copy rather than importing a value.
+
+**A diagnostic crossing the trust boundary carries no state value.** `DISCLOSABLE_DETAIL_KEYS`
+in `packages/server/src/server.ts` is a whitelist for exactly that reason: a detail added to
+the runtime later is withheld until somebody decides it may cross. A transition rule's
+`previousValue` is the record itself, and the caller may not be entitled to it.
 
 ## The presentation layer
 
