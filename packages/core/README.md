@@ -21,13 +21,13 @@ builders, `Presentation`, `Theme`, `resolvePresentationMap`, `validateGraph`,
 ## Installation
 
 ```bash
-npm install @cynodia/axiom-core@alpha
+npm install @cynodia/axiom-core
 ```
 
 Most applications should install the facade package instead, which re-exports this one:
 
 ```bash
-npm install @cynodia/axiom@alpha
+npm install @cynodia/axiom
 ```
 
 

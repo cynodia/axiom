@@ -15,13 +15,13 @@ Main exports: `AgentAPI`, `GraphQueries`, `PresentationQueries`, `Transaction`,
 ## Installation
 
 ```bash
-npm install @cynodia/axiom-agent-api@alpha
+npm install @cynodia/axiom-agent-api
 ```
 
 Most applications should install the facade package instead, which re-exports this one:
 
 ```bash
-npm install @cynodia/axiom@alpha
+npm install @cynodia/axiom
 ```
 
 

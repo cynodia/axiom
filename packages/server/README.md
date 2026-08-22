@@ -27,7 +27,7 @@ start from, invocations and expected results — that any conforming runtime can
 ## Installation
 
 ```bash
-npm install @cynodia/axiom-server@alpha
+npm install @cynodia/axiom-server
 ```
 
 This package is **not** re-exported by the `@cynodia/axiom` facade, because it imports

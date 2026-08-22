@@ -12,7 +12,7 @@ releases. The documentation in `docs/` describes this exact version.
 ## Installation
 
 ```bash
-npm install @cynodia/axiom@alpha
+npm install @cynodia/axiom
 ```
 
 ## Canonical mental model

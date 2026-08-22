@@ -155,15 +155,23 @@ marked `private` and never ship. Everything is MIT, copyright AskTech AS.
 npm run release:prepare        # clean, build, test, pack, verify tarballs, consumer test
 npm run release:publish:dry-run
 npm run release:publish        # deliberate and manual; CI never publishes
-npm run release:dist-tag       # point "latest" at this release
+npm run release:dist-tag       # only to move a tag by hand
 ```
 
-**npm owns `latest` whether you want it or not.** The first publish of a new package
-claims `latest` regardless of `--tag`, and npm will not let it be deleted. So `latest`
-exists, and every subsequent `--tag alpha` publish leaves it pointing at whichever version
-was published first — a plain `npm install @cynodia/axiom` then silently hands out a stale
-release. After publishing, run `npm run release:dist-tag` to move it. Check with
-`npm view @cynodia/axiom dist-tags` rather than assuming.
+**One publish sets one tag.** `npm publish` accepts a single `--tag`, so maintaining a
+second one costs another registry call per package — whichever order you choose. Every
+version of this project is a pre-release, so a separate `alpha` tag would only ever point
+where `latest` already points and would carry no information. `release:publish` therefore
+publishes as `latest` and nothing follows it; the pre-release signal is the version string
+and each README's status line.
+
+Note that npm claims `latest` on a package's first publish whatever `--tag` says, and will
+not let it be deleted — so `latest` exists regardless. Publishing to it directly is simply
+admitting that. Check with `npm view @cynodia/axiom dist-tags` rather than assuming.
+
+`scripts/dist-tag-lib.mjs` still holds the tag-moving logic, shared with
+`npm run release:dist-tag`, for repairing a tag or introducing a second one when a stable
+line eventually exists.
 
 `release:prepare` ends with `scripts/consumer-test.mjs`, which builds a project in a temp
 directory from the tarballs alone — no workspace links, no path aliases, no relative
@@ -183,8 +191,7 @@ Do not reach for `--otp=<code>` unless npm's own flow is unavailable. A typed on
 password authenticates a *single request*, so a five-package release would need five codes
 in sequence, each expiring in about thirty seconds. `scripts/otp.mjs` therefore passes
 nothing by default and only falls back to prompting if a command is rejected — pre-empting
-npm with `--otp` was exactly what made `release:dist-tag` more painful than
-`release:publish`.
+npm with `--otp` was exactly what made moving a dist-tag more painful than publishing.
 
 Both scripts skip work already done — a version already on the registry, a tag already
 pointing at this release — so re-running after a partial failure is safe. Unattended

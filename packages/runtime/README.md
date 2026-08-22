@@ -19,13 +19,13 @@ Main exports: `createAxiomRuntime`, `createBrowserHost`, `createMemoryHost`,
 ## Installation
 
 ```bash
-npm install @cynodia/axiom-runtime@alpha
+npm install @cynodia/axiom-runtime
 ```
 
 Most applications should install the facade package instead, which re-exports this one:
 
 ```bash
-npm install @cynodia/axiom@alpha
+npm install @cynodia/axiom
 ```
 
 

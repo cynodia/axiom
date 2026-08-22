@@ -59,7 +59,7 @@ full in the linked contract.
 ## Installation
 
 ```bash
-npm install @cynodia/axiom@alpha
+npm install @cynodia/axiom
 ```
 
 ## Minimal complete application
@@ -239,14 +239,16 @@ behavior**; where they disagree, the documentation above describes the implement
 ```bash
 npm run release:prepare        # build, test, pack, verify, external consumer test
 npm run release:publish:dry-run
-npm run release:publish        # publishes under "alpha", then points "latest" at it
+npm run release:publish        # publishes as "latest" — one operation per package
 ```
 
-`release:publish` moves the default dist-tag as its final step, in the same authenticated
-run — npm claims `latest` on a package's first publish whatever `--tag` says, so leaving it
-alone would keep handing out a stale release. Pass `--no-dist-tag` to skip that, or
-`--dist-tag=<name>` to move a different one. `npm run release:dist-tag` remains, for
-repairing a tag left behind by an interrupted release.
+`npm publish` accepts a single `--tag`, so every additional tag costs another registry call.
+This project has no stable line yet: a separate `alpha` tag would only ever point where
+`latest` already points, so publishing sets `latest` directly and nothing follows it. The
+pre-release signal is the version string and the status line above.
+
+Pass `--tag=<name>` for a release that should not become the default install.
+`npm run release:dist-tag` remains for moving a tag by hand.
 
 ## License
 
