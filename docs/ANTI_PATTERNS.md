@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.5.2-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.6.0-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -334,7 +334,66 @@ Renderer-generated ids are keyed by **render instance**: `data-node` is the sema
 all — see anti-pattern 3 — but a test or a host that must locate an element should select on
 `data-node` and pick the instance it means.
 
-## 26. Restating what the model already knows
+## 26. Binding an input into server-authoritative state
+
+```ts
+// WRONG — rejected by validateGraph (CLIENT_WRITE_TO_SERVER_STATE), and refused at run time.
+{ kind: 'input', binding: { location: itemFieldLocation(STATE_PRODUCTS, F_ID, …, F_STOCK) } }
+
+// RIGHT — edit a client draft, and commit it through an action the authority executes.
+{ kind: 'input', binding: { location: stateLocation(STATE_DRAFT_QUANTITY) } }
+{ kind: 'button', actionId: ACTION_PLACE_ORDER, arguments: { [PARAM_QUANTITY]: ref(STATE_DRAFT_QUANTITY) } }
+```
+
+Do not force every keystroke across the boundary either: a draft is client-local on purpose.
+
+## 27. A server action reading client state
+
+```ts
+// WRONG — the authority does not have the client's draft. SERVER_DEPENDS_ON_CLIENT_STATE.
+{ kind: 'action', operations: [{ kind: 'insert', target: stateLocation(STATE_ORDERS), value: ref(STATE_DRAFT) }] }
+
+// RIGHT — the client proposes values as arguments; the authority decides.
+{
+  kind: 'action',
+  parameters: [{ id: PARAM_QUANTITY, valueType: primitiveType('number'), required: true }],
+  operations: [{ kind: 'insert', target: stateLocation(STATE_ORDERS), value: object([…]) }],
+}
+```
+
+## 28. Treating client-side checks as authoritative
+
+```ts
+// WRONG — a guard the client evaluated proves nothing. So does an argument saying so.
+invoke(ACTION_PLACE_ORDER, { quantity: 5, alreadyValidated: true })
+```
+
+The authority re-evaluates guards, constraints, transition rules, argument types and
+authorization against **its own** state, every time. An extra argument is not a parameter and
+is refused outright. Confirmation is interaction, never authorization.
+
+## 29. Putting a secret in the graph
+
+```ts
+// WRONG — a graph is a serializable artifact, and this state ships to the client.
+{ id: STATE_API_KEY, kind: 'state', valueType: primitiveType('string'), initialValue: 'sk-…' }
+```
+
+Server-only information belongs behind `authority: 'server'` with `serverOnly: true`, and a
+credential belongs to the host, not the graph.
+
+## 30. Reaching for a native operation to make an external call
+
+```ts
+// WRONG — a database write rolls back; an email does not. Nothing makes this participate
+// in the transaction, and pretending it does is worse than not having it.
+{ kind: 'native', implementationId: 'app.sendEmail' }
+```
+
+External effects are deliberately unsolved in 0.6. A design involving commands, a
+transactional outbox and idempotency is future work; do not smuggle one in meanwhile.
+
+## 31. Restating what the model already knows
 
 ```ts
 // UNNECESSARY — required comes from the field, the label from the field's name, the

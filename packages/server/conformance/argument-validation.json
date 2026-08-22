@@ -1,0 +1,783 @@
+{
+  "conformance": "axiom.conformance.v1",
+  "name": "argument-validation",
+  "covers": [
+    "argument validation"
+  ],
+  "description": "Untrusted arguments are checked against declared parameter types.",
+  "principals": {
+    "clerk": {
+      "field_user_id": "u1",
+      "field_user_role": "clerk"
+    },
+    "admin": {
+      "field_user_id": "u2",
+      "field_user_role": "admin"
+    }
+  },
+  "serverIR": {
+    "contract": "axiom.server.v1",
+    "id": "conformance",
+    "name": "Conformance",
+    "version": "0.6.0",
+    "entities": [
+      {
+        "id": "entity_user",
+        "kind": "entity",
+        "identityFieldId": "field_user_id",
+        "fields": [
+          {
+            "id": "field_user_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_user_role",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "entity_part",
+        "kind": "entity",
+        "identityFieldId": "field_part_id",
+        "fields": [
+          {
+            "id": "field_part_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_part_stock",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "entity_line",
+        "kind": "entity",
+        "identityFieldId": "field_line_id",
+        "fields": [
+          {
+            "id": "field_line_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_line_part",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_line_qty",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ]
+      }
+    ],
+    "fields": {
+      "field_user_id": {
+        "entityId": "entity_user",
+        "field": {
+          "id": "field_user_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_user_role": {
+        "entityId": "entity_user",
+        "field": {
+          "id": "field_user_role",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_part_id": {
+        "entityId": "entity_part",
+        "field": {
+          "id": "field_part_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_part_stock": {
+        "entityId": "entity_part",
+        "field": {
+          "id": "field_part_stock",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          },
+          "required": true
+        }
+      },
+      "field_line_id": {
+        "entityId": "entity_line",
+        "field": {
+          "id": "field_line_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_line_part": {
+        "entityId": "entity_line",
+        "field": {
+          "id": "field_line_part",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_line_qty": {
+        "entityId": "entity_line",
+        "field": {
+          "id": "field_line_qty",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          },
+          "required": true
+        }
+      }
+    },
+    "states": [
+      {
+        "id": "state_parts",
+        "kind": "state",
+        "name": "parts",
+        "authority": "server",
+        "valueType": {
+          "kind": "collection",
+          "itemType": {
+            "kind": "entity",
+            "entityId": "entity_part"
+          }
+        },
+        "initialValue": [
+          {
+            "field_part_id": "bolt",
+            "field_part_stock": 10
+          },
+          {
+            "field_part_id": "nut",
+            "field_part_stock": 5
+          }
+        ]
+      },
+      {
+        "id": "state_ledger",
+        "kind": "state",
+        "name": "ledger",
+        "authority": "server",
+        "valueType": {
+          "kind": "collection",
+          "itemType": {
+            "kind": "primitive",
+            "primitive": "number"
+          }
+        },
+        "initialValue": []
+      },
+      {
+        "id": "state_total",
+        "kind": "state",
+        "name": "total",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "number"
+        },
+        "derivation": {
+          "kind": "call",
+          "function": "sum",
+          "arguments": [
+            {
+              "kind": "map",
+              "source": {
+                "kind": "ref",
+                "targetId": "state_parts"
+              },
+              "scopeId": "scope_total",
+              "projection": {
+                "kind": "field",
+                "source": {
+                  "kind": "ref",
+                  "targetId": "scope_total"
+                },
+                "fieldId": "field_part_stock"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "actions": {
+      "action_take": {
+        "id": "action_take",
+        "kind": "action",
+        "name": "take",
+        "parameters": [
+          {
+            "id": "param_part",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "param_qty",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ],
+        "guards": [
+          {
+            "condition": {
+              "kind": "binary",
+              "operator": "gt",
+              "left": {
+                "kind": "ref",
+                "targetId": "param_qty"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 0
+              }
+            },
+            "failureMode": {
+              "code": "invalid-quantity",
+              "message": "A quantity must be above zero."
+            }
+          },
+          {
+            "condition": {
+              "kind": "binary",
+              "operator": "gte",
+              "left": {
+                "kind": "field",
+                "source": {
+                  "kind": "find",
+                  "source": {
+                    "kind": "ref",
+                    "targetId": "state_parts"
+                  },
+                  "scopeId": "scope_part",
+                  "predicate": {
+                    "kind": "binary",
+                    "operator": "eq",
+                    "left": {
+                      "kind": "field",
+                      "source": {
+                        "kind": "ref",
+                        "targetId": "scope_part"
+                      },
+                      "fieldId": "field_part_id"
+                    },
+                    "right": {
+                      "kind": "ref",
+                      "targetId": "param_part"
+                    }
+                  }
+                },
+                "fieldId": "field_part_stock"
+              },
+              "right": {
+                "kind": "ref",
+                "targetId": "param_qty"
+              }
+            },
+            "failureMode": {
+              "code": "insufficient-stock",
+              "message": "Not enough stock."
+            }
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "field",
+              "target": {
+                "kind": "collection-item",
+                "collection": {
+                  "kind": "state",
+                  "stateId": "state_parts"
+                },
+                "selector": {
+                  "kind": "identity",
+                  "fieldId": "field_part_id",
+                  "value": {
+                    "kind": "ref",
+                    "targetId": "param_part"
+                  }
+                }
+              },
+              "fieldId": "field_part_stock"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "subtract",
+              "left": {
+                "kind": "field",
+                "source": {
+                  "kind": "find",
+                  "source": {
+                    "kind": "ref",
+                    "targetId": "state_parts"
+                  },
+                  "scopeId": "scope_part",
+                  "predicate": {
+                    "kind": "binary",
+                    "operator": "eq",
+                    "left": {
+                      "kind": "field",
+                      "source": {
+                        "kind": "ref",
+                        "targetId": "scope_part"
+                      },
+                      "fieldId": "field_part_id"
+                    },
+                    "right": {
+                      "kind": "ref",
+                      "targetId": "param_part"
+                    }
+                  }
+                },
+                "fieldId": "field_part_stock"
+              },
+              "right": {
+                "kind": "ref",
+                "targetId": "param_qty"
+              }
+            }
+          },
+          {
+            "kind": "insert",
+            "target": {
+              "kind": "state",
+              "stateId": "state_ledger"
+            },
+            "value": {
+              "kind": "ref",
+              "targetId": "param_qty"
+            }
+          }
+        ],
+        "preconditions": [
+          {
+            "kind": "binary",
+            "operator": "gt",
+            "left": {
+              "kind": "ref",
+              "targetId": "param_qty"
+            },
+            "right": {
+              "kind": "literal",
+              "value": 0
+            }
+          },
+          {
+            "kind": "binary",
+            "operator": "gte",
+            "left": {
+              "kind": "field",
+              "source": {
+                "kind": "find",
+                "source": {
+                  "kind": "ref",
+                  "targetId": "state_parts"
+                },
+                "scopeId": "scope_part",
+                "predicate": {
+                  "kind": "binary",
+                  "operator": "eq",
+                  "left": {
+                    "kind": "field",
+                    "source": {
+                      "kind": "ref",
+                      "targetId": "scope_part"
+                    },
+                    "fieldId": "field_part_id"
+                  },
+                  "right": {
+                    "kind": "ref",
+                    "targetId": "param_part"
+                  }
+                }
+              },
+              "fieldId": "field_part_stock"
+            },
+            "right": {
+              "kind": "ref",
+              "targetId": "param_qty"
+            }
+          }
+        ],
+        "failureModes": [
+          {
+            "code": "invalid-quantity",
+            "message": "A quantity must be above zero."
+          },
+          {
+            "code": "insufficient-stock",
+            "message": "Not enough stock."
+          }
+        ]
+      },
+      "action_take_many": {
+        "id": "action_take_many",
+        "kind": "action",
+        "name": "takeMany",
+        "parameters": [
+          {
+            "id": "param_lines",
+            "valueType": {
+              "kind": "collection",
+              "itemType": {
+                "kind": "entity",
+                "entityId": "entity_line"
+              }
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "for-each",
+            "collection": {
+              "kind": "ref",
+              "targetId": "param_lines"
+            },
+            "scopeId": "scope_line",
+            "operations": [
+              {
+                "kind": "set",
+                "target": {
+                  "kind": "field",
+                  "target": {
+                    "kind": "collection-item",
+                    "collection": {
+                      "kind": "state",
+                      "stateId": "state_parts"
+                    },
+                    "selector": {
+                      "kind": "identity",
+                      "fieldId": "field_part_id",
+                      "value": {
+                        "kind": "field",
+                        "source": {
+                          "kind": "ref",
+                          "targetId": "scope_line"
+                        },
+                        "fieldId": "field_line_part"
+                      }
+                    }
+                  },
+                  "fieldId": "field_part_stock"
+                },
+                "value": {
+                  "kind": "binary",
+                  "operator": "subtract",
+                  "left": {
+                    "kind": "field",
+                    "source": {
+                      "kind": "find",
+                      "source": {
+                        "kind": "ref",
+                        "targetId": "state_parts"
+                      },
+                      "scopeId": "scope_part",
+                      "predicate": {
+                        "kind": "binary",
+                        "operator": "eq",
+                        "left": {
+                          "kind": "field",
+                          "source": {
+                            "kind": "ref",
+                            "targetId": "scope_part"
+                          },
+                          "fieldId": "field_part_id"
+                        },
+                        "right": {
+                          "kind": "field",
+                          "source": {
+                            "kind": "ref",
+                            "targetId": "scope_line"
+                          },
+                          "fieldId": "field_line_part"
+                        }
+                      }
+                    },
+                    "fieldId": "field_part_stock"
+                  },
+                  "right": {
+                    "kind": "field",
+                    "source": {
+                      "kind": "ref",
+                      "targetId": "scope_line"
+                    },
+                    "fieldId": "field_line_qty"
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_set_stock": {
+        "id": "action_set_stock",
+        "kind": "action",
+        "name": "setStock",
+        "authorization": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "admin"
+          }
+        },
+        "parameters": [
+          {
+            "id": "param_part",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "param_stock",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "field",
+              "target": {
+                "kind": "collection-item",
+                "collection": {
+                  "kind": "state",
+                  "stateId": "state_parts"
+                },
+                "selector": {
+                  "kind": "identity",
+                  "fieldId": "field_part_id",
+                  "value": {
+                    "kind": "ref",
+                    "targetId": "param_part"
+                  }
+                }
+              },
+              "fieldId": "field_part_stock"
+            },
+            "value": {
+              "kind": "ref",
+              "targetId": "param_stock"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      }
+    },
+    "constraints": [
+      {
+        "id": "constraint_stock",
+        "kind": "constraint",
+        "name": "Stock is never negative",
+        "entityId": "entity_part",
+        "message": "Stock can never fall below zero.",
+        "expression": {
+          "kind": "binary",
+          "operator": "gte",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "entity_part"
+            },
+            "fieldId": "field_part_stock"
+          },
+          "right": {
+            "kind": "literal",
+            "value": 0
+          }
+        }
+      }
+    ],
+    "transitionConstraints": [
+      {
+        "id": "transition_falls",
+        "kind": "transition-constraint",
+        "name": "Stock only falls",
+        "entityId": "entity_part",
+        "previousScopeId": "scope_previous",
+        "proposedScopeId": "scope_proposed",
+        "message": "Stock may not be raised.",
+        "expression": {
+          "kind": "binary",
+          "operator": "lte",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "scope_proposed"
+            },
+            "fieldId": "field_part_stock"
+          },
+          "right": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "scope_previous"
+            },
+            "fieldId": "field_part_stock"
+          }
+        }
+      }
+    ],
+    "principalEntityId": "entity_user",
+    "observableStateIds": [
+      "state_parts",
+      "state_ledger",
+      "state_total"
+    ]
+  },
+  "initialState": [
+    {
+      "stateId": "state_parts",
+      "value": [
+        {
+          "field_part_id": "bolt",
+          "field_part_stock": 10
+        },
+        {
+          "field_part_id": "nut",
+          "field_part_stock": 5
+        }
+      ],
+      "revision": 1
+    }
+  ],
+  "invocations": [
+    {
+      "actionId": "action_take",
+      "arguments": {
+        "param_part": "bolt",
+        "param_qty": "three"
+      },
+      "expect": {
+        "ok": false,
+        "diagnosticCodes": [
+          "ARGUMENT_TYPE_MISMATCH"
+        ]
+      }
+    },
+    {
+      "actionId": "action_take",
+      "arguments": {
+        "param_part": "bolt"
+      },
+      "expect": {
+        "ok": false,
+        "diagnosticCodes": [
+          "ARGUMENT_TYPE_MISMATCH"
+        ]
+      }
+    },
+    {
+      "actionId": "action_take",
+      "arguments": {
+        "param_part": "bolt",
+        "param_qty": 1,
+        "extra": true
+      },
+      "expect": {
+        "ok": false,
+        "diagnosticCodes": [
+          "ARGUMENT_TYPE_MISMATCH"
+        ]
+      }
+    },
+    {
+      "actionId": "action_not_here",
+      "arguments": {},
+      "expect": {
+        "ok": false,
+        "diagnosticCodes": [
+          "UNKNOWN_SERVER_ACTION"
+        ]
+      }
+    }
+  ],
+  "expectedState": {
+    "state_parts": [
+      {
+        "field_part_id": "bolt",
+        "field_part_stock": 10
+      },
+      {
+        "field_part_id": "nut",
+        "field_part_stock": 5
+      }
+    ]
+  }
+}

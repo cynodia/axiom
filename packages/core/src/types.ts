@@ -45,5 +45,10 @@ export interface ApplicationGraphData {
   edges: Record<string, GraphEdge>;
   /** Visual identity. Presentation only: a theme can never change behaviour. */
   theme?: ThemeInput;
+  /**
+   * The entity whose fields an authorization expression reads through `PRINCIPAL`. It
+   * describes a caller, and is never stored as application state.
+   */
+  principalEntityId?: NodeId;
   metadata?: Record<string, unknown>;
 }

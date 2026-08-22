@@ -34,6 +34,9 @@ import type { Location } from './location.js';
 import { validateLocation } from './validate-location.js';
 import { resolvePresentationMap } from './resolve-presentation.js';
 import { validatePresentation } from './validate-presentation.js';
+import { validateAuthority } from './validate-authority.js';
+import { validateValueAgainstType } from './validate-value.js';
+import { PRINCIPAL } from './authority.js';
 
 
 
@@ -76,7 +79,9 @@ export function validateGraph(graph: ApplicationGraph): ValidationResult {
     nodes.set(node.id, node);
   }
 
-  // Only these ids can be resolved by a `ref` expression at runtime.
+  // Only these ids can be resolved by a `ref` expression at runtime. The principal is
+  // bound by an authority; `validateAuthority` rejects reading it anywhere else.
+  context.scopes.add(PRINCIPAL);
   for (const node of nodes.values()) {
     if (node.kind === 'state' || node.kind === 'entity' || node.kind === 'repeat') {
       context.scopes.add(node.id);
@@ -132,6 +137,12 @@ export function validateGraph(graph: ApplicationGraph): ValidationResult {
   );
   errors.push(...presentation.errors);
   warnings.push(...presentation.warnings);
+
+  // The authority boundary. A graph that could let a client commit server state, or that
+  // would make an authority read state it does not own, cannot execute safely.
+  const authority = validateAuthority(allNodes, graph.principalEntityId);
+  errors.push(...authority.errors);
+  warnings.push(...authority.warnings);
 
   return { valid: errors.length === 0, errors, warnings };
 }
@@ -220,114 +231,20 @@ function validateValue(
   state: StateDef,
   context: Context,
 ): void {
-  const report = (code: string, message: string, extra: Partial<ValidationIssue> = {}): void => {
-    context.errors.push({ code, message, nodeId: state.id, path, ...extra });
-  };
-  const actual = (candidate: unknown): string =>
-    candidate === null ? 'null' : Array.isArray(candidate) ? 'a collection' : typeof candidate;
-
-  if (type.kind === 'optional') {
-    if (value === null || value === undefined) {
-      return;
-    }
-    validateValue(value, type.valueType, path, state, context);
-    return;
-  }
-
-  if (value === undefined || value === null) {
-    report(
-      VALIDATION_CODES.initialValueTypeMismatch,
-      `${path} is ${value === undefined ? 'missing' : 'null'} but is declared as ${describeType(type)}`,
-      { details: { expected: describeType(type), actual: actual(value) } },
-    );
-    return;
-  }
-
-  switch (type.kind) {
-    case 'primitive': {
-      const expected =
-        type.primitive === 'number' ? 'number' : type.primitive === 'boolean' ? 'boolean' : 'string';
-      if (typeof value !== expected) {
-        report(
-          VALIDATION_CODES.initialValueTypeMismatch,
-          `${path} should be a ${type.primitive} but is ${actual(value)}`,
-          { details: { expected: type.primitive, actual: actual(value), value } },
-        );
-      }
-      return;
-    }
-    case 'enum': {
-      if (typeof value !== 'string' || !type.values.includes(value)) {
-        report(
-          VALIDATION_CODES.initialValueTypeMismatch,
-          `${path} should be one of ${type.values.join(', ')} but is ${JSON.stringify(value)}`,
-          { details: { expected: type.values, value } },
-        );
-      }
-      return;
-    }
-    case 'collection': {
-      if (!Array.isArray(value)) {
-        report(
-          VALIDATION_CODES.initialValueTypeMismatch,
-          `${path} should be a collection but is ${actual(value)}`,
-          { details: { expected: describeType(type), actual: actual(value) } },
-        );
-        return;
-      }
-      value.forEach((item, index) => {
-        validateValue(item, type.itemType, `${path}[${index}]`, state, context);
-      });
-      return;
-    }
-    case 'entity': {
-      const entity = context.semantics.getEntity(type.entityId);
-      if (!entity) {
-        return;
-      }
-      if (typeof value !== 'object' || Array.isArray(value)) {
-        report(
-          VALIDATION_CODES.initialValueInvalidEntity,
-          `${path} should be a ${entity.name ?? entity.id} record but is ${actual(value)}`,
-          { details: { entityId: entity.id, actual: actual(value) } },
-        );
-        return;
-      }
-      const record = value as Record<string, LiteralValue>;
-      const declared = new Map(entity.fields.map((field) => [String(field.id), field]));
-
-      for (const key of Object.keys(record)) {
-        if (!declared.has(key)) {
-          report(
-            VALIDATION_CODES.initialValueUnknownField,
-            `${path}.${key} is not a field of ${entity.name ?? entity.id}. Records are keyed by field id, not by field name.`,
-            { details: { entityId: entity.id, key, expected: [...declared.keys()] } },
-          );
-        }
-      }
-
-      for (const field of entity.fields) {
-        const present = Object.prototype.hasOwnProperty.call(record, String(field.id));
-        if (!present) {
-          // A draft holds work in progress, so it is allowed to be incomplete.
-          if (field.required && field.valueType.kind !== 'optional' && !state.draft) {
-            report(
-              VALIDATION_CODES.initialValueMissingRequiredField,
-              `${path} is missing required field ${field.name ?? field.id}`,
-              { fieldId: field.id, details: { entityId: entity.id, fieldId: field.id } },
-            );
-          }
-          continue;
-        }
-        validateValue(record[String(field.id)], field.valueType, `${path}.${field.id}`, state, context);
-      }
-      return;
-    }
-    default:
+  const problems = validateValueAgainstType(value, type, {
+    path,
+    getEntity: (id) => context.semantics.getEntity(id),
+    allowIncomplete: state.draft === true,
+  });
+  for (const problem of problems) {
+    context.errors.push({ ...problem, nodeId: state.id });
   }
 }
 
 function validateAction(action: ActionDef, context: Context): void {
+  if (action.authorization) {
+    validateExpression(action.authorization, action.id, context, new Set());
+  }
   const local = emptyScope(new Set<NodeId>((action.parameters ?? []).map((parameter) => parameter.id)));
   for (const parameter of action.parameters ?? []) {
     if (parameter.valueType) {

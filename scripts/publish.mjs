@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createOtpSession, otpFromArgv } from './otp.mjs';
+import { moveDistTag, reportTags } from './dist-tag-lib.mjs';
 import { publishable, readManifest, repoRoot, tarballPath, version } from './packages.mjs';
 
 /**
@@ -11,6 +12,16 @@ const dryRun = process.argv.includes('--dry-run');
 const allowDirty = process.argv.includes('--allow-dirty');
 const skipPrepare = process.argv.includes('--skip-prepare');
 const tag = 'alpha';
+/**
+ * npm claims `latest` on a package's first publish whatever `--tag` says, so a release that
+ * only sets `alpha` leaves `npm install @cynodia/axiom` pointing at whichever version went
+ * out first. Moving it is part of releasing, not a separate errand — and doing it in the
+ * same run reuses the 2FA session npm has already granted.
+ */
+const distTag =
+  process.argv.find((argument) => argument.startsWith('--dist-tag='))?.slice('--dist-tag='.length) ??
+  'latest';
+const skipDistTag = process.argv.includes('--no-dist-tag');
 
 /** npm requires a one-time password when the account has 2FA on publish. */
 const otp = createOtpSession(otpFromArgv());
@@ -133,9 +144,42 @@ for (const [index, { name }] of publishable.entries()) {
   }
 }
 
+if (dryRun) {
+  console.log('\nDry run complete. Nothing was published.');
+  if (!skipDistTag) {
+    console.log(`\nWould then point "${distTag}" at ${version}.`);
+  }
+  process.exit(0);
+}
+
 console.log(
-  dryRun
-    ? '\nDry run complete. Nothing was published.'
-    : `\nPublished ${published.length} package(s) at ${version} under "${tag}".\n` +
-        `Install with: npm install @cynodia/axiom@${tag}`,
+  `\nPublished ${published.length} package(s) at ${version} under "${tag}".\n` +
+    `Install with: npm install @cynodia/axiom@${tag}`,
 );
+
+// 7. Point the default tag at what was just released, in the same run and the same
+//    authenticated session.
+if (skipDistTag) {
+  console.log(`\nLeaving "${distTag}" where it is (--no-dist-tag).`);
+} else {
+  console.log(`\nMoving "${distTag}":`);
+  try {
+    const result = await moveDistTag({ tag: distTag, otp });
+    if (result.missing.length > 0) {
+      // Everything above succeeded, so this can only mean the registry has not caught up.
+      console.error(
+        `  ${result.missing.join(', ')} ${result.missing.length === 1 ? 'is' : 'are'} not ` +
+          `visible at ${version} yet.\n  Run "npm run release:dist-tag" in a moment.`,
+      );
+      process.exit(1);
+    }
+    reportTags();
+  } catch (error) {
+    console.error(`\nMoved "${distTag}" for: ${error.moved?.join(', ') || 'nothing'}`);
+    console.error(
+      'The packages are published; only the tag is outstanding.\n' +
+        'Run "npm run release:dist-tag" to finish — packages already tagged are skipped.',
+    );
+    process.exit(1);
+  }
+}

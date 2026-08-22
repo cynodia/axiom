@@ -14,6 +14,9 @@
     },
     {
       "path": "../axiom/tsconfig.json"
+    },
+    {
+      "path": "../server/tsconfig.json"
     }
   ]
 }

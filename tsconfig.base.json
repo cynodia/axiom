@@ -24,6 +24,9 @@
       "@cynodia/axiom-runtime": [
         "packages/runtime/src/index.ts"
       ],
+      "@cynodia/axiom-server": [
+        "packages/server/src/index.ts"
+      ],
       "@cynodia/axiom-compiler": [
         "packages/compiler/src/index.ts"
       ],

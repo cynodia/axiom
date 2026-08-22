@@ -1,6 +1,6 @@
 # Actions and transactions
 
-Axiom 0.5.2-alpha.1. An action is behavior expressed as data, executed as a transaction.
+Axiom 0.6.0-alpha.1. An action is behavior expressed as data, executed as a transaction.
 
 ```ts
 {
@@ -61,6 +61,10 @@ re-render
 
 `invokeAction(id, args?)` returns `{ ok, diagnostics }` for **that invocation**. No diffing
 of global history is needed.
+
+An action that writes server-authoritative state runs this lifecycle **on the authority**
+instead, unchanged; the client dispatches it and receives the result. See
+[`AUTHORITY.md`](AUTHORITY.md).
 
 All four failure sources are evaluated; the action does not stop at the first.
 
@@ -158,6 +162,20 @@ The controlled boundary for behavior the operation vocabulary cannot express.
 
 **Use it only where no semantic primitive exists.** A native operation is opaque to every
 analysis Axiom offers.
+
+## Authorization
+
+```ts
+authorization?: Expression
+```
+
+Whether the caller may invoke this action at all, evaluated **on the authority** with the
+caller bound to `PRINCIPAL`, before any guard and before any transaction opens. It is
+stripped from the client IR, so a client never learns the rule and cannot satisfy it by
+claiming to.
+
+A guard asks whether the application's state permits this invocation. Authorization asks
+whether this *caller* may make it. See [`AUTHORITY.md`](AUTHORITY.md#authentication-and-authorization).
 
 ## Postconditions
 

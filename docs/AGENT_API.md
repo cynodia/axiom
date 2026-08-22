@@ -1,6 +1,6 @@
 # Agent API
 
-Axiom 0.5.2-alpha.1. The machine-facing interface. Agents query semantics and apply
+Axiom 0.6.0-alpha.1. The machine-facing interface. Agents query semantics and apply
 structural transformations; they never edit generated code.
 
 ```ts
@@ -140,6 +140,24 @@ as one of the form's sections.
 Presentation resolution is recomputed per call rather than cached: a transaction mutates
 the graph underneath these queries, and a stale presentation answer would be worse than a
 slow one.
+
+## Authority queries
+
+```ts
+agent.getAuthority(stateId)                  // 'client' | 'server'
+agent.getActionAuthority(actionId)           // where it executes — derived, not declared
+agent.getServerActions()
+agent.getClientWritableStates()
+agent.getServerWritableStates()
+agent.getServerOnlyStates()                  // what the client never receives
+agent.getActionsAffectingServerState()       // [{ action, stateIds }]
+agent.getAuthorizationForAction(actionId)    // the rule, or undefined
+agent.getUnauthorizedServerActions()         // server actions any caller may invoke
+agent.getPersistenceForState(stateId)
+```
+
+Authority is derived from what an action writes, so these answers cannot disagree with what
+the graph does. See [`AUTHORITY.md`](AUTHORITY.md).
 
 ## Transactions
 

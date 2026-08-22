@@ -13,6 +13,7 @@ export const publishable = [
   { directory: 'core', name: '@cynodia/axiom-core' },
   { directory: 'runtime', name: '@cynodia/axiom-runtime' },
   { directory: 'compiler', name: '@cynodia/axiom-compiler' },
+  { directory: 'server', name: '@cynodia/axiom-server' },
   { directory: 'agent-api', name: '@cynodia/axiom-agent-api' },
   { directory: 'axiom', name: '@cynodia/axiom' },
 ];

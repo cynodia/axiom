@@ -19,9 +19,12 @@ turn it into a working browser application whose generated JavaScript nobody rea
   spacing tokens, device classes, themes, value formatting and accessible structure.
 * `doc/spec5.1.md` — the agent-optimized documentation overhaul: `docs/` is a machine-facing
   operational contract, not a tutorial set.
-* `doc/spec5.2.md` — the **0.5.2 presentation & UX hardening: render-instance identity,
-  action diagnostics as semantic UI, theme-owned control affordances, and a type scale
-  separate from the document outline**.
+* `doc/spec5.2.md` — the 0.5.2 presentation & UX hardening: render-instance identity, action
+  diagnostics as semantic UI, theme-owned control affordances, and a type scale separate
+  from the document outline.
+* `doc/spec6.md` — the **0.6 server authority & persistent runtime: state authority, a
+  portable Server IR, an authoritative runtime, persistence, a semantic protocol and
+  authorization**.
 
 Together, spec2–spec5 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
@@ -211,10 +214,12 @@ and tests resolve to source. Directory names stay short; npm names are scoped.
 | `runtime`   | `@cynodia/axiom-runtime` | State store, expression evaluation, the mutation subsystem, constraint checking, UI rendering, value formatting, routing. |
 | `axiom`     | `@cynodia/axiom` | The published facade: re-exports the four packages above. Application authors install only this. |
 | `cli`       | *(private)* | Graph loading, `inspect` / `validate` / `build` / `serve`. |
-| `demo`      | *(private)* | Three applications: `issue-tracker.ts`, `inventory.ts` and `order-system.ts`. |
+| `server`    | `@cynodia/axiom-server` | The authoritative runtime: Server IR execution, persistence adapters, the semantic protocol, transports and the Node host. Depends on `core` and `runtime`. |
+| `demo`      | *(private)* | Four applications: `issue-tracker.ts`, `inventory.ts`, `order-system.ts` and `order-server.ts`. |
 
-Dependency direction is `core ← runtime ← compiler ← cli/demo`, with `agent-api` on
-`core` alone. `ApplicationIR` lives in **core** rather than the compiler because it is the
+Dependency direction is `core ← runtime ← compiler ← cli/demo`, with `agent-api` on `core`
+alone and `server` on `core` and `runtime`. `ServerIR` lives in **core** for the same reason
+`ApplicationIR` does: it is the contract *between* the compiler and a server runtime. `ApplicationIR` lives in **core** rather than the compiler because it is the
 contract *between* compiler and runtime; putting it in the compiler would create a cycle.
 
 ## The model
@@ -434,6 +439,38 @@ finds one. When the runtime needs something core computes, resolve it during com
 and put it in the IR instead — `ApplicationIR.locationTypes` exists for exactly that
 reason — `ApplicationIR.presentation` and `ApplicationIR.theme` exist for the same one.
 Adding any runtime module means adding it to `RUNTIME_MODULES`, in dependency order.
+
+## The authority boundary
+
+`packages/core/src/authority.ts` holds the model, `validate-authority.ts` the rules,
+`compiler/src/server.ts` the Server IR, and `packages/server` the runtime that executes it.
+
+**Authority is derived, never declared.** An action that writes any server-authoritative
+state is a server action — following `for-each`, `invoke` and declared native effects — so
+it can never disagree with what the action actually does. Nothing should add a field that
+lets an author assert otherwise.
+
+**The authoritative runtime reuses the client's semantic engine.** `createAxiomServer`
+builds an `ApplicationIR` with no UI and no routes and runs `createAxiomRuntime` over it.
+That is deliberate rather than convenient: transactions, provisional writes, `for-each`
+ordering, constraints, transition rules, rollback and the mutation log are not
+reimplemented, so a graph cannot behave differently because execution moved. Resist any
+change that forks the engine.
+
+**Both IRs normalize guards.** `compileToIR` and `compileToServerIR` must both turn `guards`
+into aligned `preconditions` / `failureModes`; an authority that read one and not the other
+would silently skip every guard. There is a test for this because it happened.
+
+**The client's store has exactly one writer.** `writeState` refuses any write to a
+server-authoritative state unless `applyingAuthoritative` is set, and applying an
+authoritative answer still goes through it — `packages/runtime/test/store.test.ts` fails if a
+second `store.write(` call site appears anywhere in `runtime.ts`.
+
+**Server IR is portable data.** No closure, no host object, no presentation, no UI. It
+declares `contract: 'axiom.server.v1'`, and `packages/server/conformance/*.json` are
+committed fixtures — Server IR plus expected results — that an independent runtime in
+another language can be held to. Regenerate them with `npm run conformance:generate` after
+changing the semantics they cover.
 
 ## The presentation layer
 

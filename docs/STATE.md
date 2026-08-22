@@ -1,6 +1,6 @@
 # State
 
-Axiom 0.5.2-alpha.1. A `StateDef` is a named application value: stored, or computed from
+Axiom 0.6.0-alpha.1. A `StateDef` is a named application value: stored, or computed from
 other state.
 
 ```ts
@@ -23,6 +23,10 @@ other state.
 | **Derived** | `derivation` | nothing | skipped | n/a — unwritable |
 | **Draft** | `draft: true` | as stored | skipped | no |
 | **Ephemeral** | `ephemeral: true` | as stored | skipped | no |
+
+`authority: 'server'` is a separate axis: it says **who may commit** the value, not where it
+is stored or whether it is validated. A client observes such a state and can never write it.
+See [`AUTHORITY.md`](AUTHORITY.md).
 
 **Canonical** state means stored state that is neither draft nor ephemeral. It is the state
 constraints apply to.
@@ -144,7 +148,7 @@ rooted in.
 | --- | --- |
 | `memory` | The default. Nothing outside the runtime. |
 | `local-storage` | Read at startup, written through on every write, keyed by `key ?? "<graphId>:<stateId>"`. Requires a host that provides `storage`. |
-| `remote` | **Validates and does nothing.** Declared, not executed. |
+| `remote` | **Validates and does nothing.** Declared, not executed. For state an authority owns, use `authority: 'server'` and give the authority a `PersistenceAdapter`. |
 
 ## Validation
 

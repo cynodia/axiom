@@ -1,6 +1,6 @@
 # Runtime
 
-Axiom 0.5.2-alpha.1. The runtime executes an `ApplicationIR`. It is domain-independent: it
+Axiom 0.6.0-alpha.1. The runtime executes an `ApplicationIR`. It is domain-independent: it
 contains no knowledge of any application.
 
 ## Constructing
@@ -14,6 +14,7 @@ const app = createAxiomRuntime({
   rootElement,                     // a DomElement
   host,                            // a HostEnvironment
   nativeOperations?: Record<string, (inputs) => unknown>,
+  remote?: RemoteGateway,                       // required for server-authoritative state
   inputValidation?: 'immediate' | 'deferred',   // DEFAULT: 'immediate'
   recordMutationValues?: boolean,               // default true
 });
@@ -71,6 +72,9 @@ carries `data-node="<node id>"`.
 | `getActionOutcome(id)` | — | The outcome of that action's most recent invocation. See below. |
 | `getMutationLog()` | — | Every attempted mutation, with source, path and outcome. |
 | `registerNativeOperation(id, fn)` | — | Registers an implementation for a `native` operation. |
+| `invokeActionAsync(id, args?)` | **yes** | Awaits the outcome, including an authority's answer. |
+| `syncAuthoritativeState()` | — | Loads the authoritative snapshot and applies it. See [`AUTHORITY.md`](AUTHORITY.md). |
+| `evaluate(expression)` | — | Evaluates in the root scope, reporting rather than throwing. A pure read. |
 
 ### `hydrateState` bypasses semantic enforcement
 
@@ -196,6 +200,7 @@ interface RuntimeDiagnostic {
 | `DERIVED_STATE_WRITE` | An attempt to write derived state. The write did not occur. | any write path | — |
 | `UNKNOWN_STATE` | An attempt to write a state that does not exist. | any write path | — |
 | `INPUT_REJECTED` | **Warning.** An input write was rolled back; the control kept its previous value. Accompanied by the violation that caused it. | input binding | `source: 'input'` |
+| `SERVER_STATE_WRITE` | A local write was attempted against state whose authority is the server. It did not occur — through any path, `hydrateState` included. | any write path | — |
 
 ### Operations, routing, UI
 
@@ -204,6 +209,7 @@ interface RuntimeDiagnostic {
 | `UNSUPPORTED_OPERATION` | An operation kind the runtime does not execute. | action | — |
 | `ROUTE_NOT_FOUND` | A `navigate` operation naming an unresolvable route. | action | — |
 | `NATIVE_OPERATION_MISSING` | No implementation registered for an `implementationId`. | `native` operation | — |
+| `REMOTE_ACTION_UNAVAILABLE` | An action belonging to the authority was invoked with no gateway configured, or the transport failed. | remote invocation | — |
 | `UI_NODE_MISSING` | A child id that is not a UI node in the IR. | render | — |
 | `UNSUPPORTED_UI_NODE` | An unknown UI node kind. | render | — |
 | `PERSISTED_STATE_UNREADABLE` | **Warning.** A stored value could not be parsed; the initial value was used. | startup | — |
@@ -243,6 +249,20 @@ app.getMutationLog();
 - `outcome` is set when the surrounding transaction settles. Rejected attempts remain, marked `rolled-back`.
 - Only the outermost transaction decides an outcome, so the log never suggests that early iterations of a failed loop committed.
 - `recordMutationValues: false` omits `oldValue` / `newValue`.
+
+## Reaching an authority
+
+An application with server-authoritative state gives the runtime a gateway:
+
+```ts
+const app = createAxiomRuntime({ ir, rootElement, host, remote: createRemoteGateway(transport) });
+app.start();
+await app.syncAuthoritativeState();
+```
+
+`invokeAction` on a remote action returns `{ ok: false, pending: true }` immediately — a
+click never blocks on the network — and the outcome arrives through the ordinary
+action-outcome lifecycle. Full model: [`AUTHORITY.md`](AUTHORITY.md).
 
 ## The browser bundle
 

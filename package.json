@@ -1,6 +1,6 @@
 {
   "name": "axiom",
-  "version": "0.5.2-alpha.1",
+  "version": "0.6.0-alpha.1",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -17,7 +17,8 @@
     "release:dist-tag": "node scripts/dist-tag.mjs",
     "release:dist-tag:dry-run": "node scripts/dist-tag.mjs --dry-run",
     "release:publish:dry-run": "node scripts/publish.mjs --dry-run",
-    "docs:sync": "node scripts/sync-docs.mjs"
+    "docs:sync": "node scripts/sync-docs.mjs",
+    "conformance:generate": "node scripts/conformance.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

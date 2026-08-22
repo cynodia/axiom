@@ -6,8 +6,8 @@ Axiom represents application behavior, state, UI structure and presentation as s
 semantic data executed by generic runtimes. An application is a typed graph, not source
 files: the JavaScript and HTML that reach a browser are output, and are never edited.
 
-**Status: experimental / alpha (0.5.2-alpha.x).** The API may change between alpha
-releases. This documentation describes 0.5.2-alpha.1.
+**Status: experimental / alpha (0.6.0-alpha.x).** The API may change between alpha
+releases. This documentation describes 0.6.0-alpha.1.
 
 ## Canonical mental model
 
@@ -52,6 +52,9 @@ full in the linked contract.
 16. **`NativeOperation` is an escape hatch.** Use it only where no semantic primitive exists, and declare its effects or dependency analysis reports itself incomplete.
 17. **Edges are derived on demand.** `synchronizeEdges` materializes them but correctness does not depend on calling it.
 18. **A theme changes presentation only.** It cannot change an action, a constraint, a location, state or routing.
+19. **A client cannot commit server-authoritative state**, by any path. An action that writes it executes on the authority.
+20. **The client is untrusted.** Its validation results, derived values and claims are never authoritative; guards, authorization and argument types are checked again on the authority.
+21. **A client requests semantic actions, never mutation programs.** The protocol carries no way to send operations.
 
 ## Installation
 
@@ -183,6 +186,7 @@ export function runMinimalExample(): number {
 | Constraints and transition constraints | [`docs/CONSTRAINTS.md`](docs/CONSTRAINTS.md) |
 | Semantic UI nodes and bindings | [`docs/UI.md`](docs/UI.md) |
 | Presentation, UX intent, themes, formatting | [`docs/PRESENTATION.md`](docs/PRESENTATION.md) |
+| Server authority, persistence, the trust boundary | [`docs/AUTHORITY.md`](docs/AUTHORITY.md) |
 | Runtime API and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
 | Machine queries and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 | Validation codes and what rejects a graph | [`docs/VALIDATION.md`](docs/VALIDATION.md) |
@@ -198,6 +202,7 @@ export function runMinimalExample(): number {
 | `@cynodia/axiom-compiler` | Validation, normalization into `ApplicationIR`, theme stylesheet, page emission. |
 | `@cynodia/axiom-runtime` | State store, evaluation, mutation engine, constraint checking, renderer, routing. |
 | `@cynodia/axiom-agent-api` | Semantic and presentation queries, mutation impact, transactional transformations. |
+| `@cynodia/axiom-server` | The authoritative runtime: Server IR execution, persistence, protocol and transports. Installed separately, since it imports `node:http` and `node:sqlite`. |
 
 ## Working in this repository
 
@@ -213,10 +218,16 @@ node packages/cli/dist/index.js validate packages/demo/dist/order-system.js --ex
 node packages/cli/dist/index.js serve    packages/demo/dist/order-system.js --export=createOrderSystemGraph
 ```
 
-Three unrelated applications — an issue tracker, an inventory system and an order system —
-are built from graphs alone in `packages/demo` and run on the same compiler and runtime
-with no application-specific framework code. The order system is the acceptance fixture for
-both the 0.4 collection semantics and the 0.5 presentation layer.
+Four unrelated applications are built from graphs alone in `packages/demo` and run on the
+same compiler and runtime with no application-specific framework code. The order system is
+the acceptance fixture for the 0.4 collection semantics and the 0.5 presentation layer; the
+order desk is the 0.6 fixture, with stock and orders owned by an authority.
+
+```bash
+# The client page and the authority, from one graph, with durable state.
+node packages/cli/dist/index.js serve packages/demo/dist/order-server.js \
+  --export=createOrderServerGraph --port=3000 --store=desk.db
+```
 
 Specifications, in order: `doc/spec.md`, `doc/spec2.md`, `doc/spec3.md`, `doc/spec4.md`,
 `doc/spec4.1.md`, `doc/spec5.md`, `doc/spec5.1.md`. `CLAUDE.md` orients work in the
@@ -228,9 +239,14 @@ behavior**; where they disagree, the documentation above describes the implement
 ```bash
 npm run release:prepare        # build, test, pack, verify, external consumer test
 npm run release:publish:dry-run
-npm run release:publish
-npm run release:dist-tag
+npm run release:publish        # publishes under "alpha", then points "latest" at it
 ```
+
+`release:publish` moves the default dist-tag as its final step, in the same authenticated
+run — npm claims `latest` on a package's first publish whatever `--tag` says, so leaving it
+alone would keep handing out a stale release. Pass `--no-dist-tag` to skip that, or
+`--dist-tag=<name>` to move a different one. `npm run release:dist-tag` remains, for
+repairing a tag left behind by an interrupted release.
 
 ## License
 

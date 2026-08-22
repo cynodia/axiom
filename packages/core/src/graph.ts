@@ -44,7 +44,7 @@ export class ApplicationGraph {
     incoming: Map<NodeId, GraphEdge[]>;
   };
 
-  constructor(id: string, name: string, version = '0.5.2') {
+  constructor(id: string, name: string, version = '0.6.0') {
     this.data = { id, name, version, nodes: {}, edges: {} };
   }
 
@@ -71,6 +71,23 @@ export class ApplicationGraph {
   /** Exactly what the application declared, before defaults were filled in. */
   get declaredTheme(): ThemeInput | undefined {
     return this.data.theme ? structuredClone(this.data.theme) : undefined;
+  }
+
+  /**
+   * The entity an authorization expression reads the caller through, bound to `PRINCIPAL`
+   * when the authority evaluates the rule.
+   */
+  get principalEntityId(): NodeId | undefined {
+    return this.data.principalEntityId;
+  }
+
+  setPrincipalEntity(entityId: NodeId | undefined): void {
+    if (entityId === undefined) {
+      delete this.data.principalEntityId;
+    } else {
+      this.data.principalEntityId = entityId;
+    }
+    this.revision += 1;
   }
 
   setTheme(theme: ThemeInput | undefined): void {

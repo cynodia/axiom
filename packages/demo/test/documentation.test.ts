@@ -48,6 +48,7 @@ import {
   toBoolean,
 } from '@cynodia/axiom';
 import type { EntityDef, RouteDef, StateDef, ViewNode } from '@cynodia/axiom';
+import { SERVER_DIAGNOSTIC_CODES } from '@cynodia/axiom-server';
 import { runMinimalExample } from '@cynodia/axiom-demo/minimal';
 
 /**
@@ -166,7 +167,11 @@ test('every validation code is documented, and every documented code exists', ()
   assert.deepEqual(undocumented, [], 'validation codes missing from docs/VALIDATION.md');
 
   // Anything that looks like a code in any document must be a real one.
-  const known = new Set<string>([...codes, ...Object.values(RUNTIME_DIAGNOSTIC_CODES)]);
+  const known = new Set<string>([
+    ...codes,
+    ...Object.values(RUNTIME_DIAGNOSTIC_CODES),
+    ...Object.values(SERVER_DIAGNOSTIC_CODES),
+  ]);
   const invented = new Set<string>();
   for (const match of EVERY_DOC.matchAll(/`([A-Z][A-Z0-9_]{6,})`/g)) {
     if (!known.has(match[1])) {
@@ -182,8 +187,20 @@ test('every validation code is documented, and every documented code exists', ()
     'SPACING_TOKENS', 'SIZING_VALUES', 'BOUNDED_SIZES', 'ALIGNMENTS', 'JUSTIFICATIONS',
     'DEVICE_CLASSES', 'VALUE_FORMAT_KINDS', 'SEMANTIC_COLOR_ROLES', 'EDGE_KINDS',
     'INHERITED_PROPERTIES', 'HEADING_LEVELS', 'TEXT_ROLE_HEADING_LEVELS', 'MUST', 'MUST_NOT',
+    // Authority vocabulary: exported constants, not diagnostic codes.
+    'PRINCIPAL', 'AUTHORITIES', 'SERVER_IR_CONTRACT', 'SERVER_DIAGNOSTIC_CODES', 'PROTOCOL_VERSION',
+    'AUTHORITY', 'EXECUTION', 'TRUST', 'TRANSACTION', 'CONCURRENCY', 'PROTOCOL', 'SERIALIZATION',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
+});
+
+test('every server diagnostic code is documented with a meaning', () => {
+  const authority = ALL_DOCS.get('docs/AUTHORITY.md');
+  assert.ok(authority);
+  const undocumented = Object.values(SERVER_DIAGNOSTIC_CODES).filter(
+    (code) => !authority.includes(code),
+  );
+  assert.deepEqual(undocumented, [], 'server codes missing from docs/AUTHORITY.md');
 });
 
 test('every runtime diagnostic code is documented with a meaning', () => {

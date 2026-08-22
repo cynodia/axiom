@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   AgentAPI,
   DEFAULT_THEME,
+  compileToServerIR,
   RUNTIME_DIAGNOSTIC_CODES,
   compileToHtml,
   compileToIR,
@@ -28,6 +29,25 @@ import {
   UI_TITLE,
   createCounterGraph,
 } from './counter.js';
+import {
+  createAxiomServer,
+  createDirectTransport,
+  createMemoryPersistence,
+  createRemoteGateway,
+  createServerHost,
+} from '@cynodia/axiom-server';
+import {
+  ACTION_RELEASE,
+  ACTION_RESERVE as ACTION_RESERVE_SEATS,
+  F_SEAT_FREE,
+  F_SEAT_ID as F_SEAT_ID_LOCAL,
+  F_USER_ID,
+  F_USER_ROLE,
+  PARAM_COUNT,
+  PARAM_SEAT,
+  STATE_SEATS,
+  createBookingGraph,
+} from './authority.js';
 import {
   ACTION_RESERVE,
   F_LINE_ID,
@@ -229,6 +249,94 @@ lowering.value = '1';
 lowering.dispatch('input');
 assert.equal(stockOf('bolt'), 1, 'a change the rule allows still goes through');
 step('the same input still works for a change the rule permits');
+
+// ------------------------------------------------------ server authority
+
+const booking = createBookingGraph();
+const bookingValidation = validateGraph(booking);
+assert.equal(
+  bookingValidation.valid,
+  true,
+  bookingValidation.errors.map((problem) => problem.message).join('\n'),
+);
+
+const serverIR = compileToServerIR(booking);
+assert.equal(serverIR.contract, 'axiom.server.v1');
+assert.deepEqual(serverIR.observableStateIds, [STATE_SEATS], 'the log is server-only');
+assert.doesNotMatch(JSON.stringify(serverIR), /"kind":"view"/, 'no UI reaches the authority');
+step('a server-capable graph compiles into a portable Server IR');
+
+const clientIR = compileToIR(booking);
+assert.ok(clientIR.remoteActionIds.includes(ACTION_RESERVE_SEATS));
+assert.deepEqual(clientIR.actions[ACTION_RESERVE_SEATS].operations, [], 'the client gets no operations');
+assert.doesNotMatch(JSON.stringify(clientIR), /state_log/, 'nor server-only state');
+assert.doesNotMatch(JSON.stringify(clientIR), /sold-out/, 'nor the guards it cannot apply');
+step('the client half carries none of the rules it is not trusted with');
+
+const authority = createAxiomServer({
+  ir: serverIR,
+  persistence: createMemoryPersistence(),
+  host: createServerHost({
+    authenticate: (credential) =>
+      credential === 'admin'
+        ? { [F_USER_ID]: 'a1', [F_USER_ROLE]: 'admin' }
+        : credential
+          ? { [F_USER_ID]: 'u1', [F_USER_ROLE]: 'guest' }
+          : null,
+  }),
+});
+await authority.start();
+
+const bookingHost = createMemoryHost({ path: '/' });
+const bookingApp = createAxiomRuntime({
+  ir: clientIR,
+  rootElement: bookingHost.root,
+  host: bookingHost,
+  remote: createRemoteGateway(createDirectTransport(authority, { credential: () => 'guest' })),
+});
+bookingApp.start();
+await bookingApp.syncAuthoritativeState();
+
+const seatsFree = (state: unknown): number =>
+  (state as Array<Record<string, number>>)[0][F_SEAT_FREE];
+assert.equal(seatsFree(bookingApp.getState(STATE_SEATS)), 4);
+step('a client observes authoritative state');
+
+const seatsReserved = await bookingApp.invokeActionAsync(ACTION_RESERVE_SEATS, {
+  [PARAM_SEAT]: 'front',
+  [PARAM_COUNT]: 3,
+});
+assert.equal(seatsReserved.ok, true, JSON.stringify(seatsReserved.diagnostics));
+assert.equal(seatsFree(authority.getState(STATE_SEATS)), 1);
+assert.equal(seatsFree(bookingApp.getState(STATE_SEATS)), 1, 'and the client has the result');
+step('an action commits on the authority and the client receives the change');
+
+const seatsRefused = await bookingApp.invokeActionAsync(ACTION_RESERVE_SEATS, {
+  [PARAM_SEAT]: 'front',
+  [PARAM_COUNT]: 9,
+});
+assert.equal(seatsRefused.ok, false);
+assert.equal(seatsRefused.diagnostics[0].details?.failureMode, 'sold-out');
+assert.equal(seatsFree(authority.getState(STATE_SEATS)), 1, 'and nothing moved');
+step('a guard the authority evaluates refuses, with a structured diagnostic');
+
+const denied = await bookingApp.invokeActionAsync(ACTION_RELEASE, {
+  [PARAM_SEAT]: 'front',
+  [PARAM_COUNT]: 1,
+});
+assert.equal(denied.ok, false);
+assert.equal(denied.diagnostics[0].code, 'AUTHORIZATION_DENIED');
+step('authorization is enforced on the authority');
+
+bookingApp.hydrateState(STATE_SEATS, [{ [F_SEAT_ID_LOCAL]: 'front', [F_SEAT_FREE]: 999 }]);
+assert.equal(seatsFree(bookingApp.getState(STATE_SEATS)), 1, 'the client cannot write what it does not own');
+assert.equal(
+  bookingApp.diagnostics().some((diagnostic) => diagnostic.code === 'SERVER_STATE_WRITE'),
+  true,
+);
+step('the authority boundary refuses a direct client write');
+
+await authority.stop();
 
 console.log('\nExternal consumer smoke test passed.');
 

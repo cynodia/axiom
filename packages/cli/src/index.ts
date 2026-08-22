@@ -3,7 +3,16 @@ import { createServer } from 'node:http';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { compileToHtml, compileToIR } from '@cynodia/axiom-compiler';
+import { compileToHtml, compileToIR, compileToServerIR, hasServerAuthority } from '@cynodia/axiom-compiler';
+import {
+  createAxiomServer,
+  createMemoryPersistence,
+  createServerHost,
+  createSqlitePersistence,
+  dispatch,
+  isSqliteAvailable,
+} from '@cynodia/axiom-server';
+import type { AxiomServer, PersistenceAdapter } from '@cynodia/axiom-server';
 import { ApplicationGraph, formatLocation, semanticContextFromGraph, validateGraph } from '@cynodia/axiom-core';
 import type { AnyNode, NodeKind, Operation, SemanticContext, ValidationResult } from '@cynodia/axiom-core';
 
@@ -14,12 +23,15 @@ interface Options {
   modelFile: string;
   exportName?: string;
   port: number;
+  /** Where authoritative state persists. Absent, it is held in memory. */
+  store?: string;
 }
 
 function parseArguments(argv: string[]): Options | null {
   const positional: string[] = [];
   let exportName: string | undefined;
   let port = 3000;
+  let store: string | undefined;
 
   for (const argument of argv) {
     if (argument.startsWith('--export=')) {
@@ -30,6 +42,10 @@ function parseArguments(argv: string[]): Options | null {
       port = Number(argument.slice('--port='.length)) || port;
       continue;
     }
+    if (argument.startsWith('--store=')) {
+      store = argument.slice('--store='.length);
+      continue;
+    }
     positional.push(argument);
   }
 
@@ -37,7 +53,7 @@ function parseArguments(argv: string[]): Options | null {
   if (!command || !modelFile) {
     return null;
   }
-  return { command, modelFile, exportName, port };
+  return { command, modelFile, exportName, port, ...(store ? { store } : {}) };
 }
 
 function toGraph(candidate: unknown): ApplicationGraph | null {
@@ -199,10 +215,59 @@ async function build(options: Options): Promise<void> {
   console.log(`Built ${outputFile}`);
 }
 
+/** The authoritative half, when the graph has one. No application code is involved. */
+async function startAuthority(
+  graph: ApplicationGraph,
+  options: Options,
+): Promise<AxiomServer | null> {
+  if (!hasServerAuthority(graph)) {
+    return null;
+  }
+  let persistence: PersistenceAdapter;
+  if (options.store && (await isSqliteAvailable())) {
+    persistence = await createSqlitePersistence({ location: options.store });
+    console.log(`Authoritative state persists to ${options.store}`);
+  } else {
+    if (options.store) {
+      console.warn('node:sqlite is unavailable; authoritative state is held in memory only');
+    }
+    persistence = createMemoryPersistence();
+  }
+  const server = createAxiomServer({
+    ir: compileToServerIR(graph),
+    persistence,
+    host: createServerHost({
+      // Authentication belongs to a host. This one reads a bearer credential and treats it
+      // as the caller's identity, which is enough to demonstrate the boundary and no more.
+      authenticate: (credential) =>
+        credential ? { [PRINCIPAL_IDENTITY]: credential } : null,
+      report: (event) => {
+        if (event.kind !== 'snapshot') {
+          console.log(
+            `[axiom] ${event.kind} ${event.actionId ?? ''} ${event.ok === undefined ? '' : event.ok ? 'ok' : 'refused'}`.trim(),
+          );
+        }
+      },
+    }),
+  });
+  await server.start();
+  return server;
+}
+
+/** The identity field of the graph's principal entity, resolved at startup. */
+let PRINCIPAL_IDENTITY = 'id';
+
 async function serve(options: Options): Promise<void> {
   const graph = await loadGraph(options);
   const ir = compileToIR(graph);
   const html = compileToHtml(graph);
+  const principalEntity = graph.principalEntityId
+    ? graph.getNode(graph.principalEntityId)
+    : undefined;
+  if (principalEntity?.kind === 'entity' && principalEntity.identityFieldId) {
+    PRINCIPAL_IDENTITY = String(principalEntity.identityFieldId);
+  }
+  const authority = await startAuthority(graph, options);
   const matches = (pathname: string): boolean =>
     ir.routes.some((route) => {
       const parts = pathname.split('?')[0].split('/').filter(Boolean);
@@ -213,25 +278,56 @@ async function serve(options: Options): Promise<void> {
     });
 
   const server = createServer((request, response) => {
-    if (request.url && matches(request.url)) {
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      response.end(html);
-      return;
-    }
-    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    response.end('No route matches this path');
+    void (async () => {
+      // One semantic endpoint, the same for every application. No route is declared here
+      // and none is generated: the client asks for actions, not for URLs.
+      if (authority && request.method === 'POST' && (request.url ?? '').split('?')[0] === SEMANTIC_ENDPOINT) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) {
+          chunks.push(chunk as Buffer);
+        }
+        let body: unknown = null;
+        try {
+          body = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
+        } catch {
+          response.writeHead(400, { 'content-type': 'application/json' });
+          response.end('{"kind":"error","diagnostics":[]}');
+          return;
+        }
+        const answer = await dispatch(authority, body);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify(answer));
+        return;
+      }
+      if (request.url && matches(request.url)) {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end(html);
+        return;
+      }
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('No route matches this path');
+    })();
   });
 
   server.listen(options.port, '127.0.0.1', () => {
     console.log(`${graph.name} available at http://127.0.0.1:${options.port}`);
+    if (authority) {
+      console.log(
+        `Authoritative runtime at http://127.0.0.1:${options.port}${SEMANTIC_ENDPOINT} — ` +
+          `${Object.keys(compileToServerIR(graph).actions).length} server actions`,
+      );
+    }
   });
 }
+
+/** The one endpoint every Axiom authority answers on. */
+const SEMANTIC_ENDPOINT = '/axiom';
 
 async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2));
   if (!options) {
     console.error(
-      'Usage: axiom <build|inspect|validate|serve> <modelFile> [--export=name] [--port=3000]',
+      'Usage: axiom <build|inspect|validate|serve> <modelFile> [--export=name] [--port=3000] [--store=state.db]',
     );
     process.exitCode = 1;
     return;

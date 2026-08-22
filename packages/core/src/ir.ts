@@ -12,6 +12,7 @@ import type { FieldIndexEntry } from './graph.js';
 import type { UINode } from './ui.js';
 import type { AnyNode } from './types.js';
 import type { TypeRef } from './type-ref.js';
+import type { Authority } from './authority.js';
 import type { ResolvedPresentation } from './presentation.js';
 import type { Theme } from './theme.js';
 
@@ -75,6 +76,17 @@ export interface ApplicationIR {
    * renderer falls back to the iteration index.
    */
   repeatIdentityFields: Record<NodeId, FieldId>;
+  /**
+   * The authority of each state. A client runtime refuses to write a state whose authority
+   * is `server`, whatever path attempts it.
+   */
+  authority: Record<NodeId, Authority>;
+  /**
+   * Actions the client must send to the authority rather than execute itself. Their
+   * operations, guards and authorization are **absent** from this IR: a client is never
+   * given the rules it is not trusted to apply.
+   */
+  remoteActionIds: NodeId[];
   /** The application's visual identity, completed against the default theme. */
   theme: Theme;
   /**

@@ -1,21 +1,27 @@
 import {
+  actionAuthority,
   actionGuards,
+  authorityContext,
   inferExpressionType,
   inferLocationType,
   itemTypeOf,
   locationFieldIds,
   locationRootStateId,
+  referencedIds,
   resolvePresentationMap,
   semanticContextFromGraph,
+  stateAuthority,
   validateGraph,
 } from '@cynodia/axiom-core';
 import type {
   ActionDef,
   ApplicationGraph,
+  Authority,
   ApplicationIR,
   CompiledRoute,
   ConstraintDef,
   EntityDef,
+  Expression,
   FieldId,
   NodeId,
   ResolvedPresentation,
@@ -85,6 +91,21 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
     }
   }
 
+  // The authority boundary decides what may cross into the client at all.
+  const authorityOf = authorityContext(graph.listNodes(), graph.principalEntityId);
+  const hiddenStateIds = new Set<NodeId>();
+  for (const state of authorityOf.states.values()) {
+    if (state.serverOnly) {
+      hiddenStateIds.add(state.id);
+    }
+  }
+  const remoteActionIds: NodeId[] = [];
+  const authority: Record<NodeId, Authority> = {};
+
+  /** Nothing that reads state the client may not observe may reach the client. */
+  const readsHiddenState = (expressions: readonly Expression[]): boolean =>
+    expressions.some((expression) => referencedIds(expression).some((id) => hiddenStateIds.has(id)));
+
   const nodes: Record<NodeId, ApplicationIR['nodes'][NodeId]> = {};
   const actions: Record<NodeId, ActionDef> = {};
   const uiNodes: Record<NodeId, UINode> = {};
@@ -104,10 +125,45 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
       case 'entity':
         entities.push(node);
         break;
-      case 'state':
-        states.push(node);
+      case 'state': {
+        if (hiddenStateIds.has(node.id)) {
+          // Server-only state is not merely unwritable here; it is absent.
+          delete nodes[node.id];
+          break;
+        }
+        authority[node.id] = stateAuthority(node);
+        states.push(
+          stateAuthority(node) === 'server'
+            ? // The authority owns the value. A seed shipped to the client would be a
+              // second, unauthoritative source of truth.
+              { ...node, initialValue: undefined }
+            : node,
+        );
         break;
+      }
       case 'action': {
+        if (actionAuthority(node, authorityOf) === 'server') {
+          // A remote action reaches the client as its name, its parameters and nothing
+          // else: no operations to replay, no guards to fake, no authorization to satisfy.
+          remoteActionIds.push(node.id);
+          const remote: ActionDef = {
+            id: node.id,
+            kind: 'action',
+            ...(node.name ? { name: node.name } : {}),
+            ...(node.parameters ? { parameters: node.parameters } : {}),
+            ...(node.destructive !== undefined ? { destructive: node.destructive } : {}),
+            ...(node.requiresConfirmation !== undefined
+              ? { requiresConfirmation: node.requiresConfirmation }
+              : {}),
+            ...(node.confirmationMessage ? { confirmationMessage: node.confirmationMessage } : {}),
+            ...(node.confirmation ? { confirmation: node.confirmation } : {}),
+            ...(node.metadata ? { metadata: node.metadata } : {}),
+            operations: [],
+          };
+          actions[node.id] = remote;
+          nodes[node.id] = remote;
+          break;
+        }
         // Guards are authoring sugar: the IR carries conditions and failures aligned.
         const guards = actionGuards(node);
         actions[node.id] = {
@@ -119,9 +175,17 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
         break;
       }
       case 'constraint':
+        if (readsHiddenState([node.expression])) {
+          delete nodes[node.id];
+          break;
+        }
         constraints.push(node);
         break;
       case 'transition-constraint':
+        if (readsHiddenState([node.expression])) {
+          delete nodes[node.id];
+          break;
+        }
         transitionConstraints.push(node);
         break;
       case 'route':
@@ -201,11 +265,14 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
     constraints,
     transitionConstraints,
     routes,
-    edges: graph.semanticEdges(),
+    // An edge naming a node the client does not receive would tell it that node exists.
+    edges: graph.semanticEdges().filter((edge) => nodes[edge.from] && nodes[edge.to]),
     locationTypes,
     locationRoots,
     locationRequired,
     repeatIdentityFields,
+    authority,
+    remoteActionIds,
     theme,
     presentation,
   };

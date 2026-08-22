@@ -3,6 +3,7 @@ import type { CollectionItemLocation, Location } from './location.js';
 import type { EdgeId, FieldId, NodeId } from './ids.js';
 import type { TypeRef } from './type-ref.js';
 import type { ConfirmationPresentation } from './presentation.js';
+import type { Authority } from './authority.js';
 
 export interface NodeBase {
   id: NodeId;
@@ -107,6 +108,21 @@ export interface StateDef extends NodeBase {
    * is governed exactly as before.
    */
   ephemeral?: boolean;
+  /**
+   * Who may commit a canonical mutation to this state. Absent, it is `'client'`, so every
+   * 0.5.x graph keeps executing exactly as it did.
+   *
+   * A client MUST NOT commit a mutation to `'server'` state through any path: an action
+   * that writes it executes on the authority, and an input bound into it is a validation
+   * error. Authority is separate from `persistence` — one says who decides a value, the
+   * other where a decided value survives.
+   */
+  authority?: Authority;
+  /**
+   * Marks server-authoritative state the client may not observe at all. Such a state is
+   * excluded from the client IR entirely rather than merely being unwritable.
+   */
+  serverOnly?: boolean;
   persistence?: StatePersistence;
 }
 
@@ -153,6 +169,15 @@ export interface ActionDef extends NodeBase {
   destructive?: boolean;
   requiresConfirmation?: boolean;
   confirmationMessage?: string;
+  /**
+   * Whether the caller may invoke this action at all, evaluated **on the authority** with
+   * the caller bound to `PRINCIPAL`.
+   *
+   * It is checked before any guard and before any transaction opens, and it is stripped
+   * from the client IR — a client never learns the rule and can never satisfy it by
+   * claiming to. `requiresConfirmation` is UX and is not an authorization mechanism.
+   */
+  authorization?: Expression;
   /** What the confirmation says, when a plain message is not enough. */
   confirmation?: ConfirmationPresentation;
 }

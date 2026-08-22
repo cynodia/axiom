@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.5.2-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.6.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -31,7 +31,7 @@ One canonical term per concept. These are not interchangeable.
 ## Graph construction
 
 ```ts
-const graph = new ApplicationGraph(id, name);      // version defaults to '0.5.2'
+const graph = new ApplicationGraph(id, name);      // version defaults to '0.6.0'
 graph.addNode<StateDef>({ id, kind: 'state', ... }); // returns NodeId; throws if id exists
 graph.getNode<StateDef>(id);                        // deep clone, or undefined
 graph.updateNode(node);                             // write a modified node back
@@ -468,6 +468,65 @@ agent.transact((tx) => { tx.setDensity(FORM, 'compact'); }, { reason });
 `getMutationImpact` reports `analysisComplete: false` with `analysisGaps` when something —
 a native operation with undeclared effects — cannot be analyzed. **An incomplete answer
 says so; it is never presented as exhaustive.** Detail: [`AGENT_API.md`](AGENT_API.md).
+
+## SERVER AUTHORITY
+
+Full model: [`AUTHORITY.md`](AUTHORITY.md). These are the invariants to know before
+authoring an application that crosses the trust boundary.
+
+1. **AUTHORITY** — a client cannot commit server-authoritative state, by any path.
+2. **EXECUTION** — a server action executes against state the authority owns, on the authority.
+3. **TRUST** — a client's validation results, derived values and claims are never authoritative.
+4. **TRANSACTION** — one semantic action commits atomically or not at all, wherever it runs.
+5. **CONCURRENCY** — two actions cannot both commit from incompatible snapshots.
+6. **PROTOCOL** — a client requests semantic actions, never mutation programs.
+7. **SERIALIZATION** — authoritative behavior is data. No closure, no arbitrary code.
+
+```ts
+{ id: STATE_PRODUCTS, kind: 'state', authority: 'server' }                  // the authority owns it
+{ id: STATE_AUDIT,    kind: 'state', authority: 'server', serverOnly: true } // and the client never sees it
+```
+
+- `authority` defaults to `'client'`. **Every 0.5.x graph is unchanged and still runs with no server.**
+- Authority is separate from persistence: one says who decides a value, the other where a decided value survives.
+- **Where an action executes is derived, never declared**: an action that writes any server-authoritative state is a server action.
+- A server action reaches the client as its id, name and parameters only — no operations, no guards, no failure modes, no authorization.
+- A server action MUST NOT read client state. Pass the value as an action parameter; that is what a draft is for.
+
+```ts
+compileToIR(graph)         // the client half, filtered at the boundary
+compileToServerIR(graph)   // what an authority executes: no UI, no presentation, no routes
+```
+
+### Authorization
+
+```ts
+graph.setPrincipalEntity(ENTITY_USER);
+{ kind: 'action', authorization: binary('eq', field(ref(PRINCIPAL), F_ROLE), literal('admin')), … }
+```
+
+`PRINCIPAL` is bound to a record keyed by the principal entity's field ids, and **only where
+an authority evaluates**. A rule that cannot be evaluated denies. `requiresConfirmation` is
+interaction, not authorization.
+
+### Running one
+
+```ts
+const server = createAxiomServer({ ir: compileToServerIR(graph), persistence, host });
+await server.start();
+await serveOverHttp({ server, port: 3000 });
+
+const app = createAxiomRuntime({ ir, rootElement, host, remote: createRemoteGateway(transport) });
+await app.syncAuthoritativeState();
+```
+
+A remote invocation returns `{ ok: false, pending: true }` and its outcome arrives later,
+through the same action-outcome lifecycle a local refusal uses — so a `diagnostic` node
+presents a server refusal exactly as it presents a local one.
+
+Boundary diagnostics: `UNKNOWN_SERVER_ACTION` `ARGUMENT_TYPE_MISMATCH` `AUTHORIZATION_DENIED`
+`CONCURRENCY_CONFLICT` `MALFORMED_REQUEST` `AUTHORITY_UNREACHABLE`, plus `SERVER_STATE_WRITE`
+and `REMOTE_ACTION_UNAVAILABLE` on the client.
 
 ## Serialization
 

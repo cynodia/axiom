@@ -1,6 +1,6 @@
 # Semantic contract
 
-Axiom 0.5.2-alpha.1. Runtime guarantees, stated formally. This file defines behavior; it
+Axiom 0.6.0-alpha.1. Runtime guarantees, stated formally. This file defines behavior; it
 does not teach. Where this file and any specification in `doc/` disagree, this file
 describes the implementation and is authoritative.
 
@@ -180,6 +180,28 @@ location.
 - Values are cloned with `structuredClone`, never a JSON round trip, so `NaN` is not disguised as `null`.
 
 Full per-kind semantics: [`EXPRESSIONS.md`](EXPRESSIONS.md).
+
+## Authority
+
+Full model: [`AUTHORITY.md`](AUTHORITY.md).
+
+- `StateDef.authority` is `'client'` unless declared otherwise, so a graph with no authority metadata behaves exactly as it did in 0.5.x and needs no server.
+- A client MUST NOT commit a mutation to server-authoritative state through any path. An input bound into one is a validation error; a runtime write is refused at the store's single write path.
+- Where an action executes is **derived** from what it writes, following `for-each`, `invoke` and declared native effects. It is never declared, so it cannot disagree with the action.
+- A server action MUST NOT read client-authoritative state, and server state MUST NOT derive from it.
+- State marked `serverOnly` MUST be absent from the client IR, from snapshots, and from every answer — along with anything the client receives that reads it.
+- An authority MUST resolve an action from its own IR, and MUST NOT accept semantic definitions, operations or validation results from a caller.
+- An authority MUST validate arguments against declared parameter types before executing. Network data is untyped input.
+- `authorization` is evaluated on the authority, before any guard and before any transaction opens. A rule that cannot be evaluated MUST deny. `requiresConfirmation` is interaction and MUST NOT be treated as authorization.
+- The transaction guarantees above hold unchanged on the authority: the same semantic engine executes both halves.
+- A semantic transaction MUST persist atomically. An adapter MUST NOT apply a subset of a transaction's writes, and MUST refuse a commit whose expected revisions no longer hold.
+- Two actions MUST NOT both commit from incompatible snapshots. The authority serializes execution, and a stale commit is refused with `CONCURRENCY_CONFLICT`.
+- A repeated `requestId` MUST be answered from the record rather than executed again.
+- Server IR MUST be serializable, deterministic and free of closures, and MUST declare a contract version a runtime can refuse.
+
+**Not guaranteed in 0.6**, and stated so rather than implied: read authorization per caller
+or per record, external side effects participating in a transaction, realtime
+synchronization, query semantics, and multi-node execution.
 
 ## Diagnostics as semantic UI
 

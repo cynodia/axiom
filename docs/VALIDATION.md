@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.5.2-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.6.0-alpha.1. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -36,7 +36,7 @@ non-numeric collections, and obviously incompatible assignments.
 
 ## Codes
 
-49 codes, exported as `VALIDATION_CODES`. Every one is reachable.
+55 codes, exported as `VALIDATION_CODES`. Every one is reachable.
 
 ### Ids and references
 
@@ -78,6 +78,7 @@ non-numeric collections, and obviously incompatible assignments.
 | `IDENTITY_FIELD_MISMATCH` | An identity selector using a field of the wrong entity. |
 | `INVALID_SELECTOR_TYPE` | An index selector that is statically not a number. |
 | `EPHEMERAL_STATE_PERSISTED` | `ephemeral: true` together with `persistence`. |
+| `CLIENT_WRITE_TO_SERVER_STATE` | An input bound into server-authoritative state. See [Authority](#authority). |
 
 ### Initial values
 
@@ -133,6 +134,21 @@ application from compiling.
 | `RIGID_HORIZONTAL_LAYOUT` | Explicit `wrap: false`, horizontal, 3+ children, no `compact` override. | warning |
 | `CONFLICTING_SIZING` | `minWidth` wider than `maxWidth`. | warning |
 | `OPAQUE_PRESENTATION` | A node carries `rendererOverrides`, which semantic analysis cannot understand. | warning |
+
+### Authority
+
+The boundary between a client and an authority is structural, so a graph that could let a
+client commit authoritative state does not compile. Full model:
+[`AUTHORITY.md`](AUTHORITY.md).
+
+| Code | Raised when | Severity |
+| --- | --- | --- |
+| `CLIENT_WRITE_TO_SERVER_STATE` | An input is bound into server-authoritative state. Bind it to a draft and commit through an action. | error |
+| `SERVER_DEPENDS_ON_CLIENT_STATE` | A server action reads, or server state derives from, state the authority does not own. Pass the value as an action parameter. | error |
+| `SERVER_ONLY_STATE_OBSERVED` | Something the client receives reads a `serverOnly` state — an input, a derivation, a UI expression. | error |
+| `AUTHORIZATION_WITHOUT_PRINCIPAL` | An `authorization` expression with no principal entity declared. **Also raised as a warning** when an application has server state but no action declares authorization, so every caller may invoke everything. | error / warning |
+| `PRINCIPAL_REFERENCE_ON_CLIENT` | `PRINCIPAL` is read where a client evaluates, or an `authorization` sits on an action no authority executes. | error |
+| `INVALID_PRINCIPAL_ENTITY` | `principalEntityId` names something that is not an entity. | error |
 
 ### Accessibility
 

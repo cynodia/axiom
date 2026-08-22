@@ -16,6 +16,7 @@ const FORBIDDEN_PREFIXES = ['file:', 'link:', 'workspace:', '../', './', 'git+',
 const REQUIRED_FACADE_DOCS = [
   'docs/AGENT_REFERENCE.md',
   'docs/SEMANTIC_CONTRACT.md',
+  'docs/AUTHORITY.md',
   'docs/GRAPH_MODEL.md',
   'docs/EXPRESSIONS.md',
   'docs/LOCATIONS.md',
@@ -116,6 +117,14 @@ for (const { name } of publishable) {
   const required = ['README.md', 'LICENSE', 'dist/index.js', 'dist/index.d.ts'];
   if (name === '@cynodia/axiom') {
     required.push(...REQUIRED_FACADE_DOCS);
+  }
+  if (name === '@cynodia/axiom-server') {
+    // The conformance fixtures are the contract an independent runtime is held to, so they
+    // travel with the package rather than living only in the repository.
+    const fixtures = files.filter((file) => /^package\/conformance\/.+\.json$/.test(file));
+    if (fixtures.length < 5) {
+      report(name, `ships ${fixtures.length} conformance fixtures, expected the whole suite`);
+    }
   }
   for (const file of required) {
     if (!has(file)) {

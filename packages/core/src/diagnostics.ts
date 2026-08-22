@@ -71,4 +71,13 @@ export const VALIDATION_CODES = {
   formInputMissingLabel: 'FORM_INPUT_MISSING_LABEL',
   invalidHeadingStructure: 'INVALID_HEADING_STRUCTURE',
   opaquePresentation: 'OPAQUE_PRESENTATION',
+
+  // Authority. A graph that cannot execute safely across the trust boundary is rejected
+  // rather than left to fail at run time.
+  clientWriteToServerState: 'CLIENT_WRITE_TO_SERVER_STATE',
+  serverDependsOnClientState: 'SERVER_DEPENDS_ON_CLIENT_STATE',
+  authorizationWithoutPrincipal: 'AUTHORIZATION_WITHOUT_PRINCIPAL',
+  principalReferenceOnClient: 'PRINCIPAL_REFERENCE_ON_CLIENT',
+  serverOnlyStateObserved: 'SERVER_ONLY_STATE_OBSERVED',
+  invalidPrincipalEntity: 'INVALID_PRINCIPAL_ENTITY',
 } as const;

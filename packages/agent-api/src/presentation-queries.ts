@@ -1,17 +1,23 @@
 import {
+  actionAuthority,
+  authorityContext,
   isUINode,
   primaryChildIds,
   resolvePresentationMap,
+  stateAuthority,
   uiChildIds,
   validateGraph,
 } from '@cynodia/axiom-core';
 import type {
   ActionDef,
+  Authority,
+  AuthorityContext,
   Density,
   DeviceClass,
   DiagnosticNode,
   FormNode,
   NodeId,
+  Expression,
   Presentation,
   PresentationRole,
   ResolvedPresentation,
@@ -23,6 +29,7 @@ import type {
   ValidationIssue,
   ViewNode,
 } from '@cynodia/axiom-core';
+import { statesWrittenBy } from '@cynodia/axiom-core';
 import { GraphQueries } from './queries.js';
 
 /** Diagnostic codes produced by the presentation layer. */
@@ -210,6 +217,82 @@ export class PresentationQueries extends GraphQueries {
         (action.postconditions ?? []).length > 0;
       return canRefuse;
     });
+  }
+
+  // -------------------------------------------------------------- authority
+
+  /**
+   * Who may commit this state. Absent metadata means `'client'`, so a 0.5.x graph answers
+   * `'client'` for everything.
+   */
+  getAuthority(stateId: NodeId): Authority | undefined {
+    const state = this.graph.getNode<StateDef>(stateId);
+    return state?.kind === 'state' ? stateAuthority(state) : undefined;
+  }
+
+  /** Where this action executes. Derived from what it writes, never declared. */
+  getActionAuthority(actionId: NodeId): Authority | undefined {
+    const action = this.graph.getNode<ActionDef>(actionId);
+    return action?.kind === 'action' ? actionAuthority(action, this.authority()) : undefined;
+  }
+
+  /** Actions the client must send to the authority rather than execute itself. */
+  getServerActions(): ActionDef[] {
+    const context = this.authority();
+    return this.graph
+      .getNodesByKind('action')
+      .filter((action) => actionAuthority(action, context) === 'server');
+  }
+
+  /** States a client may commit directly. */
+  getClientWritableStates(): StateDef[] {
+    return this.graph
+      .getNodesByKind('state')
+      .filter((state) => !state.derivation && stateAuthority(state) === 'client');
+  }
+
+  /** States only the authority may commit. */
+  getServerWritableStates(): StateDef[] {
+    return this.graph
+      .getNodesByKind('state')
+      .filter((state) => !state.derivation && stateAuthority(state) === 'server');
+  }
+
+  /** States the client never receives at all. */
+  getServerOnlyStates(): StateDef[] {
+    return this.graph.getNodesByKind('state').filter((state) => state.serverOnly === true);
+  }
+
+  /** Actions that write any server-authoritative state, with the states each touches. */
+  getActionsAffectingServerState(): Array<{ action: ActionDef; stateIds: NodeId[] }> {
+    const context = this.authority();
+    const server = new Set(this.getServerWritableStates().map((state) => state.id));
+    return this.getServerActions().map((action) => ({
+      action,
+      stateIds: [...statesWrittenBy(action, context)].filter((id) => server.has(id)),
+    }));
+  }
+
+  /**
+   * The rule deciding whether a caller may invoke this action, or `undefined` when there is
+   * none — in which case every caller may.
+   */
+  getAuthorizationForAction(actionId: NodeId): Expression | undefined {
+    return this.graph.getNode<ActionDef>(actionId)?.authorization;
+  }
+
+  /** Server actions whose invocation no authorization rule restricts. */
+  getUnauthorizedServerActions(): ActionDef[] {
+    return this.getServerActions().filter((action) => !action.authorization);
+  }
+
+  /** Where a state's committed value survives. */
+  getPersistenceForState(stateId: NodeId): StateDef['persistence'] {
+    return this.graph.getNode<StateDef>(stateId)?.persistence;
+  }
+
+  protected authority(): AuthorityContext {
+    return authorityContext(this.graph.listNodes(), this.graph.principalEntityId);
   }
 
   /** States marked as ephemeral presentation state rather than domain facts. */

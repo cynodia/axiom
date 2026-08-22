@@ -71,6 +71,10 @@ export const RUNTIME_DIAGNOSTIC_CODES = {
   UNSUPPORTED_UI_NODE: 'UNSUPPORTED_UI_NODE',
   INPUT_REJECTED: 'INPUT_REJECTED',
   PERSISTED_STATE_UNREADABLE: 'PERSISTED_STATE_UNREADABLE',
+  /** A local write was attempted against state whose authority is the server. */
+  SERVER_STATE_WRITE: 'SERVER_STATE_WRITE',
+  /** An action belongs to the authority, but no gateway to it was configured. */
+  REMOTE_ACTION_UNAVAILABLE: 'REMOTE_ACTION_UNAVAILABLE',
 } as const;
 
 export type RuntimeDiagnosticCode =
@@ -98,6 +102,29 @@ export interface RuntimeDiagnostic {
 export interface ActionResult {
   ok: boolean;
   diagnostics: RuntimeDiagnostic[];
+  /**
+   * Set when the invocation was dispatched to the authority. `ok` is not yet meaningful:
+   * the outcome arrives later, and reaches the interface through the action's recorded
+   * outcome and any `diagnostic` node presenting it.
+   */
+  pending?: true;
+}
+
+/**
+ * How a client reaches the authority.
+ *
+ * The client requests **semantic actions**; it never sends operations. A remote invocation
+ * is dispatched and answered later, so `invokeAction` returns `pending` and the outcome
+ * arrives through the same diagnostic lifecycle a local refusal uses.
+ */
+export interface RemoteGateway {
+  invoke(request: {
+    actionId: NodeId;
+    arguments: Record<string, unknown>;
+    requestId: string;
+  }): Promise<{ ok: boolean; diagnostics: RuntimeDiagnostic[]; changes: Record<NodeId, unknown> }>;
+  /** The authoritative values of every observable state. */
+  snapshot?(): Promise<{ states: Record<NodeId, unknown> }>;
 }
 
 /**
@@ -110,7 +137,8 @@ export interface ActionResult {
  */
 export interface ActionOutcome {
   actionId: NodeId;
-  outcome: 'ok' | 'failed' | 'cancelled';
+  /** `pending` means the request is with the authority and the outcome is not yet known. */
+  outcome: 'ok' | 'failed' | 'cancelled' | 'pending';
   diagnostics: RuntimeDiagnostic[];
 }
 
@@ -134,6 +162,11 @@ export interface AxiomRuntimeOptions {
   rootElement: DomElement;
   host: HostEnvironment;
   nativeOperations?: Record<string, NativeImplementation>;
+  /**
+   * How to reach the authority. Required if the application has server-authoritative
+   * state; without it a remote invocation reports `REMOTE_ACTION_UNAVAILABLE`.
+   */
+  remote?: RemoteGateway;
   inputValidation?: InputValidationMode;
   /** Records previous and next values in the mutation log. */
   recordMutationValues?: boolean;
@@ -173,6 +206,23 @@ export interface AxiomRuntime {
   /** Every mutation this runtime has applied, in order, with its semantic location. */
   getMutationLog(): MutationLogEntry[];
   registerNativeOperation(implementationId: string, implementation: NativeImplementation): void;
+  /**
+   * Invokes an action and waits for its outcome. For a remote action this awaits the
+   * authority's answer; for a local one it is `invokeAction` in promise form.
+   */
+  invokeActionAsync(id: NodeId, args?: Record<string, unknown>): Promise<ActionResult>;
+  /**
+   * Loads the authoritative snapshot and applies it. Called by `start()` when a gateway
+   * provides one.
+   */
+  syncAuthoritativeState(): Promise<void>;
+  /**
+   * Evaluates an expression in the root scope, reporting rather than throwing. It is a
+   * pure read: an expression cannot change state.
+   *
+   * An authority uses it to evaluate an authorization rule before opening a transaction.
+   */
+  evaluate(expression: Expression): { ok: true; value: unknown } | { ok: false; diagnostic: RuntimeDiagnostic };
 }
 
 interface Scope {
@@ -255,6 +305,15 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   let transactionCounter = 0;
   const mutationLog: MutationLogEntry[] = [];
   const inputValidation = options.inputValidation ?? 'immediate';
+  const remote = options.remote;
+  const remoteActionIds = new Set<string>(ir.remoteActionIds ?? []);
+  /**
+   * Set only while an authoritative answer is being applied. The authority owns the value;
+   * every other path is refused, which is what makes the boundary structural rather than a
+   * convention about where inputs are bound.
+   */
+  let applyingAuthoritative = false;
+  let remoteRequests = 0;
   const theme = ir.theme;
   const locale = theme?.locale ?? 'en-US';
   /**
@@ -450,6 +509,18 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
 
   /** The only place the store is written. Values are frozen on the way in. */
   function writeState(stateId: string, value: unknown): void {
+    if (!applyingAuthoritative && ir.authority?.[stateId as NodeId] === 'server') {
+      // Whatever the path — an action, an input, an administrative hydrate — a client does
+      // not commit state the authority owns.
+      report({
+        code: RUNTIME_DIAGNOSTIC_CODES.SERVER_STATE_WRITE,
+        message: `${stateId} is server-authoritative and cannot be written by this client`,
+        severity: 'error',
+        nodeId: stateId as NodeId,
+        stateId: stateId as NodeId,
+      });
+      return;
+    }
     if (!statesById.has(stateId)) {
       report({
         code: RUNTIME_DIAGNOSTIC_CODES.UNKNOWN_STATE,
@@ -730,19 +801,27 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
     const left = evaluate(leftExpression, scope);
     const right = evaluate(rightExpression, scope);
+    /**
+     * A number that is not finite has no place in an ordering. Every ordered comparison
+     * against one is false, so a guard fails closed rather than passing on a value that
+     * could not be computed — or one a hostile caller supplied.
+     */
+    const unordered =
+      (typeof left === 'number' && !Number.isFinite(left)) ||
+      (typeof right === 'number' && !Number.isFinite(right));
     switch (operator) {
       case 'eq':
         return valuesEqual(left, right);
       case 'neq':
         return !valuesEqual(left, right);
       case 'gt':
-        return compareValues(left, right) > 0;
+        return !unordered && compareValues(left, right) > 0;
       case 'gte':
-        return compareValues(left, right) >= 0;
+        return !unordered && compareValues(left, right) >= 0;
       case 'lt':
-        return compareValues(left, right) < 0;
+        return !unordered && compareValues(left, right) < 0;
       case 'lte':
-        return compareValues(left, right) <= 0;
+        return !unordered && compareValues(left, right) <= 0;
       case 'add':
         return Number(left ?? 0) + Number(right ?? 0);
       case 'subtract':
@@ -1215,7 +1294,94 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     }
   }
 
+  /**
+   * Applies an authoritative answer. The only path permitted to write server-owned state —
+   * and it still goes through `writeState`, so the store keeps exactly one writer.
+   */
+  function applyAuthoritative(changes: Record<string, unknown>): void {
+    applyingAuthoritative = true;
+    try {
+      for (const [stateId, value] of Object.entries(changes)) {
+        if (statesById.has(stateId)) {
+          writeState(stateId, cloneValue(value));
+        }
+      }
+    } finally {
+      applyingAuthoritative = false;
+    }
+  }
+
+  /**
+   * Dispatches a semantic action to the authority.
+   *
+   * The client sends an action id and typed arguments — never operations. The answer is
+   * applied when it arrives, and recorded through the same outcome lifecycle a local
+   * refusal uses, so a `diagnostic` node presents a server refusal exactly as it presents
+   * a local one.
+   */
+  function runRemoteAction(action: ActionDef, args: Record<string, unknown>): ActionResult {
+    if (!remote) {
+      const failure: RuntimeDiagnostic = {
+        code: RUNTIME_DIAGNOSTIC_CODES.REMOTE_ACTION_UNAVAILABLE,
+        message: `${action.name ?? action.id} executes on the authority, but no gateway to it is configured`,
+        severity: 'error',
+        nodeId: action.id,
+        actionId: action.id,
+      };
+      report(failure);
+      recordOutcome(action.id, 'failed', [failure]);
+      renderApplication();
+      return { ok: false, diagnostics: [failure] };
+    }
+    if (action.requiresConfirmation && !askForConfirmation(action)) {
+      // Confirmation is interaction, and it happens here. The authority never treats it as
+      // an authorization mechanism.
+      recordOutcome(action.id, 'cancelled', []);
+      renderApplication();
+      return { ok: false, diagnostics: [] };
+    }
+
+    remoteRequests += 1;
+    // A stable key, so a retry after a lost answer cannot execute the action twice.
+    const requestId = `${ir.id}:${action.id}:${remoteRequests}:${host.uuid()}`;
+    recordOutcome(action.id, 'pending', []);
+    renderApplication();
+
+    const settle = remote
+      .invoke({ actionId: action.id, arguments: args, requestId })
+      .then((answer) => {
+        applyAuthoritative(answer.changes ?? {});
+        answer.diagnostics.forEach(report);
+        recordOutcome(action.id, answer.ok ? 'ok' : 'failed', answer.ok ? [] : answer.diagnostics);
+        renderApplication();
+        return { ok: answer.ok, diagnostics: answer.diagnostics };
+      })
+      .catch((error: unknown) => {
+        // A transport failure becomes a structured diagnostic, not an escaping exception.
+        const failure: RuntimeDiagnostic = {
+          code: RUNTIME_DIAGNOSTIC_CODES.REMOTE_ACTION_UNAVAILABLE,
+          message: error instanceof Error ? error.message : String(error),
+          severity: 'error',
+          nodeId: action.id,
+          actionId: action.id,
+        };
+        report(failure);
+        recordOutcome(action.id, 'failed', [failure]);
+        renderApplication();
+        return { ok: false, diagnostics: [failure] };
+      });
+    pending.set(action.id, settle);
+    return { ok: false, pending: true, diagnostics: [] };
+  }
+
+  /** In-flight remote invocations, so `invokeActionAsync` can await one. */
+  const pending = new Map<string, Promise<ActionResult>>();
+
   function runAction(actionId: string, args: Record<string, unknown> = {}): ActionResult {
+    const remoteAction = remoteActionIds.has(actionId) ? ir.actions[actionId as NodeId] : undefined;
+    if (remoteAction) {
+      return runRemoteAction(remoteAction, args);
+    }
     return collecting((collected) => {
       const started = collected.length;
       const result = runActionCollecting(actionId, args, collected);
@@ -2174,6 +2340,25 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     },
     registerNativeOperation(implementationId: string, implementation: NativeImplementation): void {
       natives.set(implementationId, implementation);
+    },
+    async invokeActionAsync(id: NodeId, args: Record<string, unknown> = {}): Promise<ActionResult> {
+      const result = runAction(id, args);
+      if (!result.pending) {
+        return result;
+      }
+      return (await pending.get(id)) ?? result;
+    },
+    async syncAuthoritativeState(): Promise<void> {
+      if (!remote?.snapshot) {
+        return;
+      }
+      const snapshot = await remote.snapshot();
+      applyAuthoritative(snapshot.states ?? {});
+      renderApplication();
+    },
+    evaluate(expression: Expression) {
+      const outcome = tryEvaluate(expression, rootScope(), {});
+      return outcome.ok ? { ok: true as const, value: outcome.value } : { ok: false as const, diagnostic: outcome.diagnostic };
     },
   };
 }
