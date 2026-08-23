@@ -4,7 +4,7 @@
   "title": "Axiom semantic protocol v1",
   "description": "What a client may send an authority and what it may receive back. A client requests semantic operations — \"invoke action X with arguments Y\" — never a mutation program. Nothing here mentions a transport.",
   "contract": "axiom.protocol.v1",
-  "release": "0.6.1-alpha.1",
+  "release": "0.6.2-alpha.1",
   "oneOf": [
     {
       "$ref": "#/$defs/ServerRequest"

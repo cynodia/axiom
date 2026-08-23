@@ -568,7 +568,7 @@ result is identical to some serial order. Across processes, correctness rests on
 persistence adapter's revision check — the contract guarantees that a commit from a stale
 snapshot is refused, not that two processes coordinate.
 
-## Not in 0.6.1
+## Not in 0.6.2
 
 Stated plainly rather than left to discovery:
 
