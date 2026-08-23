@@ -1,6 +1,6 @@
 # Axiom UI Toolkit — Agent Reference
 
-`@cynodia/axiom-ui` 0.7.0-alpha.1. Semantic UI patterns for Axiom.
+`@cynodia/axiom-ui` 0.7.0-alpha.2. Semantic UI patterns for Axiom.
 
 Read this plus [`PATTERN_CATALOG.json`](PATTERN_CATALOG.json) and the `.d.ts` declarations.
 Nothing else should be necessary.

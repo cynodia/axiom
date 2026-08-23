@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom-compiler",
-  "version": "0.7.0-alpha.1",
+  "version": "0.7.0-alpha.2",
   "description": "Normalizes an Axiom application graph and emits a self-contained page.",
   "license": "MIT",
   "author": "AskTech AS",
@@ -31,8 +31,8 @@
     }
   },
   "dependencies": {
-    "@cynodia/axiom-core": "0.7.0-alpha.1",
-    "@cynodia/axiom-runtime": "0.7.0-alpha.1"
+    "@cynodia/axiom-core": "0.7.0-alpha.2",
+    "@cynodia/axiom-runtime": "0.7.0-alpha.2"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",

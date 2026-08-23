@@ -6,13 +6,15 @@ Axiom represents application behavior, state, UI structure and presentation as s
 semantic data executed by generic runtimes. An application is a typed graph, not source
 files: the JavaScript and HTML that reach the browser are output, and are never edited.
 
-**Status: experimental / alpha (0.6.0-alpha.x).** The API may change between alpha
+**Status: experimental / alpha (0.7.0-alpha.x).** The API may change between alpha
 releases. The documentation in `docs/` describes this exact version.
 
 ## Installation
 
 ```bash
-npm install @cynodia/axiom
+npm install @cynodia/axiom            # the graph, compiler, runtime and agent API
+npm install @cynodia/axiom-ui         # semantic UI authoring patterns (build time only)
+npm install @cynodia/axiom-server     # only if the application has an authority
 ```
 
 ## Canonical mental model
@@ -26,14 +28,23 @@ npm install @cynodia/axiom
 | `ActionDef` | A transactional semantic operation. |
 | `ConstraintDef` | An invariant over proposed state. |
 | `TransitionConstraintDef` | An invariant over previous committed state → proposed state. |
-| UI nodes | Semantic interaction structure. |
+| UI nodes | Semantic interaction structure (view, container, text, repeat, field-display, form, input, button, conditional, diagnostic, dialog). |
 | `Presentation` | Semantic UX intent. Roles and tokens, never CSS. |
 | `Theme` | Translation of presentation intent into visual design. |
 | Renderer | Platform-specific materialization. Not part of the graph. |
+| `StateDef.authority` | Who may commit a value: the client, or the server. The one declaration the split follows from. |
+| `ServerIR` | The half an authority executes. Portable JSON, frozen as `axiom.server.v1`. |
+| Semantic protocol | What a client may ask for: named actions with arguments, never mutation programs. |
+| `PersistenceAdapter` | Where a decided value survives. Not part of the semantics. |
 
 ```text
-ApplicationGraph → validateGraph → compileToIR → runtime (+ theme → renderer) → application
+ApplicationGraph → validateGraph → compileToIR      → runtime (+ theme → renderer) → page
+                                 → compileToServerIR → authority (+ persistence)
 ```
+
+Authority is **derived, never declared twice**: an action that writes server-owned state is a
+server action, so where code runs cannot disagree with what it does. Full model:
+`docs/AUTHORITY.md`.
 
 ## Load-bearing invariants
 
@@ -53,6 +64,10 @@ Know these before authoring an application. Each is stated in full in
 11. **`null` and `[]` are distinct.** `null` fails a collection operator; `[]` does not. A collection is truthy only when non-empty.
 12. **`required(x)` asks only whether a value exists.** `required([])` is `true`.
 13. **A theme changes presentation only.**
+14. **A client cannot commit server-authoritative state**, by any path. An action that writes it executes on the authority.
+15. **The client is untrusted.** Guards, authorization and argument types are checked again on the authority.
+16. **A client requests semantic actions, never mutation programs.** The protocol carries no way to send operations.
+17. **`axiom.server.v1` is frozen and language-independent.** Its semantics are defined by `docs/AUTHORITY.md`, the published JSON Schemas and the conformance fixtures — not by this implementation.
 
 ## Minimal application
 
@@ -126,6 +141,7 @@ The complete operational contract ships with this package, in `docs/`.
 | Semantic UI nodes and bindings | `docs/UI.md` |
 | Presentation, UX intent, themes, formatting | `docs/PRESENTATION.md` |
 | Runtime API and diagnostic codes | `docs/RUNTIME.md` |
+| Server authority, Server IR, the protocol and persistence | `docs/AUTHORITY.md` |
 | Machine queries and graph transformations | `docs/AGENT_API.md` |
 | Validation codes | `docs/VALIDATION.md` |
 | Mistakes that compile but are wrong | `docs/ANTI_PATTERNS.md` |
@@ -143,6 +159,13 @@ This package re-exports four, which can also be installed individually:
 | `@cynodia/axiom-compiler` | Normalization into an IR, theme stylesheet, page emission. |
 | `@cynodia/axiom-runtime` | State store, evaluation, mutation engine, constraint checking, renderer, routing. |
 | `@cynodia/axiom-agent-api` | Semantic and presentation queries, mutation impact, transactional transformations. |
+
+Two published packages are deliberately **not** re-exported, and are installed separately:
+
+| Package | Why it stands apart |
+| --- | --- |
+| `@cynodia/axiom-server` | The authoritative runtime: Server IR execution, persistence adapters, the semantic protocol and the Node host. It imports `node:http` and `node:sqlite`, and a browser bundle must not. |
+| `@cynodia/axiom-ui` | Semantic UI authoring patterns, expanded into ordinary graph nodes at **build time**. Re-exporting it would make every application carry an authoring dependency forever, and would make "this application no longer needs the toolkit" impossible to state or to test. |
 
 ## License
 

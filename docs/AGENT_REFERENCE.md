@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.7.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.7.0-alpha.2. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -31,7 +31,7 @@ One canonical term per concept. These are not interchangeable.
 ## Graph construction
 
 ```ts
-const graph = new ApplicationGraph(id, name);      // version defaults to '0.6.0'
+const graph = new ApplicationGraph(id, name);      // version defaults to '0.7.0'
 graph.addNode<StateDef>({ id, kind: 'state', ... }); // returns NodeId; throws if id exists
 graph.getNode<StateDef>(id);                        // deep clone, or undefined
 graph.updateNode(node);                             // write a modified node back

@@ -12,7 +12,7 @@ mutations and persists them. Neither is written by hand: there is no route, cont
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
 **Status: experimental / alpha (0.7.0-alpha.x).** The API may change between alpha
-releases. This documentation describes 0.7.0-alpha.1.
+releases. This documentation describes 0.7.0-alpha.2.
 
 ## Who this is for
 

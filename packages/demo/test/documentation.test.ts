@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -73,6 +73,16 @@ const ALL_DOCS = new Map<string, string>([
   ...DOC_FILES.map((name) => [`docs/${name}`, read(`docs/${name}`)] as [string, string]),
 ]);
 const EVERY_DOC = [...ALL_DOCS.values()].join('\n');
+
+/**
+ * The published package READMEs. They are not the contract — `docs/` is — but they ship in
+ * the tarballs and are the first thing an npm visitor reads, so a status line naming a
+ * superseded release is drift like any other.
+ */
+const PACKAGE_READMES: [string, string][] = readdirSync(path.join(repoRoot, 'packages'))
+  .map((directory) => `packages/${directory}/README.md`)
+  .filter((file) => existsSync(path.join(repoRoot, file)))
+  .map((file) => [file, read(file)]);
 
 /** Every fenced TypeScript block in the documentation. */
 function codeBlocks(): string[] {
@@ -443,7 +453,7 @@ test('no document claims to describe a version other than the current one', () =
   const version = JSON.parse(read('package.json')).version as string;
   const release = version.replace(/-.*$/, '');
   const stale = new Set<string>();
-  for (const [file, source] of ALL_DOCS) {
+  for (const [file, source] of [...ALL_DOCS, ...PACKAGE_READMES]) {
     // Links to the specification documents carry their own historical version numbers.
     const prose = source.replace(/specs\/spec[\d.]*\.md/g, '');
     // A document "names a version" when it states which one it describes, or names a
