@@ -1,4 +1,5 @@
 import type { RemoteGateway } from './runtime-types.js';
+import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD } from './group-fields.js';
 import type {
   ActionDef,
   AnyNode,
@@ -7,6 +8,7 @@ import type {
   ConstraintDef,
   EntityDef,
   Expression,
+  ExpressionDef,
   FieldDef,
   FieldId,
   Location,
@@ -33,6 +35,7 @@ import { createTransactionManager } from './mutation/transaction.js';
 import type { RuntimeTransaction } from './mutation/transaction.js';
 import {
   ExpressionEvaluationError,
+  canonicalKey,
   cloneValue,
   compareValues,
   deepFreeze,
@@ -480,6 +483,9 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   }
 
   const statesById = new Map<string, StateDef>(ir.states.map((state) => [state.id, state]));
+  const expressionDefsById = new Map<string, ExpressionDef>(
+    Object.entries(ir.expressionDefs ?? {}),
+  );
   const entitiesById = new Map<string, EntityDef>(ir.entities.map((entity) => [entity.id, entity]));
   const parameterTypes = new Map<string, TypeRef | undefined>();
   for (const action of Object.values(ir.actions)) {
@@ -849,6 +855,50 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       case 'flatten': {
         const source = requireCollection(evaluate(expression.source, scope), 'flatten');
         return source.flatMap((member) => requireCollection(member, 'flatten'));
+      }
+      case 'group': {
+        const source = requireCollection(evaluate(expression.source, scope), 'group');
+        // Groups in first-appearance order, members in source order, keys compared
+        // structurally. All three are contract, not implementation detail.
+        const groups = new Map<string, { key: unknown; items: unknown[] }>();
+        for (const item of source) {
+          const key = evaluate(expression.by, childScope(scope, expression.scopeId, item));
+          const identity = canonicalKey(key);
+          const existing = groups.get(identity);
+          if (existing) {
+            existing.items.push(item);
+          } else {
+            groups.set(identity, { key, items: [item] });
+          }
+        }
+        return [...groups.values()].map((entry) => ({
+          [GROUP_KEY_FIELD]: entry.key,
+          [GROUP_ITEMS_FIELD]: entry.items,
+        }));
+      }
+      case 'expression-ref': {
+        const definition = expressionDefsById.get(expression.expressionId);
+        if (!definition) {
+          throw new ExpressionEvaluationError(
+            `Expression definition ${expression.expressionId} is not part of this application`,
+            { expressionId: expression.expressionId },
+          );
+        }
+        // Arguments are evaluated here; the body is evaluated in a scope of its own, with
+        // no parent. That isolation is the definition's contract: it cannot see the
+        // caller's iteration scopes, so it means the same thing everywhere it is used.
+        const bound = new Map<string, unknown>();
+        for (const parameter of definition.parameters ?? []) {
+          const argument = expression.arguments?.[String(parameter.id)];
+          if (argument === undefined) {
+            throw new ExpressionEvaluationError(
+              `Expression ${definition.id} was used without supplying ${parameter.id}`,
+              { expressionId: definition.id, parameterId: parameter.id },
+            );
+          }
+          bound.set(String(parameter.id), evaluate(argument, scope));
+        }
+        return evaluate(definition.expression, { values: bound });
       }
       case 'conditional':
         return toBoolean(evaluate(expression.condition, scope))

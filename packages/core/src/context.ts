@@ -1,6 +1,6 @@
 import type { ApplicationGraph } from './graph.js';
 import type { FieldId, NodeId } from './ids.js';
-import type { EntityDef, StateDef } from './nodes.js';
+import type { EntityDef, ExpressionDef, StateDef } from './nodes.js';
 import type { SemanticContext } from './infer.js';
 import type { TypeRef } from './type-ref.js';
 
@@ -20,6 +20,12 @@ export function semanticContextFromGraph(graph: ApplicationGraph): SemanticConte
       parameterNames.set(parameter.id, parameter.name);
     }
   }
+  for (const definition of graph.getNodesByKind('expression')) {
+    for (const parameter of definition.parameters ?? []) {
+      parameterTypes.set(parameter.id, parameter.valueType);
+      parameterNames.set(parameter.id, parameter.name);
+    }
+  }
 
   return {
     getState: (id: NodeId): StateDef | undefined => {
@@ -31,6 +37,10 @@ export function semanticContextFromGraph(graph: ApplicationGraph): SemanticConte
       return node?.kind === 'entity' ? node : undefined;
     },
     getField: (id: FieldId) => graph.getField(id),
+    getExpressionDef: (id: NodeId): ExpressionDef | undefined => {
+      const node = graph.getNode(id);
+      return node?.kind === 'expression' ? node : undefined;
+    },
     getParameterType: (id: NodeId) => parameterTypes.get(id),
     getName: (id: NodeId) => graph.getNode(id)?.name ?? parameterNames.get(id),
   };

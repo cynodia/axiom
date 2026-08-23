@@ -1,4 +1,5 @@
 import type { FieldId, NodeId } from './ids.js';
+import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD, isGroupFieldId } from './group.js';
 import type { LiteralValue } from './nodes.js';
 
 /**
@@ -21,7 +22,9 @@ export type Expression =
   | EveryExpression
   | SomeExpression
   | FlattenExpression
-  | ConditionalExpression;
+  | ConditionalExpression
+  | GroupExpression
+  | ExpressionRefExpression;
 
 export type ExpressionKind = Expression['kind'];
 
@@ -42,6 +45,8 @@ export const EXPRESSION_KINDS: readonly ExpressionKind[] = [
   'some',
   'flatten',
   'conditional',
+  'group',
+  'expression-ref',
 ];
 
 export type LiteralPrimitive = string | number | boolean | null;
@@ -215,6 +220,48 @@ export interface FlattenExpression {
   source: Expression;
 }
 
+/**
+ * Partitions a collection by a key.
+ *
+ * `Collection<A>` becomes `Collection<Group<K, A>>`, where the key is `by` evaluated with
+ * each member bound to `scopeId` — the same iteration scope every other collection operator
+ * introduces. A group is read with `groupKey` and `groupItems`.
+ *
+ * The **ordering contract** is part of the semantics, not an accident of implementation:
+ *
+ * - groups appear in the order their key was **first seen** in the source collection;
+ * - members within a group keep their source order;
+ * - two keys are the same key when they are structurally equal, so a key may be a nested
+ *   record and not only a primitive;
+ * - an empty collection produces no groups, and a source that is `null` fails the
+ *   evaluation like every other collection operator.
+ *
+ * Nothing is sorted. A caller that wants groups in key order says so with `sort`, which is
+ * the operator whose job that is.
+ */
+export interface GroupExpression {
+  kind: 'group';
+  source: Expression;
+  scopeId: NodeId;
+  by: Expression;
+}
+
+/**
+ * Evaluates a named expression definition — the reuse mechanism (`ExpressionDef`).
+ *
+ * `arguments` are keyed by the definition's parameter ids and are evaluated in **this**
+ * scope; the body is then evaluated in an **isolated** scope that sees the parameters and
+ * application state and nothing else. That isolation is the whole point: a definition
+ * reused in three places cannot pick up an iteration scope from one of them, and its own
+ * internal scope ids can never collide with a caller's.
+ */
+export interface ExpressionRefExpression {
+  kind: 'expression-ref';
+  expressionId: NodeId;
+  /** Keyed by parameter id. */
+  arguments?: Record<string, Expression>;
+}
+
 /** Chooses between two values. Both branches are expressions, never callbacks. */
 export interface ConditionalExpression {
   kind: 'conditional';
@@ -312,6 +359,34 @@ export function flatten(source: Expression): FlattenExpression {
   return { kind: 'flatten', source };
 }
 
+export function group(source: Expression, scopeId: NodeId, by: Expression): GroupExpression {
+  return { kind: 'group', source, scopeId, by };
+}
+
+/** The key every member of a group shares. */
+export function groupKey(source: Expression): FieldExpression {
+  return field(source, GROUP_KEY_FIELD);
+}
+
+/** The members of a group, in the order they appeared in the source collection. */
+export function groupItems(source: Expression): FieldExpression {
+  return field(source, GROUP_ITEMS_FIELD);
+}
+
+/**
+ * References a named expression definition, optionally supplying its parameters.
+ *
+ * Deliberately not `ref`: `ref` resolves a value in the scope chain, and a definition is not
+ * a value in scope. A separate kind means a reader can see that an expression reaches into a
+ * definition without resolving anything first.
+ */
+export function expressionRef(
+  expressionId: NodeId,
+  args?: Record<string, Expression>,
+): ExpressionRefExpression {
+  return { kind: 'expression-ref', expressionId, ...(args ? { arguments: args } : {}) };
+}
+
 export function conditional(
   condition: Expression,
   whenTrue: Expression,
@@ -365,6 +440,15 @@ export function walkExpression(expression: Expression, visit: (node: Expression)
     case 'flatten':
       walkExpression(expression.source, visit);
       return;
+    case 'group':
+      walkExpression(expression.source, visit);
+      walkExpression(expression.by, visit);
+      return;
+    case 'expression-ref':
+      for (const argument of Object.values(expression.arguments ?? {})) {
+        walkExpression(argument, visit);
+      }
+      return;
     case 'conditional':
       walkExpression(expression.condition, visit);
       walkExpression(expression.whenTrue, visit);
@@ -382,11 +466,25 @@ export function constructedFieldIds(expression: Expression): FieldId[] {
   return expression.kind === 'object' ? expression.entries.map((entry) => entry.fieldId) : [];
 }
 
+/** Expression definitions an expression reaches directly, in tree order. */
+export function expressionDefsIn(expression: Expression): NodeId[] {
+  const found: NodeId[] = [];
+  walkExpression(expression, (node) => {
+    if (node.kind === 'expression-ref') {
+      found.push(node.expressionId);
+    }
+  });
+  return found;
+}
+
 /** Field ids an expression reads, including nested sources and constructed records. */
 export function expressionFieldIds(expression: Expression): FieldId[] {
   const found: FieldId[] = [];
   walkExpression(expression, (node) => {
-    if (node.kind === 'field') {
+    // A group's own positions are not fields of any entity, so nothing may resolve them
+    // as one. Reading them is still a read of whatever the group was built from, which is
+    // attributed through the group's source.
+    if (node.kind === 'field' && !isGroupFieldId(node.fieldId)) {
       found.push(node.fieldId);
     }
     if (node.kind === 'object') {

@@ -2,6 +2,7 @@ import type {
   ActionDef,
   ConstraintDef,
   EntityDef,
+  ExpressionDef,
   GraphEdge,
   RouteDef,
   StateDef,
@@ -17,7 +18,19 @@ export type SemanticNodeKind =
   | 'action'
   | 'constraint'
   | 'transition-constraint'
-  | 'route';
+  | 'route'
+  | 'expression';
+
+/** Every semantic node kind, enumerated so tests can walk them. */
+export const SEMANTIC_NODE_KINDS: readonly SemanticNodeKind[] = [
+  'entity',
+  'state',
+  'action',
+  'constraint',
+  'transition-constraint',
+  'route',
+  'expression',
+];
 
 export type NodeKind = SemanticNodeKind | UINodeKind;
 
@@ -28,6 +41,7 @@ export type AnyNode =
   | ConstraintDef
   | TransitionConstraintDef
   | RouteDef
+  | ExpressionDef
   | UINode;
 
 export type NodeOfKind<K extends NodeKind> = Extract<AnyNode, { kind: K }>;

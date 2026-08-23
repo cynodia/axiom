@@ -1,4 +1,4 @@
-import { constructedFieldIds, expressionFieldIds, walkExpression } from './expressions.js';
+import { constructedFieldIds, expressionDefsIn, expressionFieldIds, walkExpression } from './expressions.js';
 import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
 import type {
@@ -6,6 +6,7 @@ import type {
   ConstraintDef,
   EdgeKind,
   EntityDef,
+  ExpressionDef,
   GraphEdge,
   MutationOperation,
   Operation,
@@ -19,17 +20,36 @@ import {
 } from './location.js';
 import type { Location } from './location.js';
 import type { TypeRef } from './type-ref.js';
+import { isGroupFieldId } from './group.js';
 import { isUINode } from './ui.js';
 import type { UINode } from './ui.js';
 import type { AnyNode } from './types.js';
 import type { ApplicationGraph } from './graph.js';
 
-/** Ids a `ref` expression mentions anywhere in the tree. */
-export function referencedIds(expression: Expression): NodeId[] {
+/**
+ * Ids a `ref` expression mentions anywhere in the tree.
+ *
+ * A `resolve` function makes the walk follow `expression-ref` into the definition's body, so
+ * a caller that asks "what does this expression read" gets the same answer whether the
+ * calculation was written inline or named. Without one, only the arguments are seen —
+ * which is right for a caller that is asking about this tree alone.
+ */
+export function referencedIds(
+  expression: Expression,
+  resolve?: (id: NodeId) => ExpressionDef | undefined,
+  seen: Set<NodeId> = new Set(),
+): NodeId[] {
   const found: NodeId[] = [];
   walkExpression(expression, (node) => {
     if (node.kind === 'ref') {
       found.push(node.targetId);
+    }
+    if (node.kind === 'expression-ref' && resolve && !seen.has(node.expressionId)) {
+      seen.add(node.expressionId);
+      const definition = resolve(node.expressionId);
+      if (definition) {
+        found.push(...referencedIds(definition.expression, resolve, seen));
+      }
     }
   });
   return found;
@@ -74,11 +94,16 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
   const states = new Set<NodeId>(nodes.filter((node) => node.kind === 'state').map((node) => node.id));
   const pending = new Map<string, PendingEdge>();
 
+  // Named expressions, so a consumer's reads include what the definition reads.
+  const defs = new Map<NodeId, ExpressionDef>(
+    nodes.filter((node): node is ExpressionDef => node.kind === 'expression').map((node) => [node.id, node]),
+  );
+
   // A repeat's template refers to the current item by the repeat node's own id.
   const rootScope = new Map<NodeId, readonly NodeId[]>();
   for (const node of nodes) {
     if (node.kind === 'repeat') {
-      rootScope.set(node.id, statesOf(node.source, new Map(), states));
+      rootScope.set(node.id, statesOf(node.source, new Map(), states, defs));
     }
   }
 
@@ -112,8 +137,13 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
   };
 
   const reads = (from: NodeId, expression: Expression, scope: ScopeBindings, kind: EdgeKind = 'reads'): void => {
-    for (const [stateId, fieldIds] of collectReads(expression, scope, states)) {
+    for (const [stateId, fieldIds] of collectReads(expression, scope, states, new Map(), defs)) {
       link(from, stateId, kind, [...fieldIds]);
+    }
+    // Using a named expression is a relationship in its own right: it is how "what depends
+    // on this calculation" is answerable without re-walking every expression in the graph.
+    for (const expressionId of expressionDefsIn(expression)) {
+      link(from, expressionId, 'references');
     }
   };
 
@@ -156,12 +186,12 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
         break;
       case 'constraint':
         if (node.entityId) {
-          link(node.id, node.entityId, 'constrains', expressionFieldIds(node.expression));
+          link(node.id, node.entityId, 'constrains', fieldsRead(node.expression, defs));
         }
         reads(node.id, node.expression, node.entityId ? entityScope(node.entityId) : rootScope);
         break;
       case 'transition-constraint': {
-        link(node.id, node.entityId, 'constrains', expressionFieldIds(node.expression));
+        link(node.id, node.entityId, 'constrains', fieldsRead(node.expression, defs));
         const holders = statesByEntity.get(node.entityId) ?? [];
         reads(
           node.id,
@@ -172,6 +202,11 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
       }
       case 'route':
         link(node.id, node.viewId, 'routes-to');
+        break;
+      case 'expression':
+        // The body is evaluated in isolation, so it is analyzed in isolation: no repeat
+        // bindings, no caller scope. Its parameters resolve to nothing here by design.
+        reads(node.id, node.expression, new Map());
         break;
       default:
     }
@@ -194,7 +229,12 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
  * matters: a collection reached as `coalesce(field(ref(state), lines), [])` still comes
  * from that state, and its members' fields are still reads of it.
  */
-function statesOf(expression: Expression, scope: ScopeBindings, states: ReadonlySet<NodeId>): NodeId[] {
+function statesOf(
+  expression: Expression,
+  scope: ScopeBindings,
+  states: ReadonlySet<NodeId>,
+  defs: Definitions = new Map(),
+): NodeId[] {
   switch (expression.kind) {
     case 'ref': {
       const bound = scope.get(expression.targetId);
@@ -208,21 +248,90 @@ function statesOf(expression: Expression, scope: ScopeBindings, states: Readonly
     case 'sort':
     case 'map':
     case 'flatten':
-      return statesOf(expression.source, scope, states);
+    case 'group':
+      return statesOf(expression.source, scope, states, defs);
     case 'conditional':
       return [
         ...new Set([
-          ...statesOf(expression.whenTrue, scope, states),
-          ...statesOf(expression.whenFalse, scope, states),
+          ...statesOf(expression.whenTrue, scope, states, defs),
+          ...statesOf(expression.whenFalse, scope, states, defs),
         ]),
       ];
     case 'field':
-      return statesOf(expression.source, scope, states);
+      return statesOf(expression.source, scope, states, defs);
     case 'call':
-      return [...new Set(expression.arguments.flatMap((argument) => statesOf(argument, scope, states)))];
+      return [
+        ...new Set(expression.arguments.flatMap((argument) => statesOf(argument, scope, states, defs))),
+      ];
+    case 'expression-ref': {
+      // A named calculation's members come from wherever its body draws them, which may be
+      // an argument the caller supplied. Following it is what keeps a repeat over a reused
+      // expression attributable to the state its rows actually live in.
+      const definition = defs.get(expression.expressionId);
+      if (!definition) {
+        return [];
+      }
+      return statesOf(
+        definition.expression,
+        definitionScope(expression, definition, scope, states, defs),
+        states,
+        withoutDefinition(defs, expression.expressionId),
+      );
+    }
     default:
       return [];
   }
+}
+
+type Definitions = ReadonlyMap<NodeId, ExpressionDef>;
+
+/**
+ * Fields an expression reads, including those a named expression reads on its behalf.
+ *
+ * A rule that reuses a calculation constrains the same fields as one that inlined it, so
+ * "which fields does this rule watch" must not depend on how it was written.
+ */
+function fieldsRead(expression: Expression, defs: Definitions, seen: Set<NodeId> = new Set()): FieldId[] {
+  const found = new Set<FieldId>(expressionFieldIds(expression));
+  for (const id of expressionDefsIn(expression)) {
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const definition = defs.get(id);
+    if (definition) {
+      for (const fieldId of fieldsRead(definition.expression, defs, seen)) {
+        found.add(fieldId);
+      }
+    }
+  }
+  return [...found];
+}
+
+/** Stops a cyclic definition — which validation rejects — from recursing here. */
+function withoutDefinition(defs: Definitions, id: NodeId): Definitions {
+  const next = new Map(defs);
+  next.delete(id);
+  return next;
+}
+
+/**
+ * The bindings a definition's body sees: its parameters bound to what the caller passed,
+ * and nothing of the caller's own scope. The same isolation validation enforces.
+ */
+function definitionScope(
+  reference: Expression & { kind: 'expression-ref' },
+  definition: ExpressionDef,
+  callerScope: ScopeBindings,
+  states: ReadonlySet<NodeId>,
+  defs: Definitions,
+): ScopeBindings {
+  const bindings = new Map<NodeId, readonly NodeId[]>();
+  for (const parameter of definition.parameters ?? []) {
+    const argument = reference.arguments?.[String(parameter.id)];
+    bindings.set(parameter.id, argument ? statesOf(argument, callerScope, states, defs) : []);
+  }
+  return bindings;
 }
 
 /** Entities reachable from a type, following entity fields as well as collections. */
@@ -261,6 +370,7 @@ function collectReads(
   scope: ScopeBindings,
   states: ReadonlySet<NodeId>,
   found: Map<NodeId, Set<FieldId>> = new Map(),
+  defs: Definitions = new Map(),
 ): Map<NodeId, Set<FieldId>> {
   const record = (stateId: NodeId, fieldId?: FieldId): void => {
     const entry = found.get(stateId) ?? new Set<FieldId>();
@@ -272,31 +382,33 @@ function collectReads(
 
   switch (expression.kind) {
     case 'ref':
-      for (const stateId of statesOf(expression, scope, states)) {
+      for (const stateId of statesOf(expression, scope, states, defs)) {
         record(stateId);
       }
       return found;
     case 'field':
-      for (const stateId of statesOf(expression.source, scope, states)) {
-        record(stateId, expression.fieldId);
+      for (const stateId of statesOf(expression.source, scope, states, defs)) {
+        // A group's own positions belong to no entity, so they are not recorded as field
+        // reads; reading them is still a read of the state the group was built from.
+        record(stateId, isGroupFieldId(expression.fieldId) ? undefined : expression.fieldId);
       }
-      collectReads(expression.source, scope, states, found);
+      collectReads(expression.source, scope, states, found, defs);
       return found;
     case 'object':
       for (const entry of expression.entries) {
-        collectReads(entry.value, scope, states, found);
+        collectReads(entry.value, scope, states, found, defs);
       }
       return found;
     case 'binary':
-      collectReads(expression.left, scope, states, found);
-      collectReads(expression.right, scope, states, found);
+      collectReads(expression.left, scope, states, found, defs);
+      collectReads(expression.right, scope, states, found, defs);
       return found;
     case 'unary':
-      collectReads(expression.operand, scope, states, found);
+      collectReads(expression.operand, scope, states, found, defs);
       return found;
     case 'call':
       for (const argument of expression.arguments) {
-        collectReads(argument, scope, states, found);
+        collectReads(argument, scope, states, found, defs);
       }
       return found;
     case 'filter':
@@ -304,26 +416,44 @@ function collectReads(
     case 'map':
     case 'sort':
     case 'every':
-    case 'some': {
-      collectReads(expression.source, scope, states, found);
-      const inner = bind(scope, expression.scopeId, statesOf(expression.source, scope, states));
+    case 'some':
+    case 'group': {
+      collectReads(expression.source, scope, states, found, defs);
+      const inner = bind(scope, expression.scopeId, statesOf(expression.source, scope, states, defs));
       const body =
         expression.kind === 'map'
           ? expression.projection
-          : expression.kind === 'sort'
+          : expression.kind === 'sort' || expression.kind === 'group'
             ? expression.by
             : expression.predicate;
-      collectReads(body, inner, states, found);
+      collectReads(body, inner, states, found, defs);
       return found;
     }
     case 'flatten':
-      collectReads(expression.source, scope, states, found);
+      collectReads(expression.source, scope, states, found, defs);
       return found;
     case 'conditional':
-      collectReads(expression.condition, scope, states, found);
-      collectReads(expression.whenTrue, scope, states, found);
-      collectReads(expression.whenFalse, scope, states, found);
+      collectReads(expression.condition, scope, states, found, defs);
+      collectReads(expression.whenTrue, scope, states, found, defs);
+      collectReads(expression.whenFalse, scope, states, found, defs);
       return found;
+    case 'expression-ref': {
+      // The arguments are read in the caller's scope; the body in the definition's own.
+      for (const argument of Object.values(expression.arguments ?? {})) {
+        collectReads(argument, scope, states, found, defs);
+      }
+      const definition = defs.get(expression.expressionId);
+      if (definition) {
+        collectReads(
+          definition.expression,
+          definitionScope(expression, definition, scope, states, defs),
+          states,
+          found,
+          withoutDefinition(defs, expression.expressionId),
+        );
+      }
+      return found;
+    }
     default:
       return found;
   }

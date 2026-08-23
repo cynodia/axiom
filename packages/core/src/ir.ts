@@ -3,6 +3,7 @@ import type {
   ActionDef,
   ConstraintDef,
   EntityDef,
+  ExpressionDef,
   GraphEdge,
   RouteParameter,
   StateDef,
@@ -50,6 +51,11 @@ export interface ApplicationIR {
   constraints: ConstraintDef[];
   /** Rules about how state may change, enforced on every governed mutation path. */
   transitionConstraints: TransitionConstraintDef[];
+  /**
+   * Named expressions, by id. A runtime evaluating `expression-ref` resolves the body here
+   * rather than being handed a closure — the calculation stays data all the way down.
+   */
+  expressionDefs: Record<NodeId, ExpressionDef>;
   routes: CompiledRoute[];
   edges: GraphEdge[];
   /**

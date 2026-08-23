@@ -126,6 +126,47 @@ export interface StateDef extends NodeBase {
   persistence?: StatePersistence;
 }
 
+/**
+ * A parameter of an `ExpressionDef`. Bound only inside that definition's body.
+ */
+export interface ExpressionParameter {
+  id: NodeId;
+  name?: string;
+  valueType?: TypeRef;
+}
+
+/**
+ * A named, reusable expression: *this semantic calculation exists once*.
+ *
+ * Building the same filter three times with three different scope ids is how an author (or
+ * an agent) ends up with twelve near-identical expressions and a scope collision. A
+ * definition is the alternative, and it is a **graph node** rather than a TypeScript
+ * variable holding an `Expression` — because a variable solves neither of the two problems
+ * that matter: the calculation is still copied into every consumer, and its scope ids are
+ * still shared with whatever surrounds it.
+ *
+ * As a node it is serializable, inspectable, type-inferable, dependency-analyzable and
+ * addressable: `expressionRef(id)` names it, `AgentAPI` can list its consumers, and the read
+ * edges of a consumer include the states the definition reads.
+ *
+ * **Scope isolation.** The body sees its own `parameters`, application state, and the
+ * iteration scopes it introduces itself — and nothing else. Not the caller's iteration
+ * scopes, not the caller's action or route parameters, not an entity under validation. A
+ * definition therefore means the same thing everywhere it is used, which is the only way
+ * reuse can be sound. Pass whatever the caller has as an argument.
+ *
+ * It is data, never a closure: there is no JavaScript function anywhere in it.
+ */
+export interface ExpressionDef extends NodeBase {
+  kind: 'expression';
+  parameters?: ExpressionParameter[];
+  /** The calculation. Evaluated in an isolated scope. */
+  expression: Expression;
+  /** The declared result type. Absent, the type is inferred from the body. */
+  valueType?: TypeRef;
+  description?: string;
+}
+
 export interface ActionParameter {
   id: NodeId;
   name?: string;

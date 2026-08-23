@@ -1,4 +1,4 @@
-import { AGGREGATE_FUNCTIONS, BUILTIN_FUNCTIONS } from './expressions.js';
+import { AGGREGATE_FUNCTIONS, BUILTIN_FUNCTIONS, expressionDefsIn } from './expressions.js';
 import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
 import { VALIDATION_CODES } from './diagnostics.js';
@@ -10,12 +10,14 @@ import type {
   ActionDef,
   ConstraintDef,
   EntityDef,
+  ExpressionDef,
   Operation,
   RouteDef,
   StateDef,
   TransitionConstraintDef,
 } from './nodes.js';
 import { entityType } from './type-ref.js';
+import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD, isGroupFieldId } from './group.js';
 import type { TypeRef } from './type-ref.js';
 import { isUINode, uiChildIds } from './ui.js';
 import type { UINode } from './ui.js';
@@ -198,6 +200,9 @@ function validateNode(node: AnyNode, context: Context): void {
     case 'route':
       validateRoute(node, context);
       return;
+    case 'expression':
+      validateExpressionDef(node, context);
+      return;
     default:
       context.errors.push({
         code: VALIDATION_CODES.danglingNodeRef,
@@ -210,6 +215,17 @@ function validateNode(node: AnyNode, context: Context): void {
 function validateEntity(entity: EntityDef, context: Context): void {
   for (const field of entity.fields) {
     validateTypeRef(field.valueType, entity.id, context, field.id);
+    // The group positions are part of the expression vocabulary. An entity that declared
+    // one would make the same id mean two things depending on where it was read.
+    if (isGroupFieldId(field.id)) {
+      context.errors.push({
+        code: VALIDATION_CODES.reservedFieldId,
+        message: `Entity ${entity.id} declares ${field.id}, which is reserved for group results`,
+        nodeId: entity.id,
+        fieldId: field.id,
+        details: { reserved: [String(GROUP_KEY_FIELD), String(GROUP_ITEMS_FIELD)] },
+      });
+    }
   }
   if (entity.identityFieldId && !entity.fields.some((field) => field.id === entity.identityFieldId)) {
     context.errors.push({
@@ -223,6 +239,15 @@ function validateEntity(entity: EntityDef, context: Context): void {
 
 function validateState(state: StateDef, context: Context): void {
   validateTypeRef(state.valueType, state.id, context);
+  // A group is the result of an expression, and nothing can construct one. A stored state
+  // declared to hold groups could therefore never be written — only derived state can.
+  if (!state.derivation && containsGroupType(state.valueType)) {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidTypeRef,
+      message: `State ${state.id} is stored but declares a group type; only derived state can hold groups`,
+      nodeId: state.id,
+    });
+  }
   if (state.initialValue !== undefined) {
     validateValue(state.initialValue, state.valueType, String(state.id), state, context);
   }
@@ -476,9 +501,97 @@ function describeType(type: TypeRef | undefined): string {
       return `optional ${describeType(type.valueType)}`;
     case 'enum':
       return `enum(${type.values.join('|')})`;
+    case 'group':
+      return `group of ${describeType(type.itemType)} by ${describeType(type.keyType)}`;
     default:
       return 'value of unknown type';
   }
+}
+
+/**
+ * A named expression definition.
+ *
+ * The body is validated against a **restricted** scope: its own parameters and application
+ * state, and nothing the caller happens to have in hand. That is the isolation rule
+ * enforced rather than documented — a definition that could reach a caller's iteration
+ * scope would mean something different in every place it was used.
+ */
+function validateExpressionDef(definition: ExpressionDef, context: Context): void {
+  const isolated: Context = { ...context, scopes: isolatedScopeIds(context) };
+  const local = emptyScope(new Set<NodeId>());
+  for (const parameter of definition.parameters ?? []) {
+    if (isolated.scopes.has(parameter.id) || local.ids.has(parameter.id)) {
+      context.errors.push({
+        code: VALIDATION_CODES.scopeCollidesWithNode,
+        message: `Parameter ${parameter.id} of ${definition.id} collides with an existing id`,
+        nodeId: definition.id,
+      });
+    }
+    local.ids.add(parameter.id);
+    if (parameter.valueType) {
+      validateTypeRef(parameter.valueType, definition.id, context);
+      local.types.set(parameter.id, parameter.valueType);
+    }
+  }
+  if (definition.valueType) {
+    validateTypeRef(definition.valueType, definition.id, context);
+  }
+
+  const cycle = expressionDefCycle(definition.id, context);
+  if (cycle) {
+    context.errors.push({
+      code: VALIDATION_CODES.expressionDefCycle,
+      message: `Expression definition ${definition.id} reaches itself: ${cycle.join(' → ')}`,
+      nodeId: definition.id,
+      details: { cycle: cycle.map(String) },
+    });
+    // Walking the body would recurse through the same cycle.
+    return;
+  }
+  validateExpression(definition.expression, definition.id, isolated, local);
+}
+
+/** The ids an expression definition's body may resolve: application state, and no more. */
+function isolatedScopeIds(context: Context): Set<NodeId> {
+  const ids = new Set<NodeId>();
+  for (const node of context.nodes.values()) {
+    if (node.kind === 'state') {
+      ids.add(node.id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * The chain by which a definition reaches itself, if it does.
+ *
+ * Reported per definition rather than per reference so the error names the loop once.
+ */
+function expressionDefCycle(
+  start: NodeId,
+  context: Context,
+  current: NodeId = start,
+  path: NodeId[] = [start],
+  seen: Set<NodeId> = new Set([start]),
+): NodeId[] | undefined {
+  const definition = context.nodes.get(current);
+  if (!definition || definition.kind !== 'expression') {
+    return undefined;
+  }
+  for (const referenced of expressionDefsIn(definition.expression)) {
+    if (referenced === start) {
+      return [...path, start];
+    }
+    if (seen.has(referenced)) {
+      continue;
+    }
+    seen.add(referenced);
+    const found = expressionDefCycle(start, context, referenced, [...path, referenced], seen);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 function validateConstraint(constraint: ConstraintDef, context: Context): void {
@@ -925,6 +1038,10 @@ function validateTypeRef(
     case 'optional':
       validateTypeRef(type.valueType, ownerId, context, field, inCollection);
       return;
+    case 'group':
+      validateTypeRef(type.keyType, ownerId, context, field);
+      validateTypeRef(type.itemType, ownerId, context, field, true);
+      return;
     case 'enum':
       if (type.values.length === 0) {
         context.errors.push({
@@ -941,6 +1058,19 @@ function validateTypeRef(
         message: `Unknown type kind in ${ownerId}`,
         nodeId: ownerId,
       });
+  }
+}
+
+function containsGroupType(type: TypeRef): boolean {
+  switch (type.kind) {
+    case 'group':
+      return true;
+    case 'collection':
+      return containsGroupType(type.itemType);
+    case 'optional':
+      return containsGroupType(type.valueType);
+    default:
+      return false;
   }
 }
 
@@ -1012,10 +1142,38 @@ function validateExpression(
         });
       }
       return;
-    case 'field':
-      requireField(expression.fieldId, ownerId, context);
+    case 'field': {
       validateExpression(expression.source, ownerId, context, scope);
+      const sourceType = resolveKnownType(
+        inferExpressionType(expression.source, context.semantics, scope.types),
+      );
+      if (isGroupFieldId(expression.fieldId)) {
+        // A group position is not a field of any entity, so it may only be read from a
+        // group. Where the source type is unknown nothing is claimed, as everywhere else.
+        if (sourceType && sourceType.kind !== 'group') {
+          context.errors.push({
+            code: VALIDATION_CODES.invalidGroupField,
+            message: `${ownerId} reads ${expression.fieldId} from ${describeType(sourceType)}, which is not a group`,
+            nodeId: ownerId,
+            fieldId: expression.fieldId,
+          });
+        }
+        return;
+      }
+      if (sourceType?.kind === 'group') {
+        context.errors.push({
+          code: VALIDATION_CODES.invalidGroupField,
+          message:
+            `${ownerId} reads ${expression.fieldId} from a group; a group has only ` +
+            `${String(GROUP_KEY_FIELD)} and ${String(GROUP_ITEMS_FIELD)}. Read the members first.`,
+          nodeId: ownerId,
+          fieldId: expression.fieldId,
+        });
+        return;
+      }
+      requireField(expression.fieldId, ownerId, context);
       return;
+    }
     case 'object':
       if (expression.entityId) {
         requireKind(expression.entityId, 'entity', ownerId, context, VALIDATION_CODES.danglingNodeRef);
@@ -1135,6 +1293,57 @@ function validateExpression(
         context,
         iterationScope(scope, expression.scopeId, expression.source, context, ownerId),
       );
+      return;
+    }
+    case 'group': {
+      validateExpression(expression.source, ownerId, context, scope);
+      requireCollection(expression.source, ownerId, context, scope, 'group');
+      validateExpression(
+        expression.by,
+        ownerId,
+        context,
+        iterationScope(scope, expression.scopeId, expression.source, context, ownerId),
+      );
+      return;
+    }
+    case 'expression-ref': {
+      const definition = context.nodes.get(expression.expressionId);
+      if (!definition || definition.kind !== 'expression') {
+        context.errors.push({
+          code: VALIDATION_CODES.unknownExpressionDef,
+          message: `${ownerId} references ${expression.expressionId}, which is not an expression definition`,
+          nodeId: ownerId,
+          details: { expressionId: String(expression.expressionId) },
+        });
+        return;
+      }
+      const parameters = definition.parameters ?? [];
+      const supplied = expression.arguments ?? {};
+      for (const parameter of parameters) {
+        // Every parameter must be supplied: an unbound one would resolve nothing at run
+        // time, which is a construct that validates and then fails.
+        if (supplied[String(parameter.id)] === undefined) {
+          context.errors.push({
+            code: VALIDATION_CODES.missingExpressionArgument,
+            message: `${ownerId} uses ${definition.id} without supplying ${parameter.id}`,
+            nodeId: ownerId,
+            details: { expressionId: String(definition.id), parameterId: String(parameter.id) },
+          });
+        }
+      }
+      const declared = new Set(parameters.map((parameter) => String(parameter.id)));
+      for (const [key, argument] of Object.entries(supplied)) {
+        if (!declared.has(key)) {
+          context.errors.push({
+            code: VALIDATION_CODES.unknownExpressionArgument,
+            message: `${ownerId} supplies ${key} to ${definition.id}, which declares no such parameter`,
+            nodeId: ownerId,
+            details: { expressionId: String(definition.id), parameterId: key },
+          });
+        }
+        // Arguments are evaluated in the caller's scope, so they are validated in it.
+        validateExpression(argument, ownerId, context, scope);
+      }
       return;
     }
     default:

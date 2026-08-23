@@ -47,15 +47,18 @@
     }
   },
   "dependencies": {
+    "@cynodia/axiom": "0.6.3-alpha.1",
+    "@cynodia/axiom-agent-api": "0.6.3-alpha.1",
+    "@cynodia/axiom-compiler": "0.6.3-alpha.1",
     "@cynodia/axiom-core": "0.6.3-alpha.1",
     "@cynodia/axiom-runtime": "0.6.3-alpha.1",
-    "@cynodia/axiom-compiler": "0.6.3-alpha.1",
-    "@cynodia/axiom-agent-api": "0.6.3-alpha.1",
-    "@cynodia/axiom": "0.6.3-alpha.1",
     "@cynodia/axiom-server": "0.6.3-alpha.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json && node dist/index.js",
     "test": "node --test dist-test/**/*.test.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
   }
 }

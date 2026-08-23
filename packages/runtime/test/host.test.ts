@@ -46,6 +46,22 @@ test('the gateway types are structurally the core types they stand in for', () =
   );
 });
 
+test('the group field ids the renderer uses are the ones core reserves', () => {
+  // Same reason as `NodeId` above: the two group positions are re-declared locally because
+  // a value the browser bundle imports from core would be stripped out of it. A drift here
+  // would make the runtime read fields nothing ever writes, silently.
+  const local = readFileSync(new URL('../../runtime/src/group-fields.ts', import.meta.url), 'utf8');
+  const core = readFileSync(new URL('../../core/src/group.ts', import.meta.url), 'utf8');
+  for (const name of ['GROUP_KEY_FIELD', 'GROUP_ITEMS_FIELD']) {
+    const value = new RegExp(`${name}[^=]*= (?:fieldId\\()?'([^']+)'`);
+    assert.equal(
+      value.exec(local)?.[1],
+      value.exec(core)?.[1],
+      `${name} differs between the runtime and core`,
+    );
+  }
+});
+
 test('the memory host records navigation, confirmation and reports', () => {
   const host = createMemoryHost({ path: '/start', confirm: false });
   let changes = 0;

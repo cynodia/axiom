@@ -16,8 +16,10 @@ import {
   fieldId,
   fieldLocation,
   filter,
+  expressionRef,
   find,
   forEach,
+  group,
   identitySelector,
   itemLocation,
   literal,
@@ -55,6 +57,10 @@ const F_LINE_QUANTITY = fieldId('field_line_quantity');
 const F_LINE_PRICE = fieldId('field_line_price');
 const F_GROUP_ID = fieldId('field_group_id');
 const F_GROUP_LINES = fieldId('field_group_lines');
+
+const EXPRESSION_TOTAL = nodeId('expression_line_total');
+const PARAM_LINES = nodeId('param_lines');
+const SCOPE_TOTAL = nodeId('scope_line_total');
 
 const STATE_LINES = nodeId('state_lines');
 const STATE_GROUPS = nodeId('state_groups');
@@ -556,8 +562,20 @@ test('every declared expression kind is evaluated by the runtime', () => {
     some: some(ref(STATE_LINES), SCOPE, binary('gt', field(ref(SCOPE), F_LINE_QUANTITY), literal(2))),
     flatten: flatten(map(ref(STATE_LINES), SCOPE, ref(STATE_LINES))),
     conditional: conditional(literal(true), literal('yes'), literal('no')),
+    group: group(ref(STATE_LINES), SCOPE, field(ref(SCOPE), F_LINE_QUANTITY)),
+    'expression-ref': expressionRef(EXPRESSION_TOTAL, { [PARAM_LINES]: ref(STATE_LINES) }),
   };
   assert.deepEqual(Object.keys(byKind).sort(), [...EXPRESSION_KINDS].sort());
+
+  // The reference above needs something to point at: a named calculation over whatever
+  // collection it is given.
+  graph.addNode({
+    id: EXPRESSION_TOTAL,
+    kind: 'expression',
+    name: 'line total',
+    parameters: [{ id: PARAM_LINES, name: 'lines', valueType: collectionType(entityType(ENTITY_LINE)) }],
+    expression: sum(map(ref(PARAM_LINES), SCOPE_TOTAL, field(ref(SCOPE_TOTAL), F_LINE_QUANTITY))),
+  });
 
   const probes = Object.entries(byKind).map(([kind, expression]) => {
     const id = nodeId(`state_kind_${kind}`);

@@ -13,6 +13,7 @@ import type {
   EdgeKind,
   EntityDef,
   Expression,
+  ExpressionDef,
   FieldId,
   FormNode,
   GraphEdge,
@@ -256,9 +257,47 @@ export class GraphQueries {
     return { nodes: this.resolve([...visited]), edges: [...edges.values()] };
   }
 
-  /** Ids a node's expressions reference, for dependency reporting. */
+  /**
+   * Ids a node's expressions reference, for dependency reporting.
+   *
+   * Named expressions are followed, so an answer does not change because a calculation was
+   * given a name instead of being written out.
+   */
   referencedBy(expression: Expression): NodeId[] {
-    return referencedIds(expression);
+    return referencedIds(expression, (id) => this.getExpressionDefinition(id));
+  }
+
+  /** Every named, reusable expression in the graph. */
+  listExpressionDefinitions(): ExpressionDef[] {
+    return this.graph.getNodesByKind('expression');
+  }
+
+  getExpressionDefinition(id: NodeId): ExpressionDef | undefined {
+    const node = this.graph.getNode(id);
+    return node?.kind === 'expression' ? node : undefined;
+  }
+
+  /**
+   * What uses a named expression — the question a reuse mechanism exists to make answerable.
+   *
+   * A definition with no consumers is dead weight, and one with many is a place where an
+   * edit reaches further than it looks.
+   */
+  getExpressionConsumers(id: NodeId): AnyNode[] {
+    return this.resolve(
+      this.graph
+        .getIncomingEdges(id, { kinds: ['references'] })
+        .map((edge) => edge.from),
+    ).filter((node) => node.id !== id);
+  }
+
+  /** The states a named expression reads, its own and those of the definitions it uses. */
+  getExpressionDependencies(id: NodeId): StateDef[] {
+    const definition = this.getExpressionDefinition(id);
+    if (!definition) {
+      return [];
+    }
+    return this.getDependencies(id, READ_KINDS).filter((node): node is StateDef => node.kind === 'state');
   }
 
   /** Nodes that read a specific field, from the field metadata on their read edges. */

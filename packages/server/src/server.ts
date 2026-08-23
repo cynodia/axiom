@@ -1,9 +1,11 @@
 import {
   DEFAULT_THEME,
   PRINCIPAL,
-  SERVER_IR_CONTRACT,
+  SERVER_IR_CONTRACTS,
   optionalType,
   entityType,
+  requiredServerContract,
+  serverIRExpressions,
   validateValueAgainstType,
 } from '@cynodia/axiom-core';
 import type {
@@ -13,6 +15,7 @@ import type {
   LiteralValue,
   NodeId,
   ServerIR,
+  ServerIRContract,
   StateDef,
 } from '@cynodia/axiom-core';
 import { MemoryElement, createAxiomRuntime, createMemoryHost, valuesEqual } from '@cynodia/axiom-runtime';
@@ -146,9 +149,18 @@ function disclosable(diagnostic: RuntimeDiagnostic): RuntimeDiagnostic {
 
 
 export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
-  if (options.ir.contract !== SERVER_IR_CONTRACT) {
+  if (!(SERVER_IR_CONTRACTS as readonly string[]).includes(String(options.ir.contract))) {
     throw new Error(
-      `Unsupported Server IR contract "${String(options.ir.contract)}"; this runtime executes ${SERVER_IR_CONTRACT}`,
+      `Unsupported Server IR contract "${String(options.ir.contract)}"; this runtime executes ${SERVER_IR_CONTRACTS.join(', ')}`,
+    );
+  }
+  // A document may not claim a contract older than the vocabulary it uses. Executing it
+  // anyway would make the label meaningless, and the label is what another implementation
+  // decides by.
+  const understated = understatedContract(options.ir);
+  if (understated) {
+    throw new Error(
+      `Server IR declares "${String(options.ir.contract)}" but uses ${understated} semantics; label it ${understated}`,
     );
   }
 
@@ -619,6 +631,21 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
  * runs the ordinary semantic engine over it. Nothing about transactions, constraints or
  * iteration is reimplemented, which is the only way to guarantee the semantics match.
  */
+/**
+ * The contract a document needs, when that is newer than the one it declares.
+ *
+ * The check runs in the direction that matters: a v2 runtime executing a document labelled
+ * v1 would accept vocabulary a v1 runtime elsewhere would refuse, and the two would then
+ * disagree about the same file.
+ */
+function understatedContract(ir: ServerIR): ServerIRContract | undefined {
+  const required = ir.expressionDefs
+    ? 'axiom.server.v2'
+    : requiredServerContract(serverIRExpressions(ir));
+  const order = SERVER_IR_CONTRACTS as readonly string[];
+  return order.indexOf(required) > order.indexOf(String(ir.contract)) ? required : undefined;
+}
+
 function buildRuntime(ir: ServerIR, host: ServerHost): AxiomRuntime {
   const nodes: ApplicationIR['nodes'] = {};
   for (const entity of ir.entities) {
@@ -665,6 +692,7 @@ function buildRuntime(ir: ServerIR, host: ServerHost): AxiomRuntime {
     uiNodes: {},
     constraints: ir.constraints,
     transitionConstraints: ir.transitionConstraints,
+    expressionDefs: ir.expressionDefs ?? {},
     routes: [],
     edges: [],
     locationTypes: {},

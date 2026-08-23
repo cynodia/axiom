@@ -2,7 +2,14 @@ import type { Expression } from './expressions.js';
 import { referencedIds } from './derive-edges.js';
 import type { NodeId } from './ids.js';
 import { actionGuards, isMutationOperation } from './nodes.js';
-import type { ActionDef, ConstraintDef, Operation, StateDef, TransitionConstraintDef } from './nodes.js';
+import type {
+  ActionDef,
+  ConstraintDef,
+  ExpressionDef,
+  Operation,
+  StateDef,
+  TransitionConstraintDef,
+} from './nodes.js';
 import { locationExpressions, locationRootStateId } from './location.js';
 import type { AnyNode } from './types.js';
 
@@ -49,6 +56,8 @@ export interface AuthorityContext {
   actions: Map<NodeId, ActionDef>;
   constraints: ConstraintDef[];
   transitionConstraints: TransitionConstraintDef[];
+  /** Named expressions, so a rule that reuses one still declares what it reads. */
+  expressions: Map<NodeId, ExpressionDef>;
   principalEntityId?: NodeId;
 }
 
@@ -57,6 +66,7 @@ export function authorityContext(nodes: readonly AnyNode[], principalEntityId?: 
   const actions = new Map<NodeId, ActionDef>();
   const constraints: ConstraintDef[] = [];
   const transitionConstraints: TransitionConstraintDef[] = [];
+  const expressions = new Map<NodeId, ExpressionDef>();
   for (const node of nodes) {
     switch (node.kind) {
       case 'state':
@@ -71,6 +81,9 @@ export function authorityContext(nodes: readonly AnyNode[], principalEntityId?: 
       case 'transition-constraint':
         transitionConstraints.push(node);
         break;
+      case 'expression':
+        expressions.set(node.id, node);
+        break;
       default:
     }
   }
@@ -79,6 +92,7 @@ export function authorityContext(nodes: readonly AnyNode[], principalEntityId?: 
     actions,
     constraints,
     transitionConstraints,
+    expressions,
     ...(principalEntityId ? { principalEntityId } : {}),
   };
 }
@@ -91,7 +105,9 @@ export function statesReadBy(
   const found = new Set<NodeId>();
   const seen = new Set<NodeId>();
   const walk = (expression: Expression): void => {
-    for (const id of referencedIds(expression)) {
+    // Following named expressions matters here more than anywhere: a rule that reads
+    // server state through a reused calculation reads server state.
+    for (const id of referencedIds(expression, (target) => context.expressions.get(target))) {
       const state = context.states.get(id);
       if (!state || seen.has(id)) {
         continue;

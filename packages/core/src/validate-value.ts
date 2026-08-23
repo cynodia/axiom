@@ -2,7 +2,9 @@ import { VALIDATION_CODES } from './diagnostics.js';
 import type { ValidationIssue } from './diagnostics.js';
 import type { NodeId } from './ids.js';
 import type { EntityDef, LiteralValue } from './nodes.js';
+import { collectionType } from './type-ref.js';
 import type { TypeRef } from './type-ref.js';
+import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD } from './group.js';
 
 /**
  * Checks a value against a declared `TypeRef`, recursively.
@@ -35,6 +37,8 @@ function describeType(type: TypeRef): string {
       return `${describeType(type.valueType)} or nothing`;
     case 'enum':
       return `one of ${type.values.join(', ')}`;
+    case 'group':
+      return `a group of ${describeType(type.itemType)}`;
     default:
       return 'an unknown type';
   }
@@ -101,6 +105,32 @@ export function validateValueAgainstType(
           { details: { expected: type.values, value } },
         );
       }
+      return problems;
+    }
+    case 'group': {
+      // A group is produced by an expression, never authored — but a value declared to be
+      // one is still checked, because a type that validates nothing is a gap.
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        report(
+          VALIDATION_CODES.initialValueTypeMismatch,
+          `${path} should be ${describeType(type)} but is ${describeActual(value)}`,
+          { details: { expected: describeType(type), actual: describeActual(value) } },
+        );
+        return problems;
+      }
+      const record = value as Record<string, unknown>;
+      problems.push(
+        ...validateValueAgainstType(record[GROUP_KEY_FIELD], type.keyType, {
+          ...options,
+          path: `${path}.${String(GROUP_KEY_FIELD)}`,
+        }),
+      );
+      problems.push(
+        ...validateValueAgainstType(record[GROUP_ITEMS_FIELD], collectionType(type.itemType), {
+          ...options,
+          path: `${path}.${String(GROUP_ITEMS_FIELD)}`,
+        }),
+      );
       return problems;
     }
     case 'collection': {

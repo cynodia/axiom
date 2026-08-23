@@ -4,6 +4,7 @@ export * from './location.js';
 export * from './presentation.js';
 export * from './theme.js';
 export * from './type-ref.js';
+export * from './group.js';
 export * from './expressions.js';
 export * from './nodes.js';
 export * from './renderer-capabilities.js';

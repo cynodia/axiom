@@ -11,7 +11,13 @@ import { repoRoot, version } from './packages.mjs';
  * vocabulary in them cannot drift from the vocabulary the runtime actually implements.
  */
 const core = await import(path.join(repoRoot, 'packages/core/dist/index.js'));
-const { BUILTIN_FUNCTIONS, EXPRESSION_KINDS, OPERATION_KINDS, SERVER_IR_CONTRACT } = core;
+const {
+  BUILTIN_FUNCTIONS,
+  EXPRESSION_KINDS,
+  OPERATION_KINDS,
+  SERVER_IR_CONTRACTS,
+  SERVER_IR_V2_EXPRESSION_KINDS,
+} = core;
 
 const BINARY_OPERATORS = [
   'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'and', 'or', 'add', 'subtract', 'multiply', 'divide',
@@ -38,15 +44,23 @@ const variant = (kind, properties, required = []) =>
 const expression = ref('Expression');
 const location = ref('Location');
 
-const serverIR = {
+/**
+ * One schema per contract.
+ *
+ * `axiom.server.v1` is frozen, so its vocabulary is frozen with it: the two expression kinds
+ * 0.7 adds are absent from the v1 schema and present in the v2 schema, and a document that
+ * uses them declares v2. That is what keeps "frozen" a statement about documents and not
+ * only about prose.
+ */
+const buildServerIR = (contract) => ({
   $schema: 'https://json-schema.org/draft/2020-12/schema',
-  $id: 'https://cynodia.github.io/axiom/schema/server-ir.v1.schema.json',
-  title: 'Axiom Server IR v1',
+  $id: `https://cynodia.github.io/axiom/schema/server-ir.${short(contract)}.schema.json`,
+  title: `Axiom Server IR ${short(contract)}`,
   description:
-    'The normative structure of an `axiom.server.v1` document. Structure only: what a ' +
+    `The normative structure of an \`${contract}\` document. Structure only: what a ` +
     'conforming runtime must *do* with it is the semantic contract, and the conformance ' +
     'fixtures are the executable statement of that.',
-  contract: SERVER_IR_CONTRACT,
+  contract,
   release: version,
   type: 'object',
   required: [
@@ -55,7 +69,7 @@ const serverIR = {
   ],
   additionalProperties: false,
   properties: {
-    contract: { const: SERVER_IR_CONTRACT },
+    contract: { const: contract },
     id: { type: 'string' },
     name: { type: 'string' },
     version: { type: 'string' },
@@ -67,6 +81,9 @@ const serverIR = {
     transitionConstraints: { type: 'array', items: ref('TransitionConstraintDef') },
     principalEntityId: id,
     observableStateIds: { type: 'array', items: id },
+    ...(contract === 'axiom.server.v1'
+      ? {}
+      : { expressionDefs: { type: 'object', additionalProperties: ref('ExpressionDef') } }),
   },
   $defs: {
     NodeId: id,
@@ -91,11 +108,14 @@ const serverIR = {
         variant('collection', { itemType: ref('TypeRef') }, ['itemType']),
         variant('optional', { valueType: ref('TypeRef') }, ['valueType']),
         variant('enum', { values: { type: 'array', items: { type: 'string' } } }, ['values']),
+        ...(contract === 'axiom.server.v1'
+          ? []
+          : [variant('group', { keyType: ref('TypeRef'), itemType: ref('TypeRef') }, ['keyType', 'itemType'])]),
       ],
     },
 
     Expression: {
-      description: `Every expression kind: ${EXPRESSION_KINDS.join(', ')}.`,
+      description: `Every expression kind: ${expressionKindsFor(contract).join(', ')}.`,
       oneOf: [
         variant('literal', { value: ref('LiteralValue') }, ['value']),
         variant('ref', { targetId: id }, ['targetId']),
@@ -112,6 +132,12 @@ const serverIR = {
         variant('some', { source: expression, scopeId: id, predicate: expression }, ['source', 'scopeId', 'predicate']),
         variant('flatten', { source: expression }, ['source']),
         variant('conditional', { condition: expression, whenTrue: expression, whenFalse: expression }, ['condition', 'whenTrue', 'whenFalse']),
+        ...(contract === 'axiom.server.v1'
+          ? []
+          : [
+              variant('group', { source: expression, scopeId: id, by: expression }, ['source', 'scopeId', 'by']),
+              variant('expression-ref', { expressionId: id, arguments: { type: 'object', additionalProperties: expression } }, ['expressionId']),
+            ]),
       ],
     },
     ObjectEntry: object({ fieldId: id, value: expression }, ['fieldId', 'value']),
@@ -264,8 +290,41 @@ const serverIR = {
       },
       ['id', 'kind', 'entityId', 'previousScopeId', 'proposedScopeId', 'expression'],
     ),
+
+    ...(contract === 'axiom.server.v1'
+      ? {}
+      : {
+          ExpressionParameter: object(
+            { id, name: { type: 'string' }, valueType: ref('TypeRef') },
+            ['id'],
+          ),
+          ExpressionDef: object(
+            {
+              id,
+              kind: { const: 'expression' },
+              name: { type: 'string' },
+              description: { type: 'string' },
+              metadata: { type: 'object' },
+              parameters: { type: 'array', items: ref('ExpressionParameter') },
+              expression,
+              valueType: ref('TypeRef'),
+            },
+            ['id', 'kind', 'expression'],
+          ),
+        }),
   },
-};
+});
+
+/** `axiom.server.v1` → `v1`, for a file name and a title. */
+function short(contract) {
+  return contract.slice(contract.lastIndexOf('.') + 1);
+}
+
+function expressionKindsFor(contract) {
+  return contract === 'axiom.server.v1'
+    ? EXPRESSION_KINDS.filter((kind) => !SERVER_IR_V2_EXPRESSION_KINDS.includes(kind))
+    : [...EXPRESSION_KINDS];
+}
 
 const PROTOCOL_VERSION = 'axiom.protocol.v1';
 
@@ -370,6 +429,12 @@ const protocol = {
 
 const directory = path.join(repoRoot, 'packages/server/schema');
 await mkdir(directory, { recursive: true });
-await writeFile(path.join(directory, 'server-ir.v1.schema.json'), `${JSON.stringify(serverIR, null, 2)}\n`);
+const written = [];
+for (const contract of SERVER_IR_CONTRACTS) {
+  const file = `server-ir.${short(contract)}.schema.json`;
+  await writeFile(path.join(directory, file), `${JSON.stringify(buildServerIR(contract), null, 2)}\n`);
+  written.push(file);
+}
 await writeFile(path.join(directory, 'protocol.v1.schema.json'), `${JSON.stringify(protocol, null, 2)}\n`);
-console.log('Wrote server-ir.v1.schema.json and protocol.v1.schema.json');
+written.push('protocol.v1.schema.json');
+console.log(`Wrote ${written.join(', ')}`);

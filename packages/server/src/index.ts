@@ -7,7 +7,12 @@
  * ApplicationGraph.
  */
 export type { ServerIR, ServerIRContract } from '@cynodia/axiom-core';
-export { SERVER_IR_CONTRACT, PRINCIPAL } from '@cynodia/axiom-core';
+export {
+  SERVER_IR_CONTRACT,
+  SERVER_IR_CONTRACTS,
+  SERVER_IR_LATEST_CONTRACT,
+  PRINCIPAL,
+} from '@cynodia/axiom-core';
 export * from './protocol.js';
 export * from './persistence.js';
 export * from './sqlite-persistence.js';

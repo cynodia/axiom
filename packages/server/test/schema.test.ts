@@ -3,7 +3,13 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { BUILTIN_FUNCTIONS, EXPRESSION_KINDS, OPERATION_KINDS, SERVER_IR_CONTRACT } from '@cynodia/axiom-core';
+import {
+  BUILTIN_FUNCTIONS,
+  EXPRESSION_KINDS,
+  OPERATION_KINDS,
+  SERVER_IR_CONTRACTS,
+  SERVER_IR_V2_EXPRESSION_KINDS,
+} from '@cynodia/axiom-core';
 import {
   PROTOCOL_VERSION,
   createAxiomServer,
@@ -95,7 +101,24 @@ const here = path.resolve(fileURLToPath(new URL('.', import.meta.url)));
 const schemaDir = path.join(here, '../schema');
 const conformanceDir = path.join(here, '../conformance');
 
-const irSchema = JSON.parse(await readFile(path.join(schemaDir, 'server-ir.v1.schema.json'), 'utf8')) as Schema;
+/** One schema per contract, keyed by the contract a document declares. */
+const irSchemas = new Map<string, Schema>(
+  await Promise.all(
+    SERVER_IR_CONTRACTS.map(
+      async (contract) =>
+        [
+          contract,
+          JSON.parse(
+            await readFile(
+              path.join(schemaDir, `server-ir.${contract.slice(contract.lastIndexOf('.') + 1)}.schema.json`),
+              'utf8',
+            ),
+          ) as Schema,
+        ] as const,
+    ),
+  ),
+);
+const irSchema = irSchemas.get('axiom.server.v1') as Schema;
 const protocolSchema = JSON.parse(await readFile(path.join(schemaDir, 'protocol.v1.schema.json'), 'utf8')) as Schema;
 const fixtureFiles = (await readdir(conformanceDir))
   .filter((name) => name.endsWith('.json') && name !== 'manifest.json')
@@ -108,17 +131,34 @@ test('the Server IR schema describes the IR the compiler actually emits', async 
     const fixture = JSON.parse(await readFile(path.join(conformanceDir, file), 'utf8')) as {
       serverIR: ServerIR;
     };
-    const problems = validate(irSchema, fixture.serverIR, irSchema, file);
+    // Against the schema for the contract the document itself declares.
+    const schema = irSchemas.get(String(fixture.serverIR.contract)) as Schema;
+    assert.ok(schema, `${file} declares a contract this repository publishes a schema for`);
+    const problems = validate(schema, fixture.serverIR, schema, file);
     assert.deepEqual(problems, [], `${file} conforms to the Server IR schema`);
   }
 });
 
 test('the schema names exactly the vocabulary the runtime implements', () => {
   const defs = irSchema.$defs as Record<string, Schema>;
-  const kinds = (defs.Expression.oneOf as Schema[]).map(
-    (branch) => ((branch.properties as Record<string, Schema>).kind as Schema).const,
+  const kindsOf = (schema: Schema): unknown[] =>
+    ((schema.$defs as Record<string, Schema>).Expression.oneOf as Schema[]).map(
+      (branch) => ((branch.properties as Record<string, Schema>).kind as Schema).const,
+    );
+
+  // The newest contract carries the whole vocabulary...
+  const latest = irSchemas.get('axiom.server.v2') as Schema;
+  assert.deepEqual(
+    [...kindsOf(latest)].sort(),
+    [...EXPRESSION_KINDS].sort(),
+    'every expression kind, and no others',
   );
-  assert.deepEqual([...kinds].sort(), [...EXPRESSION_KINDS].sort(), 'every expression kind, and no others');
+  // ...and the frozen one carries exactly what it carried when it was frozen.
+  assert.deepEqual(
+    [...kindsOf(irSchema)].sort(),
+    [...EXPRESSION_KINDS].filter((kind) => !SERVER_IR_V2_EXPRESSION_KINDS.includes(kind)).sort(),
+    'axiom.server.v1 gained no vocabulary',
+  );
 
   const call = (defs.Expression.oneOf as Schema[]).find(
     (branch) => ((branch.properties as Record<string, Schema>).kind as Schema).const === 'call',
@@ -134,7 +174,9 @@ test('the schema names exactly the vocabulary the runtime implements', () => {
       : [((branch.properties as Record<string, Schema>).kind as Schema).const],
   );
   assert.deepEqual([...operations].sort(), [...OPERATION_KINDS].sort());
-  assert.equal(irSchema.contract, SERVER_IR_CONTRACT);
+  for (const [contract, schema] of irSchemas) {
+    assert.equal(schema.contract, contract, 'each schema names the contract it describes');
+  }
 });
 
 // ------------------------------------------------------------- the protocol

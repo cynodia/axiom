@@ -55,6 +55,20 @@ export const VALIDATION_CODES = {
   scopeCollidesWithNode: 'SCOPE_COLLIDES_WITH_NODE',
   ephemeralStatePersisted: 'EPHEMERAL_STATE_PERSISTED',
 
+  // Reusable expressions and grouping.
+  /** A `field` read of a group position where the source is not a group, or the reverse. */
+  invalidGroupField: 'INVALID_GROUP_FIELD',
+  /** An entity declaring one of the reserved group field ids. */
+  reservedFieldId: 'RESERVED_FIELD_ID',
+  /** An `expression-ref` naming something that is not an expression definition. */
+  unknownExpressionDef: 'UNKNOWN_EXPRESSION_DEF',
+  /** A definition that reaches itself, directly or through another definition. */
+  expressionDefCycle: 'EXPRESSION_DEF_CYCLE',
+  /** A parameter the reference does not supply — the body would resolve nothing. */
+  missingExpressionArgument: 'MISSING_EXPRESSION_ARGUMENT',
+  /** An argument the definition declares no parameter for. */
+  unknownExpressionArgument: 'UNKNOWN_EXPRESSION_ARGUMENT',
+
   // Presentation and UX. Everything here is a warning except an unknown token, which the
   // renderer genuinely cannot act on.
   unknownPresentationToken: 'UNKNOWN_PRESENTATION_TOKEN',

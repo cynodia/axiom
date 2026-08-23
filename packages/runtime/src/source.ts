@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
  * bundle without a bundler.
  */
 const RUNTIME_MODULES = [
+  './group-fields.js',
   './mutation/values.js',
   './mutation/store.js',
   './mutation/transaction.js',

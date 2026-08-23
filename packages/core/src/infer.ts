@@ -1,9 +1,10 @@
 import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
-import type { EntityDef, StateDef } from './nodes.js';
+import type { EntityDef, ExpressionDef, StateDef } from './nodes.js';
 import type { FieldIndexEntry } from './graph.js';
 import type { Location } from './location.js';
-import { collectionType, entityType, optionalType, primitiveType } from './type-ref.js';
+import { collectionType, entityType, groupType, optionalType, primitiveType } from './type-ref.js';
+import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD } from './group.js';
 import type { TypeRef } from './type-ref.js';
 
 /**
@@ -14,8 +15,10 @@ export interface SemanticContext {
   getState(id: NodeId): StateDef | undefined;
   getEntity(id: NodeId): EntityDef | undefined;
   getField(id: FieldId): FieldIndexEntry | undefined;
-  /** Type of an action or route parameter, where declared. */
+  /** Type of an action, route or expression parameter, where declared. */
   getParameterType?(id: NodeId): TypeRef | undefined;
+  /** A named expression definition, so a reference to one can be typed and analyzed. */
+  getExpressionDef?(id: NodeId): ExpressionDef | undefined;
   /** Name of any node, for human-readable rendering only. */
   getName?(id: NodeId): string | undefined;
 }
@@ -105,6 +108,8 @@ export function inferExpressionType(
   expression: Expression,
   context: SemanticContext,
   scope?: ScopeTypes,
+  /** Definitions already being inferred, so a cyclic reference stops rather than recurses. */
+  visiting: ReadonlySet<NodeId> = new Set(),
 ): TypeRef | undefined {
   switch (expression.kind) {
     case 'literal': {
@@ -136,7 +141,14 @@ export function inferExpressionType(
       return context.getParameterType?.(expression.targetId);
     }
     case 'field': {
-      const source = unwrap(inferExpressionType(expression.source, context, scope));
+      const source = unwrap(inferExpressionType(expression.source, context, scope, visiting));
+      // A group's positions are typed by the group, not by any entity.
+      if (source?.kind === 'group') {
+        if (expression.fieldId === GROUP_KEY_FIELD) {
+          return source.keyType;
+        }
+        return expression.fieldId === GROUP_ITEMS_FIELD ? collectionType(source.itemType) : undefined;
+      }
       if (source?.kind === 'entity') {
         const entity = context.getEntity(source.entityId);
         return entity?.fields.find((candidate) => candidate.id === expression.fieldId)?.valueType;
@@ -174,7 +186,7 @@ export function inferExpressionType(
           // what makes the value present. Inferring this is what lets a repeat over
           // `coalesce(field(...), [])` still know how to identify its members.
           const first = expression.arguments[0]
-            ? inferExpressionType(expression.arguments[0], context, scope)
+            ? inferExpressionType(expression.arguments[0], context, scope, visiting)
             : undefined;
           return first?.kind === 'optional' ? first.valueType : first;
         }
@@ -183,33 +195,88 @@ export function inferExpressionType(
       }
     case 'filter':
     case 'sort':
-      return inferExpressionType(expression.source, context, scope);
+      return inferExpressionType(expression.source, context, scope, visiting);
     case 'find': {
-      const item = itemTypeOf(inferExpressionType(expression.source, context, scope));
+      const item = itemTypeOf(inferExpressionType(expression.source, context, scope, visiting));
       return item ? optionalType(item) : undefined;
     }
     case 'every':
     case 'some':
       return primitiveType('boolean');
     case 'flatten':
-      return itemTypeOf(inferExpressionType(expression.source, context, scope));
+      return itemTypeOf(inferExpressionType(expression.source, context, scope, visiting));
     case 'conditional':
       return (
-        inferExpressionType(expression.whenTrue, context, scope) ??
-        inferExpressionType(expression.whenFalse, context, scope)
+        inferExpressionType(expression.whenTrue, context, scope, visiting) ??
+        inferExpressionType(expression.whenFalse, context, scope, visiting)
       );
+    case 'group': {
+      const item = itemTypeOf(inferExpressionType(expression.source, context, scope, visiting));
+      if (!item) {
+        return undefined;
+      }
+      const key = inferExpressionType(
+        expression.by,
+        context,
+        withScope(scope, expression.scopeId, item),
+        visiting,
+      );
+      return key ? collectionType(groupType(key, item)) : undefined;
+    }
+    case 'expression-ref':
+      return inferExpressionRefType(expression, context, scope, visiting);
     case 'map': {
-      const item = itemTypeOf(inferExpressionType(expression.source, context, scope));
+      const item = itemTypeOf(inferExpressionType(expression.source, context, scope, visiting));
       const projected = inferExpressionType(
         expression.projection,
         context,
         withScope(scope, expression.scopeId, item),
+        visiting,
       );
       return projected ? collectionType(projected) : undefined;
     }
     default:
       return undefined;
   }
+}
+
+/**
+ * The type a reference to a named expression produces.
+ *
+ * A declared `valueType` wins — it is the definition's own statement about itself. Otherwise
+ * the body is inferred with each parameter bound to its declared type, or, where it declares
+ * none, to the type of the argument this consumer passed. The body is inferred in a **fresh**
+ * scope, because that is how it is evaluated.
+ */
+function inferExpressionRefType(
+  expression: Expression & { kind: 'expression-ref' },
+  context: SemanticContext,
+  scope: ScopeTypes | undefined,
+  visiting: ReadonlySet<NodeId>,
+): TypeRef | undefined {
+  const definition = context.getExpressionDef?.(expression.expressionId);
+  if (!definition || visiting.has(expression.expressionId)) {
+    return undefined;
+  }
+  if (definition.valueType) {
+    return definition.valueType;
+  }
+  const bound = new Map<NodeId, TypeRef>();
+  for (const parameter of definition.parameters ?? []) {
+    const argument = expression.arguments?.[String(parameter.id)];
+    const type =
+      parameter.valueType ??
+      (argument ? inferExpressionType(argument, context, scope, visiting) : undefined);
+    if (type) {
+      bound.set(parameter.id, type);
+    }
+  }
+  return inferExpressionType(
+    definition.expression,
+    context,
+    bound,
+    new Set([...visiting, expression.expressionId]),
+  );
 }
 
 /** The scope bindings an expression introduces for its own sub-expressions. */
@@ -225,6 +292,7 @@ export function scopeForExpression(
     case 'sort':
     case 'every':
     case 'some':
+    case 'group':
       return withScope(
         scope,
         expression.scopeId,
@@ -267,6 +335,12 @@ export function isObviouslyIncompatible(target: TypeRef | undefined, value: Type
   }
   if (wanted.kind === 'collection' && given.kind === 'collection') {
     return isObviouslyIncompatible(wanted.itemType, given.itemType);
+  }
+  if (wanted.kind === 'group' && given.kind === 'group') {
+    return (
+      isObviouslyIncompatible(wanted.keyType, given.keyType) ||
+      isObviouslyIncompatible(wanted.itemType, given.itemType)
+    );
   }
   return false;
 }

@@ -22,6 +22,7 @@ import type {
   ConstraintDef,
   EntityDef,
   Expression,
+  ExpressionDef,
   FieldId,
   NodeId,
   ResolvedPresentation,
@@ -122,7 +123,14 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
 
   /** Nothing that reads state the client may not observe may reach the client. */
   const readsHiddenState = (expressions: readonly Expression[]): boolean =>
-    expressions.some((expression) => referencedIds(expression).some((id) => hiddenStateIds.has(id)));
+    expressions.some((expression) =>
+      // Following named expressions is not optional here: a calculation that reads
+      // server-only state must not reach the client because a consumer named it instead of
+      // inlining it.
+      referencedIds(expression, (id) => authorityOf.expressions.get(id)).some((id) =>
+        hiddenStateIds.has(id),
+      ),
+    );
 
   const nodes: Record<NodeId, ApplicationIR['nodes'][NodeId]> = {};
   const actions: Record<NodeId, ActionDef> = {};
@@ -131,6 +139,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
   const states: StateDef[] = [];
   const constraints: ConstraintDef[] = [];
   const transitionConstraints: TransitionConstraintDef[] = [];
+  const expressionDefs: Record<NodeId, ExpressionDef> = {};
   const routes: CompiledRoute[] = [];
 
   // Authoring metadata is stripped on the way in, so no later stage has to remember to.
@@ -214,6 +223,13 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
       case 'route':
         routes.push(compileRoute(node));
         break;
+      case 'expression':
+        if (readsHiddenState([node.expression])) {
+          delete nodes[node.id];
+          break;
+        }
+        expressionDefs[node.id] = node;
+        break;
       default:
     }
   }
@@ -287,6 +303,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
     uiNodes,
     constraints,
     transitionConstraints,
+    expressionDefs,
     routes,
     // An edge naming a node the client does not receive would tell it that node exists.
     edges: graph.semanticEdges().filter((edge) => nodes[edge.from] && nodes[edge.to]),

@@ -1,9 +1,11 @@
 import {
-  SERVER_IR_CONTRACT,
   actionAuthority,
   actionGuards,
   authorityContext,
+  expressionDefsIn,
   isObservable,
+  requiredServerContract,
+  serverIRExpressions,
   serverStateClosure,
   stateAuthority,
   validateGraph,
@@ -13,6 +15,7 @@ import type {
   ApplicationGraph,
   ConstraintDef,
   EntityDef,
+  ExpressionDef,
   FieldId,
   NodeId,
   ServerIR,
@@ -48,6 +51,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
   const entities: EntityDef[] = [];
   const constraints: ConstraintDef[] = [];
   const transitionConstraints: TransitionConstraintDef[] = [];
+  const expressionDefs: Record<NodeId, ExpressionDef> = {};
   for (const node of nodes) {
     if (node.kind === 'entity') {
       entities.push(node);
@@ -55,6 +59,8 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
       constraints.push(node);
     } else if (node.kind === 'transition-constraint') {
       transitionConstraints.push(node);
+    } else if (node.kind === 'expression') {
+      expressionDefs[node.id] = node;
     }
   }
 
@@ -91,8 +97,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     fields[entry.field.id] = entry;
   }
 
-  return {
-    contract: SERVER_IR_CONTRACT,
+  const rules = {
     id: graph.id,
     name: graph.name,
     version: graph.version,
@@ -105,6 +110,33 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     ...(graph.principalEntityId ? { principalEntityId: graph.principalEntityId } : {}),
     observableStateIds,
   };
+
+  // Only the definitions the authority's own rules reach. A calculation used by the client
+  // alone decides nothing here, and the Server IR carries nothing that decides nothing.
+  const used: Record<NodeId, ExpressionDef> = {};
+  const pending = serverIRExpressions(rules).flatMap((expression) => expressionDefsIn(expression));
+  while (pending.length > 0) {
+    const id = pending.pop() as NodeId;
+    const definition = expressionDefs[id];
+    if (!definition || used[id]) {
+      continue;
+    }
+    used[id] = definition;
+    pending.push(...expressionDefsIn(definition.expression));
+  }
+  const carriesDefinitions = Object.keys(used).length > 0;
+  const document = { ...rules, ...(carriesDefinitions ? { expressionDefs: used } : {}) };
+
+  /**
+   * The label follows the vocabulary the document actually uses. An application that uses
+   * nothing from 0.7 compiles to the same `axiom.server.v1` document it always did; one
+   * that groups or names an expression says so, because a v1 runtime could not execute it.
+   */
+  const contract = carriesDefinitions
+    ? 'axiom.server.v2'
+    : requiredServerContract(serverIRExpressions(document));
+
+  return { contract, ...document };
 }
 
 export function serializeServerIR(ir: ServerIR): string {

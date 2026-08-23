@@ -115,7 +115,16 @@ export function compareValues(left: unknown, right: unknown): number {
   return compareText(toText(left), toText(right));
 }
 
-/** A stable serialization, so record comparison does not depend on key order. */
+/**
+ * A stable serialization, so record comparison does not depend on key order.
+ *
+ * Also the identity of a group key: two keys are the same key when they serialize the same
+ * way, which is what lets a key be a record and not only a primitive.
+ */
+export function canonicalKey(value: unknown): string {
+  return canonical(value);
+}
+
 function canonical(value: unknown): string {
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value) ?? 'null';
