@@ -184,9 +184,21 @@ Note that npm claims `latest` on a package's first publish whatever `--tag` says
 not let it be deleted — so `latest` exists regardless. Publishing to it directly is simply
 admitting that. Check with `npm view @cynodia/axiom dist-tags` rather than assuming.
 
-`scripts/dist-tag-lib.mjs` still holds the tag-moving logic, shared with
-`npm run release:dist-tag`, for repairing a tag or introducing a second one when a stable
-line eventually exists.
+`scripts/dist-tag-lib.mjs` holds the tag logic, shared with `npm run release:dist-tag`, for
+repairing a tag or introducing a second one when a stable line eventually exists. It also
+removes one:
+
+```bash
+npm run release:dist-tag -- --tag=alpha --rm --dry-run   # show what would go
+npm run release:dist-tag -- --tag=alpha --rm             # remove it everywhere
+```
+
+A tag left behind is worse than no tag. `alpha` was set by the 0.6.0 release and then frozen
+there when publishing switched to `latest`, so `npm install @cynodia/axiom@alpha` kept handing
+out 0.6.0 with nothing about the install saying so. Either keep a second tag in step on every
+release — one extra registry call per package, for a tag that can only ever point where
+`latest` points — or remove it. `latest` cannot be removed; npm creates it on first publish
+and refuses, which the script checks before trying.
 
 `release:prepare` ends with `scripts/consumer-test.mjs`, which builds a project in a temp
 directory from the tarballs alone — no workspace links, no path aliases, no relative
@@ -194,7 +206,7 @@ imports into the repo — and runs a Counter application written against the pub
 you change what a package exports, that test is what proves an outside consumer can still
 use it. `release:publish` additionally requires a clean git tree (`--allow-dirty` to
 override), `npm whoami` to be `cynodia`, and a pre-release version, and publishes the
-verified tarballs under the `alpha` dist-tag — never `latest`.
+verified tarballs as `latest` — see **One publish sets one tag** above.
 
 **Two-factor authentication.** The npm account has 2FA, so publishing *and* moving a
 dist-tag are both write operations that need it. Let npm authenticate on its own terms:

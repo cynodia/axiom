@@ -537,7 +537,8 @@ This project has no stable line yet: a separate `alpha` tag would only ever poin
 pre-release signal is the version string and the status line above.
 
 Pass `--tag=<name>` for a release that should not become the default install.
-`npm run release:dist-tag` remains for moving a tag by hand.
+`npm run release:dist-tag` remains for moving a tag by hand, and
+`npm run release:dist-tag -- --tag=<name> --rm` removes one that no longer means anything.
 
 ## License
 

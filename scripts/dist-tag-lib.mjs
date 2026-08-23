@@ -79,6 +79,49 @@ export async function moveDistTag({ tag = 'latest', dryRun = false, otp, log = c
   return { moved, alreadyCorrect, missing: [] };
 }
 
+/**
+ * Removes `tag` from every package that carries it.
+ *
+ * The counterpart to `moveDistTag`, for a tag that should stop existing rather than be kept
+ * in step. A tag left behind is worse than no tag: `npm install <pkg>@alpha` keeps quietly
+ * handing out whichever release last set it, and nothing about the install says so.
+ *
+ * `latest` is refused. npm creates it on a package's first publish and will not delete it,
+ * so an attempt can only fail — and failing loudly here is better than a registry error
+ * halfway through a loop.
+ */
+export async function removeDistTag({ tag, dryRun = false, otp, log = console.log }) {
+  if (tag === 'latest') {
+    throw new Error('npm does not allow removing "latest"; point it somewhere instead.');
+  }
+
+  const carrying = publishable.filter(({ name }) => tagsOf(name)[tag] !== undefined);
+  if (carrying.length === 0) {
+    log(`No package carries a "${tag}" tag.`);
+    return { removed: [], untouched: publishable.map((entry) => entry.name) };
+  }
+
+  log(`${dryRun ? 'Would remove' : 'Removing'} "${tag}" from:`);
+  for (const { name } of carrying) {
+    log(`  ${name} (currently ${tagsOf(name)[tag]})`);
+  }
+  if (dryRun) {
+    return { removed: [], untouched: [] };
+  }
+
+  const removed = [];
+  for (const { name } of carrying) {
+    try {
+      await otp.run(name, ['dist-tag', 'rm', name, tag], repoRoot);
+      removed.push(name);
+    } catch (error) {
+      error.removed = removed;
+      throw error;
+    }
+  }
+  return { removed, untouched: [] };
+}
+
 export function reportTags(log = console.log) {
   log('\nCurrent tags:');
   for (const { name } of publishable) {
