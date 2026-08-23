@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.6.2-alpha.1. How an application crosses the trust boundary.
+Axiom 0.6.3-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -568,7 +568,7 @@ result is identical to some serial order. Across processes, correctness rests on
 persistence adapter's revision check — the contract guarantees that a commit from a stale
 snapshot is refused, not that two processes coordinate.
 
-## Not in 0.6.2
+## Not in 0.6.3
 
 Stated plainly rather than left to discovery:
 

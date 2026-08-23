@@ -11,8 +11,51 @@ halves follow from that — the browser page and the authoritative server that d
 mutations and persists them. Neither is written by hand: there is no route, controller,
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
-**Status: experimental / alpha (0.6.2-alpha.x).** The API may change between alpha
-releases. This documentation describes 0.6.2-alpha.1.
+**Status: experimental / alpha (0.6.3-alpha.x).** The API may change between alpha
+releases. This documentation describes 0.6.3-alpha.1.
+
+## Who this is for
+
+> **The primary developer of an Axiom application is an AI coding agent.** Humans are a
+> secondary audience, and human readability is explicitly **not** the primary optimization
+> target.
+
+Vue, React, Angular and Svelte assume a human is the principal author, and their abstractions
+follow from that: readable source files, familiar syntax, manual navigation, line-oriented
+debugging, textual diffs, conventions that lower human cognitive load. Those are the right
+properties when a human writes the software. Axiom asks what a framework looks like when that
+assumption is dropped, and optimizes instead for machine manipulation, semantic precision,
+deterministic transformation, automatic verification, introspection and safe autonomous
+modification.
+
+The concrete difference is that **human-oriented source code is not a mandatory intermediate
+representation**:
+
+```text
+conventional          AI-assisted                    Axiom
+──────────────        ──────────────                 ──────────────
+human intent          human intent                   human intent
+     ↓                     ↓                              ↓
+source code           agent                          agent
+     ↓                     ↓                              ↓
+framework             human-oriented source code     ApplicationGraph
+     ↓                     ↓                              ↓
+application           framework                      Axiom compiler + runtime
+                           ↓                              ↓
+                      application                    application
+```
+
+What that means for an agent working here:
+
+- **Do not read, edit or reason about the generated output.** The emitted JavaScript, HTML and CSS are build products, like object files. Nothing is authored there and nothing should be patched there.
+- **Modify the graph, not text.** Change a node, not a line. `AgentAPI` answers questions about semantics, reports the impact of a mutation, and applies transformations transactionally — see [`docs/AGENT_API.md`](docs/AGENT_API.md).
+- **The failure modes are structural, not stylistic.** A wrong graph is rejected by `validateGraph` with a code and a path; there is no linter, no formatter and no house style to infer.
+- **The documentation is part of the semantic contract and is written for you.** `docs/` is rule-oriented and machine-facing — invariants, truth tables, diagnostic codes, MUST and MUST NOT — not a tutorial set. It is tested against the implementation in both directions, so a documented code, symbol or method that no longer exists fails the build.
+
+One honest caveat: a graph is JSON and round-trips losslessly, but applications in this
+repository are still **authored as TypeScript builder functions** calling `addNode`. That is a
+concession to human authoring and a known limit, not the intended end state — there is no
+on-disk graph format and no semantic version control yet.
 
 ## Canonical mental model
 
@@ -402,6 +445,11 @@ What the authority — and only the authority — did:
 constraints, `serverOnly` state, diagnostics as UI and a parameterized form.
 
 ## Documentation map
+
+Written for an unfamiliar coding agent rather than a human learner: one canonical location per
+rule, MUST/MUST NOT, tables for edge cases, no tutorial padding. `docs/AGENT_REFERENCE.md`
+plus the `.d.ts` declarations are meant to be sufficient on their own, and both ship inside
+the published package — no repository access is needed to obtain the contract.
 
 | Need to understand | Read |
 | --- | --- |

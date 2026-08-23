@@ -1,6 +1,6 @@
 {
   "name": "axiom",
-  "version": "0.6.2-alpha.1",
+  "version": "0.6.3-alpha.1",
   "private": true,
   "workspaces": [
     "packages/*"
