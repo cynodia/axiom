@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.6.1-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.6.2-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
