@@ -10,10 +10,12 @@ import {
   F_PRODUCT_PRICE,
   STATE_DRAFT_PRODUCT,
   STATE_PRODUCTS,
-  createBaselineApplication,
   createToolkitApplication,
-} from '@cynodia/axiom-ui-toolkit/research';
-import { stripProvenance } from '@cynodia/axiom-ui-toolkit';
+} from '@cynodia/axiom-ui/example';
+import { stripProvenance } from '@cynodia/axiom-ui';
+// The hand-built comparison. It exists to be measured against and is deliberately not part
+// of the published package: a toolkit that shipped an anti-example would be teaching it.
+import { createBaselineApplication } from './baseline.js';
 
 /**
  * §18–19, §66: the expanded application must be an ordinary Axiom application.

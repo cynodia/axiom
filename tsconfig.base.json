@@ -21,11 +21,11 @@
       "@cynodia/axiom-core": [
         "packages/core/src/index.ts"
       ],
-      "@cynodia/axiom-ui-toolkit": [
+      "@cynodia/axiom-ui": [
         "packages/ui-toolkit/src/index.ts"
       ],
-      "@cynodia/axiom-ui-toolkit/research": [
-        "packages/ui-toolkit/src/research/index.ts"
+      "@cynodia/axiom-ui/example": [
+        "packages/ui-toolkit/src/example/index.ts"
       ],
       "@cynodia/axiom-runtime": [
         "packages/runtime/src/index.ts"

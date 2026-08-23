@@ -1,4 +1,4 @@
-import type { ApplicationGraph, NodeId, Presentation, UINode } from '@cynodia/axiom-core';
+import type { ApplicationGraph, Expression, NodeId, Presentation, UINode } from '@cynodia/axiom-core';
 import { AUTHORING_METADATA_KEY, authoringMetadata, nodeId } from '@cynodia/axiom-core';
 
 /**
@@ -13,6 +13,25 @@ import { AUTHORING_METADATA_KEY, authoringMetadata, nodeId } from '@cynodia/axio
  * runtime. That is the hybrid answer to "are pattern definitions data or code" — the part an
  * agent must discover is data, the part that only runs during authoring is code.
  */
+
+/**
+ * User-visible text a pattern places in the graph.
+ *
+ * The rule 0.7 adopts (spec7 §29): **a pattern input carrying user-visible value text takes
+ * `string | Expression`** unless there is a concrete semantic reason it cannot. Phase 2 found
+ * `PageDeclaration.title: string` produced a detail page titled "Edit product" rather than
+ * the product's name — and the restriction was the pattern's, not Axiom's, because
+ * `TextNode.value` accepted an expression all along.
+ */
+export type PatternText = string | Expression;
+
+/**
+ * A node's `name` is metadata for people and resolves nothing, so it only makes sense when
+ * the text is literal. An expression has no name to give.
+ */
+export function nameOf(text: PatternText | undefined): string | undefined {
+  return typeof text === 'string' ? text : undefined;
+}
 
 /** How a pattern input is described to an agent that has never seen the pattern. */
 export interface PatternInput {
@@ -173,7 +192,16 @@ export type Ownership = 'declaration' | 'graph';
 
 export const PROVENANCE_KEY = 'toolkit';
 export const TOOLKIT_NAME = '@cynodia/axiom-ui';
-export const TOOLKIT_VERSION = '0.2.0-research';
+/**
+ * The semantics an expansion was produced under.
+ *
+ * Bumped whenever a pattern's expansion changes, which is what makes a stored expansion
+ * reproducible and an upgrade diffable: 0.7 changed three patterns — an edit mode, a label
+ * inferred from a state, a title that may be an expression — so an expansion recorded as
+ * `0.2.0` is not one this toolkit would produce. `diffPatternExpansion` is how an author sees
+ * the difference before adopting it.
+ */
+export const TOOLKIT_VERSION = '0.7.0';
 
 export function provenanceOf(node: { metadata?: Record<string, unknown> }): ToolkitProvenance | undefined {
   const found = authoringMetadata(node)?.[PROVENANCE_KEY];

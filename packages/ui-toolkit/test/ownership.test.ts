@@ -12,9 +12,9 @@ import {
   mapIssuesToDeclarations,
   materializePattern,
   provenanceOf,
-} from '@cynodia/axiom-ui-toolkit';
-import { STATE_PRODUCTS, createOrderDomain, createToolkitApplication } from '@cynodia/axiom-ui-toolkit/research';
-import { entityList } from '@cynodia/axiom-ui-toolkit';
+} from '@cynodia/axiom-ui';
+import { STATE_PRODUCTS, createOrderDomain, createToolkitApplication } from '@cynodia/axiom-ui/example';
+import { entityList } from '@cynodia/axiom-ui';
 
 /**
  * §3–21: where provenance lives, and who owns a node after expansion.
@@ -92,7 +92,7 @@ test('provenance is minimal, stable and traceable through nesting', () => {
   ]);
   assert.equal(rowAction.toolkit, '@cynodia/axiom-ui');
   assert.equal(rowAction.pattern, 'entity-list');
-  assert.equal(rowAction.patternVersion, '0.2.0');
+  assert.equal(rowAction.patternVersion, '0.7.0');
   assert.equal(rowAction.parent, 'products', 'the nearest generating pattern');
   assert.deepEqual(rowAction.ancestry, ['products'], 'and the chain to the outermost');
 

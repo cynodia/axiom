@@ -1,6 +1,6 @@
 # UI
 
-Axiom 0.6.3-alpha.1. Eleven semantic UI node kinds describe **what exists and what it does**.
+Axiom 0.7.0-alpha.1. Eleven semantic UI node kinds describe **what exists and what it does**.
 How it looks is [presentation](PRESENTATION.md).
 
 All eleven share `UIBase`:
@@ -267,6 +267,9 @@ describes.
 - **Focus moves in once**, when the dialog is first rendered open, not on every re-render. A full re-render must not take focus back from wherever the person moved it.
 - `title` MUST NOT be empty: a dialog with no accessible name is `INVALID_DIALOG`. `initialFocusId` MUST be inside the dialog and `returnFocusId` MUST NOT be, since it has to exist after the dialog is gone.
 - Nothing here names an element, a class, a position or a stacking order. A renderer that is not a browser implements the same semantics its own way.
+- **Verified in a real browser.** Role, accessible name, `aria-modal`, focus entry, `Tab` and `Shift+Tab` containment, `Escape`, focus return to the correct render instance, a text field inside the dialog, and the absence of a closed dialog are all asserted against Chromium, not only against the in-memory host.
+- **Keyboard containment, not pointer containment.** A modal contains focus and announces itself as modal. It does **not** currently make the rest of the document inert, so a pointer can still reach what is behind it. Declare the rule in a guard, never in the dialog — see [visibility is not authorization](#visibility-is-not-authorization).
+- **Focus return prefers the exact render instance that opened it**, and falls back to another instance of the same control when the action removed that row. A destructive confirmation usually deletes the row its trigger was in; dropping focus to the top of the document instead would lose a keyboard user's place.
 
 ### `conditional`
 
@@ -276,6 +279,55 @@ describes.
 
 Renders one branch. The condition uses the truthiness rules in
 [`EXPRESSIONS.md`](EXPRESSIONS.md#conversions) — note that `[]` is falsy.
+
+## Interaction primitives
+
+`dialog` is the first of a class, and the rule that puts it here rather than in a pattern
+library is worth stating once:
+
+> Interaction semantics that **cannot be reduced to existing canonical nodes** belong in core.
+
+An authoring pattern can only emit nodes that already exist. So anything whose defining
+behaviour is not a node — focus movement, containment, `Escape`, typeahead, active descendant,
+the ARIA relationships that go with them — is unreachable from a pattern at any level of
+cleverness, and has to be canonical semantics with runtime support.
+
+| Candidate | Class | State |
+| --- | --- | --- |
+| `dialog` | canonical-semantic | implemented, browser-verified |
+| `combobox` | canonical-semantic | **classified, not implemented** |
+| `menu`, `tabs`, `accordion`, `tooltip`, `popover` | canonical-semantic | unexamined; each needs its own contract |
+| focus trap, keyboard scheme, live announcement | renderer-only | reached through canonical semantics, never declared |
+| page, metric grid, entity list, entity form, action bar | pattern-expandable | `@cynodia/axiom-ui` |
+
+**Combobox** was probed deliberately because it looks least like a dialog: no modality, no
+interruption, a control inside a form. It divides at the identical seam. Expressible today,
+with no new node kind: the bound value, the option source (`InputNode.options`), option
+identity and label, filtering, and open state — all ordinary state and expressions. Not
+expressible at all: arrow-key navigation, active descendant, typeahead, `aria-expanded` and the
+listbox relationships. Two primitives that share no shape dividing the same way is what makes
+the split a rule rather than an observation about dialogs.
+
+## Semantic UI authoring
+
+Nodes are the model, not the authoring surface an application has to use. `@cynodia/axiom-ui`
+adds five patterns that expand — at build time — into exactly the nodes described on this page.
+
+**Which to reach for:**
+
+| The requirement is | Use |
+| --- | --- |
+| recurring application UX that expands deterministically into existing semantics | a **pattern** (`page`, `metric-grid`, `entity-list`, `entity-form`, `action-bar`) |
+| interaction behaviour that needs the runtime to do something | a **canonical interaction primitive** (`dialog`) |
+| custom, but already expressible | **ordinary canonical nodes**, composed |
+| genuinely unsupported presentation | the renderer escape (`rendererOverrides.web.className`), and nothing more |
+
+A pattern is an authoring abstraction and nothing else: after expansion the application is an
+ordinary Axiom application, and `validateGraph`, `compileToIR`, `AgentAPI` and the runtime know
+nothing about patterns. Ownership defaults to the **declaration**, so editing a generated node
+is drift rather than an edit. The contract travels with the package rather than being restated here: install
+`@cynodia/axiom-ui` and read its `README.md`, `docs/TOOLKIT_AGENT_REFERENCE.md` and
+`docs/PATTERN_CATALOG.json` — the last is addressable as `@cynodia/axiom-ui/catalog`.
 
 ## Containment
 

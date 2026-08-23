@@ -124,6 +124,25 @@ for (const { name } of publishable) {
   if (name === '@cynodia/axiom') {
     required.push(...REQUIRED_FACADE_DOCS);
   }
+  if (name === '@cynodia/axiom-ui') {
+    // The catalogue is the toolkit's agent-facing interface, and an agent that installed the
+    // package must not need repository access to read it.
+    required.push('docs/PATTERN_CATALOG.json', 'docs/TOOLKIT_AGENT_REFERENCE.md');
+    const catalog = JSON.parse(
+      execFileSync('tar', ['-xzOf', tarball, 'package/docs/PATTERN_CATALOG.json'], { encoding: 'utf8' }),
+    );
+    if (catalog.release !== version) {
+      report(name, `ships a catalogue generated for ${catalog.release}, not ${version}`);
+    }
+    if ((catalog.patterns ?? []).length === 0) {
+      report(name, 'ships a catalogue with no patterns');
+    }
+    // The measurement baseline is a deliberate anti-example. It must not travel with the
+    // package that teaches the alternative.
+    if (files.some((file) => /baseline/.test(file))) {
+      report(name, 'ships the hand-built measurement baseline');
+    }
+  }
   if (name === '@cynodia/axiom-server') {
     // The conformance fixtures are the contract an independent runtime is held to, so they
     // travel with the package rather than living only in the repository.

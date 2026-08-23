@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   ApplicationGraph,
@@ -25,8 +26,8 @@ import {
   listPatterns,
   rowField,
   rowRef,
-} from '@cynodia/axiom-ui-toolkit';
-import type { PatternFinding } from '@cynodia/axiom-ui-toolkit';
+} from '@cynodia/axiom-ui';
+import type { PatternFinding } from '@cynodia/axiom-ui';
 import {
   ACTION_ADD_PRODUCT,
   ACTION_CONFIRM_ORDER,
@@ -47,7 +48,7 @@ import {
   STATE_PRODUCTS,
   createOrderDomain,
   createToolkitApplication,
-} from '@cynodia/axiom-ui-toolkit/research';
+} from '@cynodia/axiom-ui/example';
 
 /** Runs the expansion and returns the findings it was refused with. */
 function refusal(run: () => unknown): PatternFinding[] {
@@ -188,6 +189,18 @@ test('a UI concept with no pattern is built from patterns plus canonical primiti
 });
 
 // ------------------------------------------------------ §44–46: a third-party pattern
+
+test('the published package depends on core and on nothing else', () => {
+  // §4: the dependency direction is axiom-ui → axiom-core. The tests here use the compiler and
+  // the runtime, and they are deliberately not dependencies: an authoring package that pulled
+  // the runtime in would be shipping the thing it exists to stay out of.
+  const manifest = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  ) as { private?: boolean; dependencies?: Record<string, string>; devDependencies?: unknown };
+  assert.deepEqual(Object.keys(manifest.dependencies ?? {}), ['@cynodia/axiom-core']);
+  assert.equal(manifest.devDependencies, undefined, 'a published manifest ships no devDependencies');
+  assert.notEqual(manifest.private, true, 'the toolkit is public as of 0.7');
+});
 
 test('a pattern defined outside the core toolkit uses the same mechanism', () => {
   // The proof that Axiom core needs no change per pattern: this one lives here, in a test.

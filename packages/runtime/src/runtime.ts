@@ -387,6 +387,27 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
    * declared `returnFocusId` at all.
    */
   let pendingFocusReturn: string | null = null;
+  /**
+   * A dialog that opened during this render, and the control focus belongs on.
+   *
+   * Focus cannot be moved while the tree is being built: an element that is not in the
+   * document yet is not focusable, so `focus()` on it does nothing in a browser. The
+   * in-memory host is more forgiving, which is exactly why this was wrong for a release and
+   * only a real browser caught it. Entry focus is therefore deferred to after the render,
+   * beside the focus restoration that already happens there.
+   */
+  let pendingDialogFocus: DomElement | null = null;
+  /**
+   * Which render the elements on screen belong to.
+   *
+   * Rendering is a full replace, so removing a focused control makes the browser fire `blur`
+   * and — if its value changed — `change`, **on the element that was just detached**. Handling
+   * that as a new intent re-enters the render from inside itself and applies the same
+   * mutation twice. A control therefore ignores events that arrive after the render which
+   * created it. Nothing in the in-memory host fires those events, which is why only a real
+   * browser found this.
+   */
+  let renderGeneration = 0;
   /** Every focusable control of the current render, by instance key. */
   const focusableControls = new Map<string, DomElement>();
   /** The instance that last held focus, so a dialog knows where to send it back. */
@@ -2375,9 +2396,18 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           renderApplication();
         };
         // A radio group's listeners live on its radios; everything else is one control.
+        const generation = renderGeneration;
+        const applyIfCurrent = (event: DomEvent): void => {
+          if (generation !== renderGeneration) {
+            // This element has already been replaced; the event is the browser tidying up
+            // after it, not a person changing a value.
+            return;
+          }
+          apply(event);
+        };
         for (const target of grouped ? radios : [control]) {
-          target.addEventListener('input', apply);
-          target.addEventListener('change', apply);
+          target.addEventListener('input', applyIfCurrent);
+          target.addEventListener('change', applyIfCurrent);
           target.addEventListener('focus', () => {
             focusedInstance = instance;
           });
@@ -2570,7 +2600,8 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           // inside a repeat sends focus back to the row it was actually pressed in.
           dialogReturnTargets.set(node.id, openedFromInstance ?? null);
           const initial = focus.initial ?? focus.focusable[0];
-          initial?.focus?.();
+          // Applied once the tree is attached — see `pendingDialogFocus`.
+          pendingDialogFocus = initial ?? null;
           focus.focusedIndex = initial ? focus.focusable.indexOf(initial) : -1;
         }
         // A declared `returnFocusId` is an override for the case where focus should not go
@@ -2626,6 +2657,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   }
 
   function renderApplication(): void {
+    renderGeneration += 1;
     inputElements.clear();
     submitInvokers.clear();
     // Which instance held focus as this render began. A dialog opening during it captures
@@ -2648,7 +2680,35 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     restoreFocus();
   }
 
+  /**
+   * Where focus goes when the control that opened a dialog no longer exists.
+   *
+   * A destructive confirmation usually removes the very row its trigger was in, so the exact
+   * render instance is gone by the time the dialog closes. Dropping focus to the top of the
+   * document would lose a keyboard user's place entirely; the nearest equivalent is another
+   * instance of the same node — the next row's control. Absent that, nothing: an invented
+   * target would be worse than none.
+   */
+  function survivingSibling(instanceKeyValue: string): DomElement | undefined {
+    const nodeIdentity = instanceKeyValue.split('--')[0] as NodeId;
+    const remaining = instancesOfNode.get(nodeIdentity) ?? [];
+    for (const candidate of remaining) {
+      const element = focusableControls.get(candidate);
+      if (element) {
+        return element;
+      }
+    }
+    return undefined;
+  }
+
   function restoreFocus(): void {
+    // A dialog that just opened takes focus, now that its controls are in the document.
+    if (pendingDialogFocus) {
+      const entry = pendingDialogFocus;
+      pendingDialogFocus = null;
+      entry.focus?.();
+      return;
+    }
     // A dialog that just closed takes precedence: focus belongs on whatever opened it, not on
     // whatever happened to hold focus before the re-render.
     if (pendingFocusReturn) {
@@ -2656,7 +2716,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       pendingFocusReturn = null;
       const target = request.startsWith('declared:')
         ? focusableControls.get((instancesOfNode.get(request.slice('declared:'.length) as NodeId) ?? [])[0] ?? '')
-        : focusableControls.get(request);
+        : (focusableControls.get(request) ?? survivingSibling(request));
       if (target) {
         target.focus?.();
         return;
@@ -2773,6 +2833,43 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   };
 }
 
+/**
+ * Local storage, where the browser will actually allow it.
+ *
+ * `localStorage` **exists and still throws**: an opaque origin — a sandboxed iframe, a
+ * `srcdoc` document, a `data:` URL, a private window with storage blocked — denies access on
+ * property read, not on use. Startup must not depend on that succeeding: a page that cannot
+ * persist should render and work, keeping the state in memory instead of failing to boot.
+ * Every call is guarded for the same reason: a write can fail on quota long after startup.
+ */
+function browserStorage(globals: Record<string, any>): HostEnvironment['storage'] {
+  let store: { getItem(key: string): string | null; setItem(key: string, value: string): void };
+  try {
+    store = globals.localStorage;
+    if (!store) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return {
+    read: (key: string) => {
+      try {
+        return store.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    write: (key: string, value: string) => {
+      try {
+        store.setItem(key, value);
+      } catch {
+        globals.console?.warn?.(`Axiom could not persist ${key}: storage is unavailable`);
+      }
+    },
+  };
+}
+
 /** Builds a host bound to the browser globals. Used by generated pages. */
 export function createBrowserHost(): HostEnvironment {
   const globals = globalThis as unknown as Record<string, any>;
@@ -2787,12 +2884,7 @@ export function createBrowserHost(): HostEnvironment {
       typeof globals.crypto?.randomUUID === 'function'
         ? globals.crypto.randomUUID()
         : `id-${Date.now().toString(16)}-${Math.floor(Math.random() * 1e9).toString(16)}`,
-    storage: globals.localStorage
-      ? {
-          read: (key: string) => globals.localStorage.getItem(key),
-          write: (key: string, value: string) => globals.localStorage.setItem(key, value),
-        }
-      : undefined,
+    storage: browserStorage(globals),
     report: (message: string) => globals.console?.warn?.(message),
   };
 }

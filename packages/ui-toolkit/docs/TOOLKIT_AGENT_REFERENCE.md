@@ -1,6 +1,6 @@
 # Axiom UI Toolkit — Agent Reference
 
-`@cynodia/axiom-ui` 0.2.0-research. Semantic UI patterns for Axiom.
+`@cynodia/axiom-ui` 0.7.0-alpha.1. Semantic UI patterns for Axiom.
 
 Read this plus [`PATTERN_CATALOG.json`](PATTERN_CATALOG.json) and the `.d.ts` declarations.
 Nothing else should be necessary.
@@ -67,12 +67,48 @@ Inferred from the graph — do not repeat these:
 | number / boolean / date / datetime formats | `FieldDef.valueType` |
 | destructive emphasis | `ActionDef.destructive` |
 | the primary action of a form | its submit action |
+| a metric's label | the `name` of the state its value reads |
+| whether a form creates or edits | `draft` (create) or `target` (edit) — the two are different semantics, not a flag |
 
 **Never inferred**, because nothing in the graph says it — supply these explicitly:
 
 - **currency and percentage formats.** A `number` does not say which, and guessing from a field named `price` would be a heuristic you could not predict. Pass `formats`.
 - **which fields matter in a list.** The default is every field but the identity; narrow it with `fields`.
-- **whether a form creates or edits.** Pass `mode`. Default `create`, which offers the identity field.
+- **where a form writes.** `draft: S` creates a record in a draft state; `target: { state, identity }` edits the member of a collection that `identity` selects. Exactly one is given, and the mode follows from which. A form that gave neither, or both, is refused at the declaration.
+- **a choice drawn from application data.** A field whose value identifies another record takes an `options` source: `options: { [F_ORDER_PRODUCT]: { source: ref(STATE_PRODUCTS), scopeId, valueFieldId, labelFieldId } }`.
+
+## Creating and editing
+
+```ts
+// Create: controls write into a draft state, which is not checked per keystroke, because a
+// half-filled new record is incomplete by definition.
+{ pattern: 'entity-form', instance: 'new_product', draft: STATE_DRAFT, submit: ACTION_ADD }
+
+// Edit: controls write into the addressed member of a collection. Every write is
+// transactional against every hard invariant, and a value that breaks one is rolled back.
+{
+  pattern: 'entity-form',
+  instance: 'edit_product',
+  target: { state: STATE_PRODUCTS, identity: ref(ROUTE_PARAM_CODE) },
+  submit: ACTION_SAVE,
+}
+```
+
+The identity field of the entity is what addresses the member; an entity without one cannot be
+edited this way and says so (`NO_IDENTITY_FIELD`). An edit form omits the identity field from
+its controls, because an identity is what addresses a record, not something to retype.
+
+## User-visible text can be an expression
+
+A pattern input carrying user-visible **value** text takes `string | Expression`:
+
+```ts
+{ pattern: 'page', instance: 'detail', title: field(productInRoute(), F_PRODUCT_NAME) }
+```
+
+`page.title`, `page.description`, a metric's `label` and `description`, and a form's `title`,
+`description` and `submitLabel` all accept either. A caption that is the same on every record
+is a string; a title that names the record on screen is an expression.
 
 ## Composition
 
@@ -145,6 +181,19 @@ Generated nodes record who owns them. The default is `declaration`: **the declar
 source of truth, and editing a generated node is drift** that `detectDrift` reports and the
 next build overwrites. To take ownership of the result instead, `materializePattern`. See
 [`OWNERSHIP.md`](OWNERSHIP.md).
+
+## When not to add a pattern
+
+A new pattern is justified by **recurring semantic UX intent**, not by recurring visual
+structure. Before adding one, require evidence that it recurs, that its inference is
+meaningful, that expansion removes semantic restatement, that customization stays composable,
+and that canonical primitives alone are unnecessarily repetitive. A missing composition is not
+a missing pattern.
+
+Two things are never patterns:
+
+- **Interaction behaviour.** A pattern can only emit nodes that already exist, so focus movement, containment, `Escape`, typeahead and active descendant are unreachable from here. They are canonical semantics — `dialog` is one, and `combobox` is classified as the next.
+- **Anything that generates behaviour.** No pattern creates state, an action, a constraint or an authority. A pattern that generated an action would be hiding the part of an application that decides what happens.
 
 ## Rules
 

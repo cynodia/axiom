@@ -27,7 +27,7 @@ export interface ActionBarDeclaration {
 
 export const actionBar = definePattern<ActionBarDeclaration>({
   name: 'action-bar',
-  version: '0.2.0',
+  version: '0.7.0',
   purpose: 'A row of action controls whose emphasis is inferred from the actions themselves.',
   inputs: {
     actions: { kind: 'action-list', required: true, purpose: 'The actions to expose, in order.' },

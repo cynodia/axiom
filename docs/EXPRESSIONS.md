@@ -1,6 +1,6 @@
 # Expressions
 
-Axiom 0.6.3-alpha.1. An expression describes **what value is computed**. It is a tree of
+Axiom 0.7.0-alpha.1. An expression describes **what value is computed**. It is a tree of
 plain data, never source text and never a callback. Evaluation is pure: an expression MUST
 NOT change state.
 
@@ -116,7 +116,7 @@ Both branches are expressions. Only the chosen branch is evaluated.
 
 ### Collection operators
 
-All six bind the current member to `scopeId` and are strict about their source: `null`
+All seven bind the current member to `scopeId` and are strict about their source: `null`
 fails, `[]` behaves normally.
 
 | Builder | Input | Output | On `[]` |
@@ -127,6 +127,7 @@ fails, `[]` behaves normally.
 | `sort(src, scopeId, by, direction?)` | `Collection<A>` | `Collection<A>` | `[]` |
 | `every(src, scopeId, predicate)` | `Collection<A>` | `boolean` | **`true`** |
 | `some(src, scopeId, predicate)` | `Collection<A>` | `boolean` | **`false`** |
+| `group(src, scopeId, by)` | `Collection<A>` | `Collection<Group<K, A>>` | `[]` |
 | `flatten(src)` | `Collection<Collection<A>>` | `Collection<A>` | `[]` |
 
 - `sort` orders by the projected key, ascending unless `direction: 'desc'`. Numbers compare numerically; anything else compares as text. The sort is stable.
@@ -145,6 +146,67 @@ sum(
   ),
 )
 ```
+
+### `group(source, scopeId, by)`
+
+Builds `{ kind: 'group', source, scopeId, by }`. Partitions a collection by a key projected
+from each member. `Collection<A>` becomes
+`Collection<Group<K, A>>`, where `by` is evaluated with the member bound to `scopeId` — the
+same iteration scope every other collection operator introduces.
+
+A group is a **record keyed by two reserved field ids**, so it is read with the ordinary
+`field` vocabulary rather than an accessor invented for the occasion:
+
+```ts
+group(ref(LINES), LINE, field(ref(LINE), F_CATEGORY))   // Collection<Group<string, Line>>
+
+groupKey(ref(GROUP))     // field(ref(GROUP), GROUP_KEY_FIELD)   — the shared key
+groupItems(ref(GROUP))   // field(ref(GROUP), GROUP_ITEMS_FIELD) — the members
+```
+
+**The ordering contract is part of the semantics**, not an accident of implementation:
+
+| | |
+| --- | --- |
+| Group order | the order each key was **first seen** in the source |
+| Member order within a group | source order, preserved |
+| Key identity | structural equality, so a key may be a nested record and not only a primitive |
+| Empty source | no groups |
+| `null` source | fails the evaluation, like every collection operator |
+
+Nothing is sorted. A caller that wants groups in key order says so with `sort`, which is the
+operator whose job that is.
+
+`GROUP_KEY_FIELD` and `GROUP_ITEMS_FIELD` are **reserved**: an entity that declares either is
+`RESERVED_FIELD_ID`, and reading either from something that is not a group — or reading
+anything else *from* a group — is `INVALID_GROUP_FIELD`. A field id that meant one thing in
+one place and another elsewhere would defeat the reason ids exist.
+
+### `expressionRef(expressionId, arguments?)`
+
+Builds `{ kind: 'expression-ref', expressionId, arguments? }`, which evaluates a named
+`ExpressionDef` — the reuse mechanism. Without it, an expression used in
+three places is written three times, each needing its own scope ids.
+
+```ts
+graph.addNode<ExpressionDef>({
+  id: LINES_IN_CATEGORY,
+  kind: 'expression',
+  parameters: [{ id: P_CATEGORY, valueType: primitiveType('string') }],
+  expression: filter(ref(STATE_LINES), LINE, binary('eq', field(ref(LINE), F_CATEGORY), ref(P_CATEGORY))),
+});
+
+expressionRef(LINES_IN_CATEGORY, { [P_CATEGORY]: literal('fasteners') })
+```
+
+**Arguments are evaluated in the calling scope; the body is evaluated in an isolated one.**
+The body sees its parameters and application state, and nothing else. That isolation is the
+point: a definition reused in three places cannot pick up an iteration scope from one of
+them, and its internal scope ids can never collide with a caller's.
+
+Validation: `UNKNOWN_EXPRESSION_DEF` for a reference to something that is not one;
+`EXPRESSION_DEF_CYCLE` if a definition reaches itself; `MISSING_EXPRESSION_ARGUMENT` and
+`UNKNOWN_EXPRESSION_ARGUMENT` for arguments that do not match the declared parameters.
 
 ## Built-in functions
 

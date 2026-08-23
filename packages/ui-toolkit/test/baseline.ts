@@ -49,7 +49,7 @@ import {
   STATE_PRODUCTS,
   STATE_REVENUE,
   createOrderDomain,
-} from './domain.js';
+} from '@cynodia/axiom-ui/example';
 
 /**
  * The baseline: the same five screens, written in canonical Axiom UI by hand.
@@ -846,6 +846,13 @@ export function createBaselineApplication(): ApplicationGraph {
     kind: 'input',
     binding: { location: fieldLocation(stateLocation(STATE_DRAFT_ORDER), F_ORDER_CUSTOMER) },
     label: 'Customer',
+    options: {
+      source: ref(STATE_CUSTOMERS),
+      scopeId: nodeId('scope_baseline_customer_option'),
+      valueFieldId: F_CUSTOMER_ID,
+      labelFieldId: F_CUSTOMER_NAME,
+    },
+    presentation: { control: 'select' },
   });
   const editorProduct = nodeId('ui_editor_product');
   graph.addNode<InputNode>({
@@ -853,6 +860,13 @@ export function createBaselineApplication(): ApplicationGraph {
     kind: 'input',
     binding: { location: fieldLocation(stateLocation(STATE_DRAFT_ORDER), F_ORDER_PRODUCT) },
     label: 'Product',
+    options: {
+      source: ref(STATE_PRODUCTS),
+      scopeId: nodeId('scope_baseline_product_option'),
+      valueFieldId: F_PRODUCT_ID,
+      labelFieldId: F_PRODUCT_NAME,
+    },
+    presentation: { control: 'select' },
   });
   const editorQuantity = nodeId('ui_editor_quantity');
   graph.addNode<InputNode>({

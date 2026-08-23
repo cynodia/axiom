@@ -1,5 +1,6 @@
 import type { ContainerNode, NodeId, TextNode } from '@cynodia/axiom-core';
-import { definePattern } from '../pattern.js';
+import { definePattern, nameOf } from '../pattern.js';
+import type { PatternText } from '../pattern.js';
 
 /**
  * A conventional application page: a header region carrying the title, description and the
@@ -14,8 +15,13 @@ import { definePattern } from '../pattern.js';
 export interface PageDeclaration {
   pattern: 'page';
   instance: string;
-  title: string;
-  description?: string;
+  /**
+   * The page heading. `string | Expression`, so a detail page can be titled by the record it
+   * is about — `field(find(products, …), name)` — rather than by a caption that is the same
+   * on every product.
+   */
+  title: PatternText;
+  description?: PatternText;
   /** Placed in the header, to the trailing side of the title. */
   actions?: unknown;
   /** The page body, in order. */
@@ -24,11 +30,16 @@ export interface PageDeclaration {
 
 export const page = definePattern<PageDeclaration>({
   name: 'page',
-  version: '0.2.0',
+  version: '0.7.0',
   purpose: 'A titled application page with a header region, page-level actions and a content region.',
   inputs: {
-    title: { kind: 'text', required: true, purpose: 'The page heading, and the document’s level-1 heading.' },
-    description: { kind: 'text', required: false, purpose: 'A caption under the title.' },
+    title: {
+      kind: 'text',
+      required: true,
+      purpose:
+        'The page heading, and the document’s level-1 heading. A string, or an expression for a title that names the record the page is about.',
+    },
+    description: { kind: 'text', required: false, purpose: 'A caption under the title. A string or an expression.' },
     actions: {
       kind: 'slot',
       required: false,
@@ -55,6 +66,7 @@ export const page = definePattern<PageDeclaration>({
       {
         id: context.id('title'),
         kind: 'text',
+        // Whatever the author gave: a caption, or an expression over the record on screen.
         value: declaration.title,
         // `title` is the type scale; level 1 is the document outline. They are separate
         // decisions and the pattern makes both, because a page has exactly one of each.
@@ -141,11 +153,15 @@ export const page = definePattern<PageDeclaration>({
       );
     }
 
+    if (typeof declaration.title !== 'string') {
+      context.explain('page title is an expression, so it follows the record the page is about');
+    }
+
     return context.add<ContainerNode>(
       {
         id: context.id('root'),
         kind: 'container',
-        name: declaration.title,
+        ...(nameOf(declaration.title) ? { name: nameOf(declaration.title) as string } : {}),
         children,
         presentation: { layout: { kind: 'vertical', gap: 'large' }, padding: 'large' },
       },

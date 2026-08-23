@@ -1,34 +1,34 @@
 {
   "metrics": {
     "baseline": {
-      "authoringLines": 854,
+      "authoringLines": 868,
       "explicitIds": 107,
       "nodeConstructionCalls": 106,
-      "presentationDeclarations": 88,
+      "presentationDeclarations": 90,
       "manualContainers": 39,
       "patternInstances": 0,
-      "canonicalNodes": 140,
+      "canonicalNodes": 148,
       "canonicalUiNodes": 112,
       "validationErrors": 0,
       "validationWarnings": 0
     },
     "toolkit": {
-      "authoringLines": 92,
-      "explicitIds": 1,
+      "authoringLines": 111,
+      "explicitIds": 3,
       "nodeConstructionCalls": 0,
       "presentationDeclarations": 0,
       "manualContainers": 0,
       "patternInstances": 12,
-      "canonicalNodes": 138,
-      "canonicalUiNodes": 110,
+      "canonicalNodes": 193,
+      "canonicalUiNodes": 154,
       "validationErrors": 0,
       "validationWarnings": 0
     },
-    "toolkitImplementationLines": 1519
+    "toolkitImplementationLines": 1697
   },
   "summary": {
-    "authoringLines": 89.2,
-    "explicitIds": 99.1,
+    "authoringLines": 87.2,
+    "explicitIds": 97.2,
     "constructionCalls": 88.7,
     "presentationDeclarations": 100
   }

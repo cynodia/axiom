@@ -1,7 +1,7 @@
 # Axiom UI Toolkit — Architecture Research
 
 Status: research complete, prototype retained, no release recommended yet.
-Baseline: Axiom 0.6.3-alpha.1. Prototype: `packages/ui-toolkit` (private, never published).
+Baseline: Axiom 0.7.0-alpha.1. Prototype: `packages/ui-toolkit` (private, never published).
 
 **Classification: T1 — semantic toolkit validated.**
 **Model: H — hybrid. Application patterns → B (provenance-preserving expansion). Interaction primitives → C (first-class canonical semantics), and not yet.**

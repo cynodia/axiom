@@ -11,9 +11,23 @@ import { repoRoot } from './packages.mjs';
  * declaration of it.
  */
 const core = await import(path.join(repoRoot, 'packages/core/dist/index.js'));
-const research = await import(path.join(repoRoot, 'packages/ui-toolkit/dist/research/index.js'));
+const research = await import(path.join(repoRoot, 'packages/ui-toolkit/dist/example/index.js'));
+const { createBaselineApplication } = await import(
+  path.join(repoRoot, 'packages/ui-toolkit/dist-test/baseline.js')
+);
 
-const file = (name) => readFileSync(path.join(repoRoot, 'packages/ui-toolkit/src/research', name), 'utf8');
+/**
+ * The two applications are measured from source.
+ *
+ * The pattern-built one **ships** — it is the reference application, under
+ * `@cynodia/axiom-ui/example`. The hand-built baseline exists only to be measured against,
+ * so it lives with the tests and is never published.
+ */
+const file = (name) =>
+  readFileSync(
+    path.join(repoRoot, name === 'baseline.ts' ? 'packages/ui-toolkit/test' : 'packages/ui-toolkit/src/example', name),
+    'utf8',
+  );
 
 /** Lines that carry authoring, excluding blanks, comments and import bookkeeping. */
 function authoringLines(source, { from, to }) {
@@ -32,7 +46,7 @@ function count(source, pattern) {
 }
 
 const baselineSource = file('baseline.ts');
-const toolkitSource = file('toolkit-app.ts');
+const toolkitSource = file('app.ts');
 
 // The shell — navigation and view/route wiring — is byte-identical in both applications and
 // is not what a pattern layer addresses. It is reported, then excluded from the comparison.
@@ -58,7 +72,7 @@ const metrics = {
   },
 };
 
-for (const [name, build] of [['baseline', research.createBaselineApplication], ['toolkit', research.createToolkitApplication]]) {
+for (const [name, build] of [['baseline', createBaselineApplication], ['toolkit', research.createToolkitApplication]]) {
   const graph = build();
   const validation = core.validateGraph(graph);
   const nodes = graph.listNodes();
@@ -87,7 +101,7 @@ function treeLines(directory) {
   return total;
 }
 metrics.toolkitImplementationLines = treeLines(path.join(repoRoot, 'packages/ui-toolkit/src'))
-  - treeLines(path.join(repoRoot, 'packages/ui-toolkit/src/research'));
+  - treeLines(path.join(repoRoot, 'packages/ui-toolkit/src/example'));
 
 const reduction = (from, to) => (from === 0 ? 0 : Math.round(((from - to) / from) * 1000) / 10);
 

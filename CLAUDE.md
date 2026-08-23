@@ -25,12 +25,16 @@ turn it into a working browser application whose generated JavaScript nobody rea
 * `specs/spec6.md` — the 0.6 server authority & persistent runtime: state authority, a
   portable Server IR, an authoritative runtime, persistence, a semantic protocol and
   authorization.
-* `specs/spec6.1.md` — the **0.6.1 server runtime hardening & IR contract freeze: a working
+* `specs/spec6.1.md` — the 0.6.1 server runtime hardening & IR contract freeze: a working
   generated browser client for remote authority, a defined startup lifecycle, the `changes`
   contract, request-identity isolation, and `axiom.server.v1` frozen as a language-independent
-  contract with published schemas and addressable conformance fixtures**.
+  contract with published schemas and addressable conformance fixtures.
+* `specs/spec7.md` — the **0.7 semantic UI authoring layer: `@cynodia/axiom-ui` published,
+  declaration-owned expansion with drift and materialization, `entity-form` covering create
+  *and* edit, options sources, expression-capable pattern text, canonical `group` and named
+  reusable expressions, and real-browser dialog conformance**.
 
-Together, spec2–spec6.1 are the authority on design decisions — **except where the
+Together, spec2–spec7 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 
@@ -80,9 +84,12 @@ Requires **Node ≥ 22** — `npm test` relies on the test runner's native glob 
 npm install
 npm run build               # tsc -b across all workspaces; also writes both demo pages
 npm test                    # runs node:test over COMPILED output — build first, always
+npm run test:browser        # real-Chromium dialog conformance; FAILS if Playwright is absent
 
 npm run conformance:generate # rewrite packages/server/conformance/*.json + manifest.json
 npm run schema:generate      # rewrite packages/server/schema/*.json
+npm run toolkit:catalog      # rewrite packages/ui-toolkit/docs/PATTERN_CATALOG.json
+npm run toolkit:metrics      # re-measure authoring compression into packages/ui-toolkit/metrics.json
 
 # CLI (after a build) — a PRIVATE development tool of this repository, never published.
 # Takes a compiled module that exports a graph or a builder.
@@ -227,15 +234,22 @@ and tests resolve to source. Directory names stay short; npm names are scoped.
 | `agent-api` | `@cynodia/axiom-agent-api` | Semantic queries, mutation impact, transactions, transformations, change sets, presentation and UX queries. |
 | `compiler`  | `@cynodia/axiom-compiler` | Validation + normalization into `ApplicationIR`, presentation resolution, the theme stylesheet, and page emission. |
 | `runtime`   | `@cynodia/axiom-runtime` | State store, expression evaluation, the mutation subsystem, constraint checking, UI rendering, value formatting, routing. |
-| `axiom`     | `@cynodia/axiom` | The published facade: re-exports the four packages above. Application authors install only this. |
+| `ui-toolkit` | `@cynodia/axiom-ui` | **Semantic UI authoring**: the five patterns, expansion, provenance, ownership, drift, diff and the machine-readable catalogue. Depends on `core` **only**, and is build-time: nothing it produces reaches a runtime. The directory keeps its research-era name; the npm name is what ships. |
+| `axiom`     | `@cynodia/axiom` | The published facade: re-exports the four packages above. It deliberately does **not** re-export `@cynodia/axiom-ui` — an authoring dependency every application carried forever would make materialization untestable. |
 | `cli`       | *(private)* | Graph loading, `inspect` / `validate` / `build` / `serve`. |
 | `server`    | `@cynodia/axiom-server` | The authoritative runtime: Server IR execution, persistence adapters, the semantic protocol, transports and the Node host. Depends on `core` and `runtime`. |
-| `demo`      | *(private)* | Four applications: `issue-tracker.ts`, `inventory.ts`, `order-system.ts` and `order-server.ts`. |
+| `demo`      | *(private)* | Four applications: `issue-tracker.ts`, `inventory.ts`, `order-system.ts` and `order-server.ts` — plus the real-browser conformance tests, which is why Playwright is a devDependency here and nowhere else. |
 
 Dependency direction is `core ← runtime ← compiler ← cli/demo`, with `agent-api` on `core`
-alone and `server` on `core` and `runtime`. `ServerIR` lives in **core** for the same reason
-`ApplicationIR` does: it is the contract *between* the compiler and a server runtime. `ApplicationIR` lives in **core** rather than the compiler because it is the
-contract *between* compiler and runtime; putting it in the compiler would create a cycle.
+alone, `ui-toolkit` on `core` alone, and `server` on `core` and `runtime`. The toolkit's tests
+use the compiler and runtime, which are **not** declared as its dependencies: a published
+authoring package must not drag the runtime in, and workspace hoisting resolves them for the
+tests. `packages/ui-toolkit/test/architecture.test.ts` pins the published dependency set.
+
+`ServerIR` lives in **core** for the same reason `ApplicationIR` does: it is the contract
+*between* the compiler and a server runtime. `ApplicationIR` lives in **core** rather than the
+compiler because it is the contract *between* compiler and runtime; putting it in the compiler
+would create a cycle.
 
 ## The model
 
@@ -251,7 +265,7 @@ optional | enum` (`core/type-ref.ts`), with builders `primitiveType()`, `entityT
 
 **Expressions are trees, not text** (`core/expressions.ts`): `literal`, `ref`, `field`,
 `object`, `binary`, `unary`, `call`, `filter`, `find`, `map`, `sort`, `every`, `some`,
-`flatten`, `conditional`. Every kind has a
+`flatten`, `conditional`, `group`, `expression-ref`. Every kind has a
 builder — never hand-write the discriminated union. A `ref` resolves an **id** against the
 scope chain, in order: action parameters → iteration scopes → route parameters → state.
 The iteration scope for a `repeat` is the repeat node's own id; for `filter`, `find`,
@@ -270,6 +284,22 @@ value alongside a failure diagnostic — a failing expression throws
 `ExpressionEvaluationError`, which the runtime catches at each boundary (derivation,
 precondition, constraint, operation, render) and turns into a diagnostic. A constraint that
 cannot be evaluated counts as violated, never as satisfied.
+
+**Collections also partition.** `group(source, scopeId, by)` takes `Collection<A>` to
+`Collection<Group<K, A>>`, read with `groupKey` / `groupItems` — two **reserved field ids**
+(`core/group.ts`), because a group is a record and records are keyed by field id. The ordering
+contract is semantics, not implementation: groups in first-seen key order, members in source
+order, keys compared structurally, `[]` produces no groups and `null` fails like every other
+collection operator. Nothing is sorted; `sort` is the operator whose job that is. A group type
+may only appear in **derived** state, since nothing can construct one.
+
+**A calculation can be named once and referenced.** An `ExpressionDef` node holds parameters
+and a body; `expressionRef(id, args)` evaluates it. Arguments are evaluated in the caller's
+scope and **the body in an isolated one** — parameters and state, nothing else — which is what
+makes reuse sound and what stops one definition's scope ids from ever meeting a caller's.
+Dependency analysis follows definitions, so a consumer's read edges are the same whether the
+calculation was inlined or named; `derive-edges.ts` and `authority.ts` both resolve through
+them, and an answer that changed with authoring style would be a defect.
 
 **Collections project, aggregate and order.** `map(source, scopeId, projection)` takes
 `Collection<A>` to `Collection<B>`; `sum` reduces `Collection<number>` to a number (an
@@ -481,6 +511,16 @@ server-authoritative state unless `applyingAuthoritative` is set, and applying a
 authoritative answer still goes through it — `packages/runtime/test/store.test.ts` fails if a
 second `store.write(` call site appears anywhere in `runtime.ts`.
 
+**The contract identifier follows the vocabulary a document uses.** `axiom.server.v1` stays
+frozen: it does not contain `group`, `expression-ref` or `expressionDefs`. A document that uses
+any of them is labelled `axiom.server.v2` — computed from the document by
+`requiredServerContract`, never asserted by hand — so an application that uses nothing from 0.7
+still compiles to the byte-identical v1 document it always did, and the committed v1 conformance
+fixtures are unchanged. `createAxiomServer` executes both and **refuses a document that
+understates its contract**, because a runtime accepting vocabulary its label disclaims is how
+two implementations come to disagree about the same file. There is one schema per contract;
+`server-ir.v1.schema.json` is byte-frozen.
+
 **Server IR is portable data, and `axiom.server.v1` is now frozen.** No closure, no host
 object, no presentation, no UI. `packages/server/conformance/*.json` are committed fixtures —
 Server IR plus expected results — and `packages/server/schema/*.json` are the generated JSON
@@ -488,6 +528,15 @@ Schemas for the IR and the protocol. Both ship, both are addressable through the
 `exports` map, and both are checked against the runtime by tests. Regenerate with
 `npm run conformance:generate` and `npm run schema:generate` after changing the semantics or
 the vocabulary they cover.
+
+**The browser is part of the test strategy, not a substitute for the memory host.** The
+in-memory host is faithful enough for semantics and is where the fast tests live — but it is
+*more forgiving than a DOM*, and that difference hid four real defects until Chromium ran:
+`focus()` on a detached element does nothing; removing a focused input fires `change` on it and
+re-enters the render; `localStorage` throws on property read in an opaque origin; and focus
+return has to survive the return target being deleted by the very action that closed the dialog.
+When a change touches focus, keys, storage or the document, `npm run test:browser` is the only
+test that can confirm it.
 
 A frozen contract means the semantics in `docs/AUTHORITY.md` — IEEE-754 binary64 arithmetic,
 Unicode code-point text ordering, the deterministic host model, the JSON serialization

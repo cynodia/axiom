@@ -3,6 +3,8 @@
  * the published `@cynodia/axiom` package.
  */
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   AgentAPI,
   DEFAULT_THEME,
@@ -29,6 +31,7 @@ import {
   UI_TITLE,
   createCounterGraph,
 } from './counter.js';
+import { runPatternApplication } from './ui.js';
 import {
   createAxiomServer,
   createDirectTransport,
@@ -337,6 +340,15 @@ assert.equal(
 step('the authority boundary refuses a direct client write');
 
 await authority.stop();
+
+// ---------------------------------------------------------- semantic UI authoring
+
+const patterns = runPatternApplication(process.cwd());
+step('a pattern-built application validates with 0 errors and 0 warnings');
+step(`patterns expanded: ${patterns.metrics.patternInstances} instances, ${patterns.metrics.generatedNodes} generated nodes`);
+step(`provenance in production artifacts: ${patterns.metrics.provenanceInClientIr} in the client IR, ${patterns.metrics.provenanceInHtml} in the page`);
+step('drift is detected per property, and materialization detaches the declaration');
+writeFileSync(path.join(process.cwd(), 'expected.json'), JSON.stringify(patterns.expected));
 
 console.log('\nExternal consumer smoke test passed.');
 

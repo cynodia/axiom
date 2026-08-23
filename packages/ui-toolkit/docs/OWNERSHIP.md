@@ -40,6 +40,22 @@ detectDrift(graph, axiomUi.inspect(graph, 'product_list')!);
 It names the node and the property, not merely that something changed, because "your edit will
 be lost" is only actionable if it says which edit.
 
+### Resolving drift
+
+A `TOOLKIT_EXPANSION_DRIFT` finding has exactly **two** correct resolutions, and the property it
+names tells you which fits:
+
+1. **Change the declaration** so expansion produces what you edited. Right whenever a pattern
+   input, an option or a slot can express the change — which is most of the time, and it keeps
+   the declaration the single source of truth. Re-expand and `detectDrift` returns `[]`.
+2. **Materialize the instance**, taking ownership of the generated nodes. Right when the change
+   is something no input can express. After this the edit is legitimate, the declaration is
+   history, and the next build will not overwrite it.
+
+Reverting the edit is a third outcome but not a resolution: it discards the intent that caused
+the drift. What is never correct is leaving it — under `declaration` ownership the next
+expansion discards the edit without asking.
+
 ## Graph-owned
 
 For an application that no longer wants a toolkit dependency, or one that has outgrown a

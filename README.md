@@ -11,8 +11,8 @@ halves follow from that — the browser page and the authoritative server that d
 mutations and persists them. Neither is written by hand: there is no route, controller,
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
-**Status: experimental / alpha (0.6.3-alpha.x).** The API may change between alpha
-releases. This documentation describes 0.6.3-alpha.1.
+**Status: experimental / alpha (0.7.0-alpha.x).** The API may change between alpha
+releases. This documentation describes 0.7.0-alpha.1.
 
 ## Who this is for
 
@@ -131,11 +131,18 @@ full in the linked contract.
 
 ```bash
 npm install @cynodia/axiom            # the graph, compiler, runtime and agent API
+npm install @cynodia/axiom-ui         # semantic UI authoring patterns (build time only)
 npm install @cynodia/axiom-server     # only if the application has an authority
 ```
 
 The server package is separate rather than re-exported, because it imports `node:http` and
 `node:sqlite` and a browser bundle must not.
+
+`@cynodia/axiom-ui` is separate for a different reason: it is an **authoring** dependency that
+disappears after expansion. Re-exporting it from the facade would make every application carry
+it forever, and would make "this application no longer needs the toolkit" — the property
+[materialization](packages/ui-toolkit/docs/OWNERSHIP.md) exists to give you — impossible to
+state or to test.
 
 ## Minimal complete application
 
@@ -461,7 +468,8 @@ the published package — no repository access is needed to obtain the contract.
 | Stored, derived, draft and ephemeral state | [`docs/STATE.md`](docs/STATE.md) |
 | Actions, operations, transactions, iteration | [`docs/ACTIONS_TRANSACTIONS.md`](docs/ACTIONS_TRANSACTIONS.md) |
 | Constraints and transition constraints | [`docs/CONSTRAINTS.md`](docs/CONSTRAINTS.md) |
-| Semantic UI nodes and bindings | [`docs/UI.md`](docs/UI.md) |
+| Semantic UI nodes, interaction primitives and bindings | [`docs/UI.md`](docs/UI.md) |
+| Authoring UI from patterns rather than nodes | [`docs/UI.md#semantic-ui-authoring`](docs/UI.md#semantic-ui-authoring) then [`@cynodia/axiom-ui`](packages/ui-toolkit/README.md) |
 | Presentation, UX intent, themes, formatting | [`docs/PRESENTATION.md`](docs/PRESENTATION.md) |
 | **Authority, the trust boundary, the protocol, persistence, deploying** | [**`docs/AUTHORITY.md`**](docs/AUTHORITY.md) |
 | **Implementing a conforming runtime in another language** | [`docs/AUTHORITY.md`](docs/AUTHORITY.md#server-ir-v1-is-frozen) + the shipped schemas and fixtures |
@@ -473,7 +481,8 @@ the published package — no repository access is needed to obtain the contract.
 ## Packages
 
 `@cynodia/axiom` re-exports the four browser-safe packages; installing it is normally enough.
-An application with an authority installs `@cynodia/axiom-server` alongside it.
+An application with an authority installs `@cynodia/axiom-server` alongside it, and one whose
+UI is authored from patterns installs `@cynodia/axiom-ui` as a build-time dependency.
 
 | Package | Responsibility |
 | --- | --- |
@@ -481,6 +490,7 @@ An application with an authority installs `@cynodia/axiom-server` alongside it.
 | `@cynodia/axiom-compiler` | Validation, normalization into `ApplicationIR`, theme stylesheet, page emission. |
 | `@cynodia/axiom-runtime` | State store, evaluation, mutation engine, constraint checking, renderer, routing. |
 | `@cynodia/axiom-agent-api` | Semantic and presentation queries, mutation impact, transactional transformations. |
+| `@cynodia/axiom-ui` | Semantic UI authoring: five patterns that expand into canonical UI nodes at build time, with provenance, ownership and drift tooling. Installed separately, and needed only while authoring. Ships the machine-readable [pattern catalogue](packages/ui-toolkit/docs/PATTERN_CATALOG.json). |
 | `@cynodia/axiom-server` | The authoritative runtime: Server IR execution, persistence, the semantic protocol, transports, and the reference full-stack host. Installed separately, since it imports `node:http` and `node:sqlite`. Also ships the portable [conformance fixtures](docs/AUTHORITY.md#conformance) and the [JSON Schemas](docs/AUTHORITY.md#machine-readable-contracts) for `axiom.server.v1`. |
 
 ## Working in this repository

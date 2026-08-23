@@ -3,6 +3,7 @@ import test from 'node:test';
 import { AgentAPI } from '@cynodia/axiom-agent-api';
 import type { ButtonNode, FieldDisplayNode, FormNode, InputNode, RepeatNode } from '@cynodia/axiom-core';
 import {
+  ACTION_ASK_CANCEL,
   ACTION_CANCEL_ORDER,
   ACTION_DELETE_PRODUCT,
   ENTITY_PRODUCT,
@@ -11,7 +12,7 @@ import {
   F_PRODUCT_STOCK,
   STATE_PRODUCTS,
   createToolkitApplication,
-} from '@cynodia/axiom-ui-toolkit/research';
+} from '@cynodia/axiom-ui/example';
 import {
   axiomUi,
   createToolkitQueries,
@@ -20,7 +21,7 @@ import {
   listPatterns,
   nodesOfInstance,
   provenanceOf,
-} from '@cynodia/axiom-ui-toolkit';
+} from '@cynodia/axiom-ui';
 
 /**
  * §20–21: can the expanded graph be understood?
@@ -35,10 +36,13 @@ const agent = new AgentAPI(graph);
 
 // -------------------------------------------- §20: canonical semantics alone
 
-test('which form edits Product?', () => {
-  const forms = agent.getFormsForEntity(ENTITY_PRODUCT);
-  assert.equal(forms.length, 1);
-  assert.equal(forms[0].id, 'ui_new_product_root');
+test('which forms edit Product?', () => {
+  // Two, and the pair is the answer: one creates through a draft, one edits the record the
+  // route names. Both are ordinary forms as far as AgentAPI is concerned.
+  assert.deepEqual(
+    agent.getFormsForEntity(ENTITY_PRODUCT).map((form) => String(form.id)).sort(),
+    ['ui_edit_product_root', 'ui_new_product_root'],
+  );
 });
 
 test('which fields are displayed in the product list?', () => {
@@ -55,13 +59,22 @@ test('which action is the primary action on the Products page?', () => {
   assert.ok(primaries.includes('action_add_product'), `got ${primaries.join(', ')}`);
 });
 
-test('which UI writes Product.name?', () => {
+test('which UI writes Product.name, and into what?', () => {
   const writers = graph
     .listNodes()
     .filter((node): node is InputNode => node.kind === 'input')
     .filter((node) => JSON.stringify(node.binding.location).includes(String(F_PRODUCT_NAME)));
-  assert.equal(writers.length, 1);
-  assert.equal(writers[0].id, 'ui_new_product_input_1');
+  assert.deepEqual(writers.map((input) => String(input.id)).sort(), [
+    'ui_edit_product_input_0',
+    'ui_new_product_input_1',
+  ]);
+  // And what each write is *rooted in* is visible, which is what decides whether it is
+  // governed per keystroke: a draft for the new record, the collection for the edit.
+  const rooted = (id: string) =>
+    JSON.stringify(writers.find((input) => String(input.id) === id)?.binding.location);
+  assert.match(rooted('ui_new_product_input_1') ?? '', /state_draft_product/);
+  assert.match(rooted('ui_edit_product_input_0') ?? '', /state_products/);
+  assert.match(rooted('ui_edit_product_input_0') ?? '', /"kind":"identity"/);
 });
 
 test('which views expose cancelOrder?', () => {
@@ -90,7 +103,7 @@ test('the form structure is readable without knowing a pattern produced it', () 
 test('no AgentAPI answer depends on toolkit metadata', () => {
   // The same questions, against a graph expanded with provenance switched off entirely.
   const plain = new AgentAPI(createToolkitApplication('macro'));
-  assert.equal(plain.getFormsForEntity(ENTITY_PRODUCT).length, 1);
+  assert.equal(plain.getFormsForEntity(ENTITY_PRODUCT).length, 2);
   assert.deepEqual(
     plain.getDestructiveActions('ui_view_products' as never).map((action) => String(action.id)),
     [String(ACTION_DELETE_PRODUCT)],
@@ -115,6 +128,7 @@ test('which pattern generated this node?', () => {
 test('which entity-list instances exist?', () => {
   assert.deepEqual(instancesOfPattern(graph, 'entity-list').sort(), [
     'customer_list',
+    'low_stock_list',
     'order_list',
     'product_list',
   ]);
@@ -129,11 +143,18 @@ test('which nodes belong to the product list?', () => {
   assert.ok(!owned.some((id) => String(id).startsWith('ui_order_list')));
 });
 
-test('which pattern instance owns this action control?', () => {
-  const cancel = graph
+test('which pattern instance owns this action control, and which owns none?', () => {
+  const ask = graph
+    .listNodes()
+    .find((node) => node.kind === 'button' && (node as ButtonNode).actionId === ACTION_ASK_CANCEL);
+  assert.equal(provenanceOf(ask as never)?.instance, 'order_list');
+
+  // The confirmation itself is canonical, hand-composed UI inside a dialog. It has no
+  // provenance because no pattern generated it — which is the honest answer, not a gap.
+  const confirm = graph
     .listNodes()
     .find((node) => node.kind === 'button' && (node as ButtonNode).actionId === ACTION_CANCEL_ORDER);
-  assert.equal(provenanceOf(cancel as never)?.instance, 'order_list');
+  assert.equal(provenanceOf(confirm as never), undefined);
 });
 
 test('the expansion explains the choices it made', () => {
@@ -163,7 +184,13 @@ test('an agent can enumerate the patterns and their inputs without reading code'
   assert.match(list.inferred.formats, /currency and percentage are never guessed/);
 
   const form = describePattern(axiomUi, 'entity-form');
-  assert.deepEqual(form?.required.sort(), ['draft', 'submit']);
+  // `draft` and `target` are each optional and exactly one is given, which the catalogue
+  // says rather than leaving an agent to discover it by being refused.
+  assert.deepEqual(form?.required.sort(), ['submit']);
+  assert.match(form?.inferred.draft ?? '', /exactly one of the two/);
+  assert.match(form?.inferred.target ?? '', /exactly one of the two/);
+  assert.match(form?.inputs.target.purpose ?? '', /identity is an expression/);
+  assert.match(form?.inputs.options.purpose ?? '', /InputOptionsSource/);
   assert.match(form?.inferred.fields ?? '', /identity included/);
 });
 
@@ -189,11 +216,12 @@ test('toolkit-aware queries are additive, and canonical AgentAPI needs none of t
   const queries = createToolkitQueries(graph, axiomUi);
 
   const instances = queries.getPatternInstances();
-  assert.equal(instances.length, 12, 'every pattern instance, from provenance alone');
+  assert.equal(instances.length, 18, 'every pattern instance, from provenance alone');
   assert.ok(instances.every((entry) => entry.nodeIds.length > 0));
 
   assert.equal(queries.getPatternForNode('ui_product_list_row' as never)?.pattern, 'entity-list');
   assert.deepEqual(queries.getInstancesOfPattern('entity-form').sort(), [
+    'edit_product',
     'new_customer',
     'new_order',
     'new_product',
@@ -204,7 +232,7 @@ test('toolkit-aware queries are additive, and canonical AgentAPI needs none of t
   // Without the toolkit instance the graph still answers everything the graph can answer;
   // only the declaration and the explanation are unavailable, because neither is in the graph.
   const graphOnly = createToolkitQueries(graph);
-  assert.equal(graphOnly.getPatternInstances().length, 12);
+  assert.equal(graphOnly.getPatternInstances().length, 18);
   assert.equal(graphOnly.getPatternForNode('ui_product_list_row' as never)?.pattern, 'entity-list');
   assert.equal(graphOnly.getPatternDeclaration('product_list'), undefined, 'not stored in the graph');
 });

@@ -1,7 +1,8 @@
 {
   "catalog": "axiom.ui.catalog.v1",
   "toolkit": "@cynodia/axiom-ui",
-  "version": "0.2.0-research",
+  "version": "0.7.0",
+  "release": "0.7.0-alpha.1",
   "description": "Semantic UI patterns for Axiom. A pattern is not a component: it expands, at authoring time, into ordinary Axiom UI nodes and has no runtime existence. Declare the UX concept; the expansion is explicit, inspectable application semantics.",
   "ownership": {
     "default": "declaration",
@@ -9,6 +10,13 @@
       "declaration": "The pattern declaration is the source of truth. Re-expansion is authoritative and editing a generated node is drift.",
       "graph": "The expanded graph is the source of truth. The declaration is history and edits are legitimate."
     }
+  },
+  "reading": {
+    "inputs": "Every declaration key, its kind, whether it is required, and what the pattern does with it.",
+    "inferred": "What the pattern works out for itself when an input is absent, and from what.",
+    "expansion": "The generated tree, part by part: the canonical node kind each part is, and where it sits. Describing only inputs was not enough — an agent composing against a generated tree needs its shape.",
+    "generatedIdFormat": "How to address a generated node before expansion has happened.",
+    "slots": "Where caller-supplied semantic content is placed. Slot content is node ids or nested declarations, never markup."
   },
   "patterns": [
     {
@@ -79,12 +87,14 @@
     },
     {
       "name": "entity-form",
-      "purpose": "A form over a draft state, with labels, controls, required markers and a submit action inferred from the graph.",
+      "purpose": "A form that creates a record in a draft state or edits an existing one addressed by expression, with labels, controls, required markers and a submit action inferred from the graph.",
       "required": [
-        "draft",
         "submit"
       ],
       "optional": [
+        "draft",
+        "target",
+        "options",
         "mode",
         "fields",
         "submitArguments",
@@ -97,8 +107,21 @@
       "inputs": {
         "draft": {
           "kind": "state",
-          "required": true,
-          "purpose": "The draft state the controls write into. Its entity supplies every field’s label, control and required status."
+          "required": false,
+          "purpose": "Create mode: the draft state the controls write into. Its entity supplies every field’s label, control and required status.",
+          "inferredWhenAbsent": "Required unless `target` is given; exactly one of the two is."
+        },
+        "target": {
+          "kind": "nodes",
+          "required": false,
+          "purpose": "Edit mode: { state, identity } addressing an existing collection member — identity is an expression, usually a route parameter.",
+          "inferredWhenAbsent": "Required unless `draft` is given; exactly one of the two is."
+        },
+        "options": {
+          "kind": "nodes",
+          "required": false,
+          "purpose": "A canonical InputOptionsSource per field id, for a field whose value identifies another record.",
+          "inferredWhenAbsent": "A field with no options source uses the control its declared type implies."
         },
         "submit": {
           "kind": "action",
@@ -109,7 +132,7 @@
           "kind": "token",
           "required": false,
           "purpose": "\"create\" offers the identity field; \"edit\" omits it, because an identity is not editable.",
-          "inferredWhenAbsent": "create — the direction whose mistake is visible."
+          "inferredWhenAbsent": "edit when `target` is given, create when `draft` is. Declaring it is only needed to edit through a draft state."
         },
         "fields": {
           "kind": "field-list",
@@ -165,7 +188,7 @@
         {
           "part": "root",
           "kind": "form",
-          "role": "the form; submitButtonId is the generated submit"
+          "role": "the form; submitButtonId is the generated submit, and target reads the record being edited"
         },
         {
           "part": "title",
@@ -180,7 +203,7 @@
         {
           "part": "input",
           "kind": "input",
-          "role": "one per field, in entity declaration order"
+          "role": "one per field, in entity declaration order; bound to the draft field or to the addressed member’s field"
         },
         {
           "part": "diagnostic",
@@ -200,7 +223,10 @@
       ],
       "generatedIdFormat": "ui_<instance>_<part>, or ui_<instance>_<part>_<index> for a repeated part",
       "inferred": {
-        "mode": "create — the direction whose mistake is visible.",
+        "draft": "Required unless `target` is given; exactly one of the two is.",
+        "target": "Required unless `draft` is given; exactly one of the two is.",
+        "options": "A field with no options source uses the control its declared type implies.",
+        "mode": "edit when `target` is given, create when `draft` is. Declaring it is only needed to edit through a draft state.",
         "fields": "Every field of the entity, in declaration order, identity included — omitting a required field would produce a form that can never submit.",
         "submitLabel": "The action’s own name.",
         "titleLevel": "2 — the level below a page title, so a page and its form do not skip a level."
@@ -349,7 +375,8 @@
         "metrics": {
           "kind": "nodes",
           "required": true,
-          "purpose": "Each metric: a label, a value expression, an optional format, emphasis and description."
+          "purpose": "Each metric: a value expression, and optionally a label, format, emphasis and description.",
+          "inferredWhenAbsent": "A metric label is inferred from the name of the state its value refers to; a label is required only where the value is not a plain state reference."
         }
       },
       "slots": [],
@@ -385,7 +412,9 @@
         }
       ],
       "generatedIdFormat": "ui_<instance>_<part>, or ui_<instance>_<part>_<index> for a repeated part",
-      "inferred": {}
+      "inferred": {
+        "metrics": "A metric label is inferred from the name of the state its value refers to; a label is required only where the value is not a plain state reference."
+      }
     },
     {
       "name": "page",
@@ -402,12 +431,12 @@
         "title": {
           "kind": "text",
           "required": true,
-          "purpose": "The page heading, and the document’s level-1 heading."
+          "purpose": "The page heading, and the document’s level-1 heading. A string, or an expression for a title that names the record the page is about."
         },
         "description": {
           "kind": "text",
           "required": false,
-          "purpose": "A caption under the title."
+          "purpose": "A caption under the title. A string or an expression."
         },
         "actions": {
           "kind": "slot",

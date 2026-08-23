@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.6.3-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.7.0-alpha.1. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -82,6 +82,12 @@ non-numeric collections, and obviously incompatible assignments.
 | `MISSING_ACTION_ARGUMENT` | A control invokes an action without supplying a required parameter. |
 | `UNSUPPORTED_UI_NODE_KIND` | A UI node kind the intended renderer cannot draw. |
 | `INVALID_DIALOG` | A `dialog` whose declaration cannot produce a usable dialog. |
+| `RESERVED_FIELD_ID` | An entity declaring a field id reserved for group results. |
+| `INVALID_GROUP_FIELD` | Reading a group field from a non-group, or a non-group field from a group. |
+| `UNKNOWN_EXPRESSION_DEF` | An `expression-ref` naming something that is not an expression definition. |
+| `EXPRESSION_DEF_CYCLE` | An expression definition that reaches itself. |
+| `MISSING_EXPRESSION_ARGUMENT` | An `expression-ref` that omits a declared parameter. |
+| `UNKNOWN_EXPRESSION_ARGUMENT` | An `expression-ref` supplying a parameter the definition does not declare. |
 
 ### Initial values
 
@@ -153,6 +159,12 @@ client commit authoritative state does not compile. Full model:
 | `PRINCIPAL_REFERENCE_ON_CLIENT` | `PRINCIPAL` is read where a client evaluates, or an `authorization` sits on an action no authority executes. | error |
 | `MISSING_ACTION_ARGUMENT` | A `button`, or a `form` submitting without one, invokes an action with a required parameter it never supplies. The invocation would always be refused for a missing argument, so it is refused here instead. | error |
 | `INVALID_DIALOG` | A `dialog` with an empty title (no accessible name), an initial focus target outside itself, or a return focus target inside itself. **Also a warning** when a non-modal dialog moves focus on open. | error / warning |
+| `RESERVED_FIELD_ID` | An entity declares `field_group_key` or `field_group_items`. Both are reserved for the records a `group` expression returns; an id meaning one thing in one place and another elsewhere would defeat the reason ids exist. | error |
+| `INVALID_GROUP_FIELD` | A `field` expression reads a group field from a source that is statically not a group, or reads anything other than the two group fields *from* a group. Read `groupItems` first, then the member's own fields. | error |
+| `UNKNOWN_EXPRESSION_DEF` | An `expression-ref` names a node that is not an `ExpressionDef`. | error |
+| `EXPRESSION_DEF_CYCLE` | An expression definition reaches itself, directly or through others. The message names the cycle. | error |
+| `MISSING_EXPRESSION_ARGUMENT` | An `expression-ref` does not supply a parameter the definition declares. | error |
+| `UNKNOWN_EXPRESSION_ARGUMENT` | An `expression-ref` supplies an argument the definition declares no parameter for. | error |
 | `UNSUPPORTED_UI_NODE_KIND` | The graph contains a UI node kind the target renderer does not implement. Raised only when `validateGraph` is given a `renderer`; `compileToIR` supplies the browser renderer's capabilities by default. Without it a graph could validate and then render nothing — the failure would surface as a runtime `UNSUPPORTED_UI_NODE` diagnostic instead of an authoring error. | error |
 | `INVALID_PRINCIPAL_ENTITY` | `principalEntityId` names something that is not an entity. | error |
 

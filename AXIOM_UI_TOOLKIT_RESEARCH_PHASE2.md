@@ -1,6 +1,6 @@
 # Axiom UI Toolkit — Research Phase 2
 
-Status: architectural closure. Baseline: Axiom 0.6.3-alpha.1 + `packages/ui-toolkit` (private).
+Status: architectural closure. Baseline: Axiom 0.7.0-alpha.1 + `packages/ui-toolkit` (private).
 Phase 1 result: T1 / Model H / MORE RESEARCH.
 
 **Classification: R1 — architecture ready.**

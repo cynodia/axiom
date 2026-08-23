@@ -4,11 +4,15 @@ import {
   call,
   collectionType,
   entityType,
+  expressionRef,
   field,
   fieldId,
   fieldLocation,
   filter,
   find,
+  forEach,
+  group,
+  groupType,
   identitySelector,
   itemLocation,
   literal,
@@ -24,6 +28,7 @@ import type {
   ConstraintDef,
   EntityDef,
   Expression,
+  ExpressionDef,
   StateDef,
   TransitionConstraintDef,
 } from '@cynodia/axiom-core';
@@ -67,6 +72,24 @@ export const STATE_DRAFT_CUSTOMER = nodeId('state_draft_customer');
 export const STATE_ORDER_COUNT = nodeId('state_order_count');
 export const STATE_REVENUE = nodeId('state_revenue');
 export const STATE_LOW_STOCK = nodeId('state_low_stock');
+export const STATE_LOW_STOCK_PRODUCTS = nodeId('state_low_stock_products');
+/** Orders partitioned by status: a `group` expression, not four filters. */
+export const STATE_ORDERS_BY_STATUS = nodeId('state_orders_by_status');
+/** Which order the person has asked to cancel. Ephemeral: a UI fact, not a domain one. */
+export const STATE_CANCELLING = nodeId('state_cancelling');
+
+/** The reorder threshold, so the rule below reads it rather than hard-coding it. */
+export const STATE_THRESHOLD = nodeId('state_threshold');
+
+/**
+ * "the products at or below the reorder threshold", named once.
+ *
+ * Three consumers read it: the dashboard figure, the restock warning's visibility, and the
+ * guard on the bulk-restock action. Written out, that is the same filter three times with
+ * three scope ids — which is where the Phase 2 agent collided with itself.
+ */
+export const EXPRESSION_LOW_STOCK = nodeId('expression_low_stock');
+export const PARAM_STOCK_SOURCE = nodeId('param_stock_source');
 
 export const ACTION_ADD_PRODUCT = nodeId('action_add_product');
 export const ACTION_DELETE_PRODUCT = nodeId('action_delete_product');
@@ -75,12 +98,18 @@ export const ACTION_ADD_CUSTOMER = nodeId('action_add_customer');
 export const ACTION_PLACE_ORDER = nodeId('action_place_order');
 export const ACTION_CONFIRM_ORDER = nodeId('action_confirm_order');
 export const ACTION_CANCEL_ORDER = nodeId('action_cancel_order');
+export const ACTION_ASK_CANCEL = nodeId('action_ask_cancel');
+export const ACTION_DISMISS_CANCEL = nodeId('action_dismiss_cancel');
+export const ACTION_RESTOCK_ALL = nodeId('action_restock_all');
 
 export const PARAM_PRODUCT = nodeId('param_product');
 export const PARAM_ORDER = nodeId('param_order');
 export const PARAM_AMOUNT = nodeId('param_amount');
 
 const SCOPE_PRODUCT = nodeId('scope_product');
+const SCOPE_LOW_STOCK = nodeId('scope_low_stock');
+const SCOPE_STATUS = nodeId('scope_status');
+const SCOPE_RESTOCK = nodeId('scope_restock');
 const SCOPE_ORDER = nodeId('scope_order');
 const SCOPE_LOW = nodeId('scope_low');
 const SCOPE_TOTAL = nodeId('scope_total');
@@ -92,6 +121,10 @@ const SCOPE_PROPOSED = nodeId('scope_proposed');
 
 const productById = (id: Expression) =>
   find(ref(STATE_PRODUCTS), SCOPE_PRODUCT, binary('eq', field(ref(SCOPE_PRODUCT), F_PRODUCT_ID), id));
+
+/** The one calculation, referenced. Every consumer says this and nothing more. */
+export const lowStock = (): Expression =>
+  expressionRef(EXPRESSION_LOW_STOCK, { [PARAM_STOCK_SOURCE]: ref(STATE_PRODUCTS) });
 
 /** Entities, state, behaviour and rules. Nothing here knows a UI exists. */
 export function createOrderDomain(): ApplicationGraph {
@@ -226,14 +259,75 @@ export function createOrderDomain(): ApplicationGraph {
   });
 
   graph.addNode<StateDef>({
+    id: STATE_THRESHOLD,
+    kind: 'state',
+    name: 'Reorder threshold',
+    valueType: primitiveType('number'),
+    initialValue: 5,
+  });
+
+  /**
+   * The calculation exists **once**, as a node.
+   *
+   * Its parameter is the collection to look in, so the definition says nothing about where
+   * the products live; its body reads the threshold from state. Isolated scope: `SCOPE_LOW`
+   * belongs to this definition and can never meet a caller's iteration scope.
+   */
+  graph.addNode<ExpressionDef>({
+    id: EXPRESSION_LOW_STOCK,
+    kind: 'expression',
+    name: 'Low stock',
+    description: 'Products at or below the reorder threshold.',
+    parameters: [
+      { id: PARAM_STOCK_SOURCE, name: 'products', valueType: collectionType(entityType(ENTITY_PRODUCT)) },
+    ],
+    expression: filter(
+      ref(PARAM_STOCK_SOURCE),
+      SCOPE_LOW,
+      binary('lte', field(ref(SCOPE_LOW), F_PRODUCT_STOCK), ref(STATE_THRESHOLD)),
+    ),
+  });
+
+  graph.addNode<StateDef>({
     id: STATE_LOW_STOCK,
     kind: 'state',
     name: 'Low stock',
     valueType: primitiveType('number'),
-    derivation: call(
-      'count',
-      filter(ref(STATE_PRODUCTS), SCOPE_LOW, binary('lt', field(ref(SCOPE_LOW), F_PRODUCT_STOCK), literal(5))),
-    ),
+    derivation: call('count', lowStock()),
+  });
+
+  // The same calculation again, as a collection this time. Two consumers, one definition.
+  graph.addNode<StateDef>({
+    id: STATE_LOW_STOCK_PRODUCTS,
+    kind: 'state',
+    name: 'Needs restocking',
+    valueType: collectionType(entityType(ENTITY_PRODUCT)),
+    derivation: lowStock(),
+  });
+
+  /**
+   * Orders by status, as a semantic partition.
+   *
+   * Before `group`, this was four filters over four statuses known at authoring time — which
+   * could not have handled a status the domain gained later, and could not have grouped by
+   * customer at all.
+   */
+  graph.addNode<StateDef>({
+    id: STATE_ORDERS_BY_STATUS,
+    kind: 'state',
+    name: 'Orders by status',
+    valueType: collectionType(groupType(primitiveType('string'), entityType(ENTITY_ORDER))),
+    derivation: group(ref(STATE_ORDERS), SCOPE_STATUS, field(ref(SCOPE_STATUS), F_ORDER_STATUS)),
+  });
+
+  graph.addNode<StateDef>({
+    id: STATE_CANCELLING,
+    kind: 'state',
+    name: 'Order awaiting cancellation',
+    // A UI fact, not a domain fact: instance validation skips it and it may not be persisted.
+    ephemeral: true,
+    valueType: primitiveType('string'),
+    initialValue: '',
   });
 
   graph.addNode<ActionDef>({
@@ -372,15 +466,78 @@ export function createOrderDomain(): ApplicationGraph {
     kind: 'action',
     name: 'Cancel order',
     destructive: true,
-    requiresConfirmation: true,
-    confirmationMessage: 'Cancel this order?',
     parameters: [{ id: PARAM_ORDER, valueType: primitiveType('string'), required: true }],
+    guards: [
+      {
+        // The rule, not the dialog: an invocation that never went through the confirmation
+        // is refused here, whatever the UI did or did not render.
+        condition: binary('eq', ref(STATE_CANCELLING), ref(PARAM_ORDER)),
+        failureMode: { code: 'not-confirmed', message: 'Confirm the cancellation first.' },
+      },
+    ],
     operations: [
       {
         kind: 'remove',
         target: itemLocation(stateLocation(STATE_ORDERS), identitySelector(F_ORDER_ID, ref(PARAM_ORDER))),
       },
+      // Closing is this action's business: it cancelled the order, so the dialog is done.
+      { kind: 'set', target: stateLocation(STATE_CANCELLING), value: literal('') },
     ],
+  });
+
+  /**
+   * Bulk restock, guarded by the same named calculation the dashboard displays.
+   *
+   * The guard cannot disagree with the figure, because there is only one calculation.
+   */
+  graph.addNode<ActionDef>({
+    id: ACTION_RESTOCK_ALL,
+    kind: 'action',
+    name: 'Restock everything low',
+    parameters: [{ id: PARAM_AMOUNT, valueType: primitiveType('number'), required: true }],
+    guards: [
+      {
+        condition: call('non-empty', lowStock()),
+        failureMode: { code: 'nothing-low', message: 'Nothing is at or below the threshold.' },
+      },
+    ],
+    operations: [
+      forEach(lowStock(), SCOPE_RESTOCK, [
+        {
+          kind: 'set',
+          target: fieldLocation(
+            itemLocation(
+              stateLocation(STATE_PRODUCTS),
+              identitySelector(F_PRODUCT_ID, field(ref(SCOPE_RESTOCK), F_PRODUCT_ID)),
+            ),
+            F_PRODUCT_STOCK,
+          ),
+          value: binary('add', field(ref(SCOPE_RESTOCK), F_PRODUCT_STOCK), ref(PARAM_AMOUNT)),
+        },
+      ]),
+    ],
+  });
+
+  /**
+   * Asking to cancel is not cancelling.
+   *
+   * Opening the dialog writes ephemeral state; the destructive action is guarded on that
+   * state, so invoking it without having asked is refused. Presentation never authorizes —
+   * a hidden or unrendered control is not a rule, and this is the rule.
+   */
+  graph.addNode<ActionDef>({
+    id: ACTION_ASK_CANCEL,
+    kind: 'action',
+    name: 'Cancel order…',
+    parameters: [{ id: PARAM_ORDER, valueType: primitiveType('string'), required: true }],
+    operations: [{ kind: 'set', target: stateLocation(STATE_CANCELLING), value: ref(PARAM_ORDER) }],
+  });
+
+  graph.addNode<ActionDef>({
+    id: ACTION_DISMISS_CANCEL,
+    kind: 'action',
+    name: 'Keep order',
+    operations: [{ kind: 'set', target: stateLocation(STATE_CANCELLING), value: literal('') }],
   });
 
   graph.addNode<ConstraintDef>({
@@ -423,6 +580,8 @@ export function createOrderDomain(): ApplicationGraph {
   return graph;
 }
 
-/** Unused import guard: `optionalType` and `SCOPE_ORDER` are kept for future domain growth. */
+/** Unused import guard: `optionalType`, `map` and `SCOPE_ORDER` are kept for domain growth. */
 void optionalType;
 void SCOPE_ORDER;
+void map;
+void SCOPE_LOW_STOCK;

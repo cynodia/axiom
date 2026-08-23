@@ -1,6 +1,6 @@
 # Agent API
 
-Axiom 0.6.3-alpha.1. The machine-facing interface. Agents query semantics and apply
+Axiom 0.7.0-alpha.1. The machine-facing interface. Agents query semantics and apply
 structural transformations; they never edit generated code.
 
 ```ts

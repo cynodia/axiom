@@ -1,31 +1,47 @@
 {
-  "name": "@cynodia/axiom-ui-toolkit",
-  "version": "0.6.3-alpha.1",
-  "description": "Research prototype: a semantic UI pattern layer above canonical Axiom UI. Not published.",
-  "private": true,
+  "name": "@cynodia/axiom-ui",
+  "version": "0.7.0-alpha.1",
+  "description": "Semantic UI authoring for Axiom: patterns that expand, at build time, into ordinary Axiom UI nodes.",
   "license": "MIT",
   "author": "AskTech AS",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./research": {
-      "types": "./dist/research/index.d.ts",
-      "import": "./dist/research/index.js"
-    }
+    "./example": {
+      "types": "./dist/example/index.d.ts",
+      "import": "./dist/example/index.js"
+    },
+    "./catalog": "./docs/PATTERN_CATALOG.json"
   },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "docs/*.md",
+    "docs/PATTERN_CATALOG.json",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
-    "@cynodia/axiom-core": "0.6.3-alpha.1",
-    "@cynodia/axiom-agent-api": "0.6.3-alpha.1",
-    "@cynodia/axiom-compiler": "0.6.3-alpha.1",
-    "@cynodia/axiom-runtime": "0.6.3-alpha.1"
+    "@cynodia/axiom-core": "0.7.0-alpha.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",
     "test": "node --test dist-test/**/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cynodia/axiom.git"
+  },
+  "homepage": "https://github.com/cynodia/axiom",
+  "bugs": {
+    "url": "https://github.com/cynodia/axiom/issues"
   }
 }

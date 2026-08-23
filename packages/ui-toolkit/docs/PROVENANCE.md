@@ -22,7 +22,7 @@ whoever wrote it. Semantic metadata beside it is untouched.
 {
   toolkit: '@cynodia/axiom-ui',
   pattern: 'entity-list',
-  patternVersion: '0.2.0',
+  patternVersion: '0.7.0',
   instance: 'product_list',
   part: 'row-action',
   parent: 'products',        // the nearest generating pattern

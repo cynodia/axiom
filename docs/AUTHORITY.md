@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.6.3-alpha.1. How an application crosses the trust boundary.
+Axiom 0.7.0-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -95,8 +95,10 @@ which states a client may observe. It carries **no UI, no presentation, no theme
 routes**, because none of that decides anything.
 
 It is plain JSON — deterministic, closure-free, and specific to no language or host. It
-declares `contract: 'axiom.server.v1'`, and a runtime that does not recognize the value MUST
-refuse it rather than interpret it partially.
+declares a `contract`, and a runtime that does not recognize the value MUST refuse it rather
+than interpret it partially. **The declared contract is the oldest one that can carry the
+document**, computed from the document rather than asserted: see
+[contract identifiers](#contract-identifiers).
 
 Guards are normalized into aligned `preconditions` / `failureModes`, exactly as in the
 client IR, so an authority that read one and not the other cannot silently skip a check.
@@ -515,6 +517,34 @@ them.
 They describe **structure**. What a conforming runtime must *do* with a valid document is this
 page plus the conformance fixtures.
 
+## Contract identifiers
+
+| Contract | Adds | Since |
+| --- | --- | --- |
+| `axiom.server.v1` | the frozen 0.6.1 contract, below | 0.6.1 |
+| `axiom.server.v2` | the expression kinds `group` and `expression-ref`, and the `expressionDefs` they resolve against | 0.7.0 |
+
+`SERVER_IR_CONTRACTS` enumerates both. The rules:
+
+- **A document declares the oldest contract that can carry it.** `compileToServerIR` computes the label from the vocabulary the document actually uses, so an application that uses nothing from 0.7 produces a byte-identical `axiom.server.v1` document, and the committed v1 conformance fixtures are unchanged.
+- **A runtime MUST refuse a contract it does not implement**, and MUST refuse a document whose vocabulary exceeds its declared contract. A v2 runtime executing a v1-labelled document that uses `group` would accept what a conforming v1 runtime elsewhere refuses, and the two would then disagree about the same file. `createAxiomServer` raises rather than executing one.
+- **A frozen contract gains nothing.** `axiom.server.v1` does not contain `group`, `expression-ref` or `expressionDefs`, and `server-ir.v1.schema.json` is byte-frozen. Vocabulary arrives under a new identifier or not at all.
+
+There is one JSON Schema per contract, each generated from the runtime's own vocabulary and
+each shipped: `server-ir.v1.schema.json`, `server-ir.v2.schema.json`.
+
+**`group`.** Partitions a collection: `Collection<A>` → `Collection<Group<K, A>>`. Groups appear
+in the order their key was **first seen** in the source; members keep source order; two keys are
+the same key when they are **structurally** equal; an empty source produces no groups; a `null`
+source fails the evaluation as every collection operator does. Nothing is sorted. A group is a
+record carrying the two reserved field ids `field_group_key` and `field_group_items`, and no
+entity may declare either.
+
+**`expression-ref`.** Evaluates a named `ExpressionDef` from `expressionDefs`. Arguments are
+evaluated in the calling scope; the body is evaluated in an **isolated** scope binding the
+definition's parameters and application state and nothing else. Every declared parameter MUST be
+supplied. A definition that reaches itself is invalid and MUST be refused rather than executed.
+
 ## Server IR v1 is frozen
 
 `axiom.server.v1` is a stable semantic contract as of 0.6.1. A runtime may depend on the
@@ -568,7 +598,7 @@ result is identical to some serial order. Across processes, correctness rests on
 persistence adapter's revision check — the contract guarantees that a commit from a stale
 snapshot is refused, not that two processes coordinate.
 
-## Not in 0.6.3
+## Not in 0.7.0
 
 Stated plainly rather than left to discovery:
 

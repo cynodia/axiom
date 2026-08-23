@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.6.3-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.7.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -92,7 +92,7 @@ output, and anything read back with `getState`.
 
 ## Expressions
 
-15 kinds. Full semantics: [`EXPRESSIONS.md`](EXPRESSIONS.md).
+Every kind is in `EXPRESSION_KINDS`. Full semantics: [`EXPRESSIONS.md`](EXPRESSIONS.md).
 
 ```ts
 literal(v) ref(id) field(src, fieldId) object(entries, entityId?)
@@ -100,7 +100,11 @@ binary(op, l, r) unary(op, operand) call(fn, ...args) conditional(c, t, f)
 filter(src, scopeId, predicate) find(src, scopeId, predicate)
 map(src, scopeId, projection) sort(src, scopeId, by, direction?)
 every(src, scopeId, predicate) some(src, scopeId, predicate) flatten(src)
+group(src, scopeId, by) expressionRef(expressionId, args?)
 ```
+
+- `group` partitions a collection: `Collection<A>` → `Collection<Group<K, A>>`, read with `groupKey(g)` and `groupItems(g)`. Groups appear in **first-seen key order**, members keep source order, keys compare structurally. Nothing is sorted — use `sort` for that.
+- `expressionRef` evaluates a named `ExpressionDef` node: the calculation exists **once** in the graph and every consumer references it. Arguments are evaluated in the calling scope; **the body is evaluated in an isolated scope** that sees its parameters and application state and nothing else, so a definition means the same thing everywhere and its scope ids can never collide with a caller's.
 
 Builtins (14): `required` `is-empty` `non-empty` `length` `contains` `concat` `coalesce`
 `one-of` `count` `sum` `lowercase` `to-string` `now` `uuid`.
@@ -316,8 +320,8 @@ boolean types (`TYPE_MISMATCH`).
 
 ## UI nodes
 
-Eleven kinds: `view` `container` `text` `repeat` `field-display` `form` `input` `button`
-`conditional` `diagnostic` `dialog`. Detail: [`UI.md`](UI.md).
+Every kind is in `UI_NODE_KINDS`: `view` `container` `text` `repeat` `field-display` `form`
+`input` `button` `conditional` `diagnostic` `dialog`. Detail: [`UI.md`](UI.md).
 
 - `RepeatNode` binds the current item to **the repeat node's own id**; the template refers to it as `ref(repeatNodeId)`.
 - `InputNode.binding` is `{ location }` — no expression, no field id. An input write goes through the same mutation engine and transaction as an action.
@@ -343,6 +347,30 @@ Every renderer-generated id and relationship — element `id`, label `for`,
 identity field and falls back to a deterministic index; nested repeats compose.
 
 The graph still holds one node. `AgentAPI` reasons about that node, never about instances.
+
+## Authoring UI: pattern, primitive, or node
+
+Nodes are the model. They are not the only authoring surface, and choosing between the three
+is a decision an agent should make deliberately:
+
+| The requirement is | Use | Where |
+| --- | --- | --- |
+| recurring application UX that expands deterministically into existing semantics | a **pattern** | `@cynodia/axiom-ui` |
+| interaction behaviour the runtime must perform | a **canonical interaction primitive** | `dialog`, in core |
+| custom but already expressible | **canonical nodes**, composed | this document |
+| genuinely unsupported presentation | `rendererOverrides.web.className`, and nothing more | [`PRESENTATION.md`](PRESENTATION.md) |
+
+The five patterns are `page`, `metric-grid`, `entity-list`, `entity-form` and `action-bar`.
+Expansion happens **at authoring time**: afterwards the graph is ordinary canonical Axiom, and
+nothing at run time knows a pattern existed. Ownership defaults to the **declaration**, so
+editing a generated node is drift, reported per node and per property; `materializePattern`
+hands ownership to the graph when an edit is what you actually want. A pattern never creates
+state, an action, a constraint or an authority.
+
+Interaction behaviour is never a pattern: a pattern can only emit nodes that already exist, so
+focus movement, containment, `Escape`, typeahead and active descendant are unreachable from one
+— see [interaction primitives](UI.md#interaction-primitives) for the classification, including
+`combobox`, which is classified and not implemented.
 
 ## Action diagnostics
 
@@ -595,6 +623,29 @@ compileToIR(graph);                                                 // applies i
 
 A UI node kind is only in the contract if a renderer implements it. A renderer publishes
 `{ target, supportedUiKinds }` and must implement everything it publishes.
+
+Capabilities describe **node-kind** support, not partial support: a renderer cannot yet say
+that it draws a kind but not one of its options. Nothing in the current vocabulary needs that,
+and it is a deliberate future extension rather than an oversight.
+
+## Named expressions
+
+```ts
+graph.addNode<ExpressionDef>({
+  id: X_LOW_STOCK,
+  kind: 'expression',
+  name: 'Low stock',
+  parameters: [{ id: P_SOURCE, valueType: collectionType(entityType(E_PRODUCT)) }],
+  expression: filter(ref(P_SOURCE), SC, binary('lte', field(ref(SC), F_STOCK), ref(S_THRESHOLD))),
+});
+
+expressionRef(X_LOW_STOCK, { [P_SOURCE]: ref(S_PRODUCTS) })   // in any number of consumers
+```
+
+- **MUST** supply every declared parameter; an unsupplied one is `MISSING_EXPRESSION_ARGUMENT`.
+- **MUST NOT** reach the caller's scope from the body. It resolves parameters and state only.
+- A definition that reaches itself is `EXPRESSION_DEF_CYCLE`.
+- Dependencies are graph edges: `agent.getExpressionConsumers(id)`, `agent.getExpressionDependencies(id)`, and a consumer's read edges include everything the definition reads — so an answer does not change because a calculation was given a name.
 
 ## Serialization
 

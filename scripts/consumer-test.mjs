@@ -27,7 +27,11 @@ try {
         version: '0.0.0',
         private: true,
         type: 'module',
-        scripts: { build: 'tsc --project tsconfig.json', start: 'node dist/main.js' },
+        scripts: {
+          build: 'tsc --project tsconfig.json',
+          start: 'node dist/main.js',
+          materialized: 'node dist/materialized.js',
+        },
       },
       null,
       2,
@@ -73,8 +77,19 @@ try {
   console.log('\nType-checking against the published declarations...');
   run('npm', ['run', '--silent', 'build']);
 
-  console.log('\nRunning the Counter application:');
+  console.log('\nRunning the consumer application:');
   run('npm', ['run', '--silent', 'start']);
+
+  /**
+   * The materialization gate.
+   *
+   * The pattern-built application has written its expanded graph to disk. Removing the
+   * toolkit and reproducing the application from that graph is what turns "the toolkit is
+   * build-time only" from a design claim into a property of the artifact.
+   */
+  console.log('\nRemoving @cynodia/axiom-ui and running the materialized application:');
+  run('npm', ['uninstall', '--no-audit', '--no-fund', '--loglevel=error', '@cynodia/axiom-ui']);
+  run('npm', ['run', '--silent', 'materialized', '--', project]);
 } finally {
   if (keep) {
     console.log(`\nLeaving ${project} in place (--keep).`);

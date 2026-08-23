@@ -12,5 +12,5 @@ export { axiomUi } from './toolkit.js';
 export type { PageDeclaration } from './patterns/page.js';
 export type { MetricGridDeclaration, MetricDeclaration } from './patterns/metric-grid.js';
 export type { EntityListDeclaration } from './patterns/entity-list.js';
-export type { EntityFormDeclaration } from './patterns/entity-form.js';
+export type { EntityFormDeclaration, EntityFormTarget } from './patterns/entity-form.js';
 export type { ActionBarDeclaration } from './patterns/action-bar.js';

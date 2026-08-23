@@ -213,6 +213,8 @@ test('every validation code is documented, and every documented code exists', ()
     'AUTHORITY', 'EXECUTION', 'TRUST', 'TRANSACTION', 'CONCURRENCY', 'PROTOCOL', 'SERIALIZATION',
     'DISCLOSABLE_DETAIL_KEYS', 'PORTABILITY', 'IDEMPOTENCY', 'STARTUP', 'CHANGES',
     'AUTHORING_METADATA_KEY', 'BROWSER_RENDERER_CAPABILITIES',
+    'GROUP_KEY_FIELD', 'GROUP_ITEMS_FIELD', 'UI_NODE_KINDS', 'SERVER_IR_CONTRACTS',
+    'SERVER_IR_LATEST_CONTRACT', 'TYPE_REF_KINDS', 'SEMANTIC_NODE_KINDS',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });
@@ -666,7 +668,9 @@ test('a documented count of the UI node kinds is the actual count', () => {
 test('every UI node kind is listed wherever the kinds are enumerated', () => {
   // Being documented somewhere is not enough: an agent reads the enumeration it finds first.
   const enumerations = [
-    ['docs/AGENT_REFERENCE.md', /Eleven kinds:([^.]*)\./],
+    // The reference no longer spells a count — §87: an enumeration is tested against the
+    // vocabulary, never counted by hand. It still has to list every kind.
+    ['docs/AGENT_REFERENCE.md', /Every kind is in `UI_NODE_KINDS`:([^.]*)\./],
     ['README.md', /Semantic interaction structure \(([^)]*)\)/],
   ] as const;
   for (const [file, pattern] of enumerations) {

@@ -76,7 +76,7 @@ export function rowField(instance: string, fieldId: FieldId): Expression {
 
 export const entityList = definePattern<EntityListDeclaration>({
   name: 'entity-list',
-  version: '0.2.0',
+  version: '0.7.0',
   purpose: 'Lists the instances of a collection, one row per member, with optional per-row actions.',
   inputs: {
     source: { kind: 'state', required: true, purpose: 'The collection state to list.' },

@@ -11,12 +11,14 @@ import { repoRoot } from './packages.mjs';
  * input that does.
  */
 const toolkit = await import(path.join(repoRoot, 'packages/ui-toolkit/dist/index.js'));
+const { version } = await import('./packages.mjs');
 const { axiomUi, describeToolkit, TOOLKIT_NAME, TOOLKIT_VERSION } = toolkit;
 
 const catalog = {
   catalog: 'axiom.ui.catalog.v1',
   toolkit: TOOLKIT_NAME,
   version: TOOLKIT_VERSION,
+  release: version,
   description:
     'Semantic UI patterns for Axiom. A pattern is not a component: it expands, at authoring ' +
     'time, into ordinary Axiom UI nodes and has no runtime existence. Declare the UX concept; ' +
@@ -27,6 +29,17 @@ const catalog = {
       declaration: 'The pattern declaration is the source of truth. Re-expansion is authoritative and editing a generated node is drift.',
       graph: 'The expanded graph is the source of truth. The declaration is history and edits are legitimate.',
     },
+  },
+  /**
+   * How to read an entry, so nothing about the catalogue needs a second document.
+   */
+  reading: {
+    inputs: 'Every declaration key, its kind, whether it is required, and what the pattern does with it.',
+    inferred: 'What the pattern works out for itself when an input is absent, and from what.',
+    expansion:
+      'The generated tree, part by part: the canonical node kind each part is, and where it sits. Describing only inputs was not enough — an agent composing against a generated tree needs its shape.',
+    generatedIdFormat: 'How to address a generated node before expansion has happened.',
+    slots: 'Where caller-supplied semantic content is placed. Slot content is node ids or nested declarations, never markup.',
   },
   patterns: describeToolkit(axiomUi),
 };
