@@ -50,6 +50,7 @@ import {
 import type { EntityDef, RouteDef, StateDef, ViewNode } from '@cynodia/axiom';
 import { SERVER_DIAGNOSTIC_CODES } from '@cynodia/axiom-server';
 import { runMinimalExample } from '@cynodia/axiom-demo/minimal';
+import { runSeatingExample } from '@cynodia/axiom-demo/minimal-server';
 
 /**
  * Documentation is part of the public semantic contract, so it is tested like the rest of
@@ -97,6 +98,26 @@ test('the README example is the compiled example, character for character', () =
   assert.ok(inReadme, 'the README has no marked example');
   assert.ok(inSource, 'packages/demo/src/minimal.ts has no marked example');
   assert.equal(inReadme, inSource, 'the README example and the compiled example have drifted apart');
+});
+
+test('the README full-stack example is the compiled example, character for character', () => {
+  const inReadme = /<!-- readme-server-example:start -->\n```ts\n([\s\S]*?)```\n<!-- readme-server-example:end -->/.exec(
+    README,
+  )?.[1];
+  const inSource = /\/\/ readme-server-example:start\n([\s\S]*?)\/\/ readme-server-example:end/.exec(
+    read('packages/demo/src/minimal-server.ts'),
+  )?.[1];
+
+  assert.ok(inReadme, 'the README has no marked full-stack example');
+  assert.ok(inSource, 'packages/demo/src/minimal-server.ts has no marked example');
+  assert.equal(inReadme, inSource, 'the README full-stack example and the compiled one have drifted apart');
+});
+
+test('the README full-stack example runs, against a real authority over HTTP', async () => {
+  // The point of the example is that one graph produces both halves. Running it proves the
+  // authority enforced the guard the client never evaluated, and recorded the caller the
+  // client never sent.
+  assert.deepEqual(await runSeatingExample(), ['a1: ada', 'a2: free']);
 });
 
 test('the README example runs and produces the documented result', () => {

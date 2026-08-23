@@ -2,9 +2,14 @@
 
 AI-native semantic application framework.
 
-Axiom represents application behavior, state, UI structure and presentation as structured
-semantic data executed by generic runtimes. An application is a typed graph, not source
-files: the JavaScript and HTML that reach a browser are output, and are never edited.
+Axiom represents application behavior, state, UI structure, presentation and **authority** as
+structured semantic data executed by generic runtimes. An application is a typed graph, not
+source files: the JavaScript and HTML that reach a browser are output, and are never edited.
+
+One graph produces the whole application. A `StateDef` declares who owns its value, and both
+halves follow from that — the browser page and the authoritative server that decides its
+mutations and persists them. Neither is written by hand: there is no route, controller,
+handler, SQL statement or line of client JavaScript in an Axiom application.
 
 **Status: experimental / alpha (0.6.1-alpha.x).** The API may change between alpha
 releases. This documentation describes 0.6.1-alpha.1.
@@ -24,15 +29,28 @@ releases. This documentation describes 0.6.1-alpha.1.
 | `Presentation` | Semantic UX and presentation intent. Roles and tokens, never CSS. |
 | `Theme` | Translation of semantic presentation into visual design. |
 | Renderer | Platform-specific materialization. Not part of the graph. |
+| `StateDef.authority` | Who may commit a value: the client, or the server. The one declaration the split follows from. |
+| `ServerIR` | The half an authority executes. Portable JSON, frozen as `axiom.server.v1`. |
+| Semantic protocol | What a client may ask for: named actions with arguments, never mutation programs. |
+| `PersistenceAdapter` | Where a decided value survives. Not part of the semantics. |
+| `PRINCIPAL` | The caller, bound wherever an authority evaluates. Never sent by the client. |
 
 ```text
-ApplicationGraph → validateGraph → compileToIR       → client runtime (+ theme → renderer) → page
-                                 ↘ compileToServerIR → authority (+ PersistenceAdapter)
+                            ApplicationGraph
+                                   │
+              ┌────────────────────┴────────────────────┐
+         compileToIR                            compileToServerIR
+              │                                          │
+     client runtime ──── semantic protocol ────▶     authority
+              │                                          │
+     theme → renderer → page                    PersistenceAdapter
 ```
 
-One graph produces both halves. A `StateDef` says who owns its value (`authority: 'server'`),
-and everything else follows: which actions execute where, what a client is even told, and what
-a page has to ask an authority for. See [`docs/AUTHORITY.md`](docs/AUTHORITY.md).
+Authority is **derived, never declared twice**: an action that writes server-owned state is a
+server action, so where code runs cannot disagree with what it does. The client is given the
+types and the values it may see, and none of the rules it is not trusted with — those are
+evaluated again where the state lives. Full model:
+[`docs/AUTHORITY.md`](docs/AUTHORITY.md).
 
 ## Load-bearing invariants
 
@@ -69,8 +87,12 @@ full in the linked contract.
 ## Installation
 
 ```bash
-npm install @cynodia/axiom
+npm install @cynodia/axiom            # the graph, compiler, runtime and agent API
+npm install @cynodia/axiom-server     # only if the application has an authority
 ```
+
+The server package is separate rather than re-exported, because it imports `node:http` and
+`node:sqlite` and a browser bundle must not.
 
 ## Minimal complete application
 
@@ -182,6 +204,203 @@ export function runMinimalExample(): number {
 ```
 <!-- readme-example:end -->
 
+## Making it server-authoritative
+
+The same model, with the state moved across the trust boundary. One word — `authority:
+'server'` — decides that the client may read the seats but never write them, that claiming one
+is an action the authority executes, and that its guard and its authorization rule never reach
+the browser. This example runs, over real HTTP, in this repository's test suite.
+
+<!-- readme-server-example:start -->
+```ts
+import {
+  ApplicationGraph,
+  PRINCIPAL,
+  binary,
+  collectionType,
+  compileToHtml,
+  compileToIR,
+  compileToServerIR,
+  createAxiomRuntime,
+  createHttpRemoteGateway,
+  createMemoryHost,
+  entityType,
+  field,
+  fieldId,
+  find,
+  fieldLocation,
+  identitySelector,
+  itemLocation,
+  literal,
+  nodeId,
+  object,
+  primitiveType,
+  ref,
+  stateLocation,
+  validateGraph,
+} from '@cynodia/axiom';
+import type { ActionDef, ConstraintDef, EntityDef, RouteDef, StateDef, ViewNode } from '@cynodia/axiom';
+import { createMemoryPersistence, serveAxiomApplication } from '@cynodia/axiom-server';
+
+const USER = nodeId('entity_user');
+const F_USER_ID = fieldId('field_user_id');
+const F_USER_ROLE = fieldId('field_user_role');
+const SEAT = nodeId('entity_seat');
+const F_SEAT_ID = fieldId('field_seat_id');
+const F_SEAT_TAKEN_BY = fieldId('field_seat_taken_by');
+
+const SEATS = nodeId('state_seats');
+const CLAIM = nodeId('action_claim');
+const P_SEAT = nodeId('param_seat');
+const ONE_EACH = nodeId('constraint_one_each');
+const SCOPE_SEAT = nodeId('scope_seat');
+const VIEW = nodeId('ui_view');
+const ROUTE = nodeId('route_root');
+
+export function createSeatingGraph(): ApplicationGraph {
+  const graph = new ApplicationGraph('seating', 'Seating');
+
+  // Whose fields an authorization rule reads through PRINCIPAL.
+  graph.setPrincipalEntity(USER);
+  graph.addNode<EntityDef>({
+    id: USER,
+    kind: 'entity',
+    identityFieldId: F_USER_ID,
+    fields: [
+      { id: F_USER_ID, valueType: primitiveType('string'), required: true },
+      { id: F_USER_ROLE, valueType: primitiveType('string'), required: true },
+    ],
+  });
+  graph.addNode<EntityDef>({
+    id: SEAT,
+    kind: 'entity',
+    identityFieldId: F_SEAT_ID,
+    fields: [
+      { id: F_SEAT_ID, valueType: primitiveType('string'), required: true },
+      { id: F_SEAT_TAKEN_BY, valueType: primitiveType('string') },
+    ],
+  });
+
+  // One word makes this application full-stack. Everything else follows from it: the client
+  // is given the type and the value but no way to write it, and the action that writes it
+  // becomes an action the authority executes.
+  graph.addNode<StateDef>({
+    id: SEATS,
+    kind: 'state',
+    name: 'seats',
+    authority: 'server',
+    valueType: collectionType(entityType(SEAT)),
+    initialValue: [{ [F_SEAT_ID]: 'a1' }, { [F_SEAT_ID]: 'a2' }],
+  });
+
+  const seat = (id: typeof P_SEAT) =>
+    find(ref(SEATS), SCOPE_SEAT, binary('eq', field(ref(SCOPE_SEAT), F_SEAT_ID), ref(id)));
+
+  graph.addNode<ActionDef>({
+    id: CLAIM,
+    kind: 'action',
+    name: 'claim',
+    // Checked on the authority, before any guard and before any transaction opens. A client
+    // never learns the rule and cannot satisfy it by claiming to.
+    authorization: binary('eq', field(ref(PRINCIPAL), F_USER_ROLE), literal('member')),
+    parameters: [{ id: P_SEAT, valueType: primitiveType('string'), required: true }],
+    guards: [
+      {
+        condition: binary('eq', field(seat(P_SEAT), F_SEAT_TAKEN_BY), literal(null)),
+        failureMode: { code: 'seat-taken', message: 'That seat is already taken.' },
+      },
+    ],
+    operations: [
+      {
+        kind: 'set',
+        // The caller is bound on the authority, so the record says who claimed the seat
+        // without the client ever being asked to state an identity.
+        target: fieldLocation(
+          itemLocation(stateLocation(SEATS), identitySelector(F_SEAT_ID, ref(P_SEAT))),
+          F_SEAT_TAKEN_BY,
+        ),
+        value: field(ref(PRINCIPAL), F_USER_ID),
+      },
+    ],
+  });
+
+  // An invariant the authority evaluates over proposed state, per seat.
+  graph.addNode<ConstraintDef>({
+    id: ONE_EACH,
+    kind: 'constraint',
+    name: 'A seat identifies itself',
+    entityId: SEAT,
+    message: 'A seat must have an identifier.',
+    expression: binary('neq', field(ref(SEAT), F_SEAT_ID), literal('')),
+  });
+
+  graph.addNode<ViewNode>({ id: VIEW, kind: 'view', name: 'Seating', children: [] });
+  graph.addNode<RouteDef>({ id: ROUTE, kind: 'route', path: '/', viewId: VIEW });
+
+  return graph;
+}
+
+export async function runSeatingExample(): Promise<string[]> {
+  const graph = createSeatingGraph();
+  const validation = validateGraph(graph);
+  if (!validation.valid) {
+    throw new Error(validation.errors.map((problem) => `[${problem.code}] ${problem.message}`).join('\n'));
+  }
+
+  // One graph, one process: the generated page at GET /, the semantic endpoint at POST
+  // /axiom. No route, controller, handler or SQL is written by an application author.
+  const running = await serveAxiomApplication({
+    serverIR: compileToServerIR(graph),
+    page: compileToHtml(graph),
+    persistence: createMemoryPersistence(),
+    authenticate: (credential) =>
+      credential === 'ada' ? { [F_USER_ID]: 'ada', [F_USER_ROLE]: 'member' } : null,
+    port: 0,
+  });
+
+  try {
+    // A browser would use the generated page, which wires this gateway for itself. Building
+    // the client by hand shows what the page does.
+    const host = createMemoryHost({ path: '/' });
+    const client = createAxiomRuntime({
+      ir: compileToIR(graph),
+      rootElement: host.root,
+      host,
+      remote: createHttpRemoteGateway({ endpoint: running.url, credential: () => 'ada' }),
+    });
+    await client.start();
+
+    await client.invokeActionAsync(CLAIM, { [P_SEAT]: 'a1' });
+    // The guard is evaluated where the state lives, so a second claim is refused there.
+    await client.invokeActionAsync(CLAIM, { [P_SEAT]: 'a1' });
+
+    const seats = client.getState(SEATS) as Record<string, string>[];
+    return seats.map((entry) => `${entry[F_SEAT_ID]}: ${entry[F_SEAT_TAKEN_BY] ?? 'free'}`);
+  } finally {
+    await running.close();
+  }
+}
+```
+<!-- readme-server-example:end -->
+
+Nothing in that file is transport code. `serveAxiomApplication` serves the generated page at
+`GET /` and the semantic endpoint at `POST /axiom`, which are the same two for every Axiom
+application; `compileToHtml` wires the browser gateway into the page, so a deployed
+application needs no client JavaScript of its own.
+
+What the authority — and only the authority — did:
+
+| | |
+| --- | --- |
+| Evaluated the authorization rule | the client IR does not contain it |
+| Evaluated the guard | the second claim was refused where the state actually lives |
+| Bound `PRINCIPAL` | the seat records who took it; the client never sent an identity |
+| Committed the transaction | atomically, against a `PersistenceAdapter` |
+| Returned `changes` | every observable state whose value moved, and no others |
+
+`packages/demo/src/order-server.ts` is the full fixture: drafts, `for-each`, transition
+constraints, `serverOnly` state, diagnostics as UI and a parameterized form.
+
 ## Documentation map
 
 | Need to understand | Read |
@@ -196,15 +415,17 @@ export function runMinimalExample(): number {
 | Constraints and transition constraints | [`docs/CONSTRAINTS.md`](docs/CONSTRAINTS.md) |
 | Semantic UI nodes and bindings | [`docs/UI.md`](docs/UI.md) |
 | Presentation, UX intent, themes, formatting | [`docs/PRESENTATION.md`](docs/PRESENTATION.md) |
-| Server authority, persistence, the trust boundary | [`docs/AUTHORITY.md`](docs/AUTHORITY.md) |
-| Runtime API and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
+| **Authority, the trust boundary, the protocol, persistence, deploying** | [**`docs/AUTHORITY.md`**](docs/AUTHORITY.md) |
+| **Implementing a conforming runtime in another language** | [`docs/AUTHORITY.md`](docs/AUTHORITY.md#server-ir-v1-is-frozen) + the shipped schemas and fixtures |
+| Runtime API, startup lifecycle and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
 | Machine queries and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 | Validation codes and what rejects a graph | [`docs/VALIDATION.md`](docs/VALIDATION.md) |
 | Mistakes that compile but are wrong | [`docs/ANTI_PATTERNS.md`](docs/ANTI_PATTERNS.md) |
 
 ## Packages
 
-`@cynodia/axiom` re-exports all four; installing it is normally enough.
+`@cynodia/axiom` re-exports the four browser-safe packages; installing it is normally enough.
+An application with an authority installs `@cynodia/axiom-server` alongside it.
 
 | Package | Responsibility |
 | --- | --- |
@@ -233,23 +454,11 @@ node packages/cli/dist/index.js serve    packages/demo/dist/order-system.js --ex
 Four unrelated applications are built from graphs alone in `packages/demo` and run on the
 same compiler and runtime with no application-specific framework code. The order system is
 the acceptance fixture for the 0.4 collection semantics and the 0.5 presentation layer; the
-order desk is the 0.6 fixture, with stock and orders owned by an authority.
+order desk is the 0.6 fixture, with stock and orders owned by an authority, and is driven end
+to end through the generated page in `packages/demo/test/generated-page.test.ts`.
 
-```ts
-// The client page and the authority, from one graph, in one process, with durable state.
-const running = await serveAxiomApplication({
-  serverIR: compileToServerIR(graph),
-  page: compileToHtml(graph),
-  persistence: await createSqlitePersistence({ location: 'desk.db' }),
-  authenticate: (credential) => resolveUser(credential),
-  port: 3000,
-});
-```
-
-`GET /` is the generated page and `POST /axiom` is the semantic endpoint, for every Axiom
-application. No route, controller, handler, SQL statement or line of client JavaScript is
-written by an application author. There is no published Axiom CLI: `packages/cli` is a private
-development tool of this repository.
+There is no published Axiom CLI: `packages/cli` is a private development tool of this
+repository, and `serveAxiomApplication` is the supported way to run an application.
 
 Specifications live in `specs/`, in order: `spec.md`, `spec2.md`, `spec3.md`, `spec4.md`,
 `spec4.1.md`, `spec5.md`, `spec5.1.md`, `spec5.2.md`, `spec6.md`, `spec6.1.md`. `CLAUDE.md`

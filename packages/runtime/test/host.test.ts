@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { MemoryElement, createMemoryHost, createRuntimeModuleSource, findAll, textOf } from '@cynodia/axiom-runtime';
 
@@ -25,6 +26,24 @@ test('the browser bundle depends on nothing a browser does not have', () => {
     assert.doesNotMatch(source, forbidden, `the bundle must not reference ${String(forbidden)}`);
   }
   assert.match(source, /function createHttpRemoteGateway/, 'the remote gateway is bundled');
+});
+
+test('the gateway types are structurally the core types they stand in for', () => {
+  // `runtime-types.ts` re-declares NodeId rather than importing it, because a value import
+  // would be stripped from the browser bundle. That only works while the two declarations
+  // are identical: the moment they differ, `createHttpRemoteGateway()` stops typechecking
+  // as a `RemoteGateway` and every consumer needs a cast.
+  const local = readFileSync(
+    new URL('../../runtime/src/runtime-types.ts', import.meta.url),
+    'utf8',
+  );
+  const core = readFileSync(new URL('../../core/src/ids.ts', import.meta.url), 'utf8');
+  const declaration = /export type NodeId = ([^;]+);/;
+  assert.equal(
+    declaration.exec(local)?.[1],
+    declaration.exec(core)?.[1],
+    'runtime-types.ts and core/ids.ts declare NodeId differently',
+  );
 });
 
 test('the memory host records navigation, confirmation and reports', () => {

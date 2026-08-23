@@ -10,6 +10,7 @@ export { createIssueTrackerGraph, issueTrackerIds } from './issue-tracker.js';
 export { createInventoryGraph, inventoryIds } from './inventory.js';
 export { createOrderSystemGraph, orderSystemIds } from './order-system.js';
 export { createMinimalGraph, runMinimalExample } from './minimal.js';
+export { createSeatingGraph, runSeatingExample } from './minimal-server.js';
 export { createOrderServerGraph, orderServerIds } from './order-server.js';
 
 export interface DemoApplication {

@@ -37,6 +37,10 @@
       "types": "./dist/minimal.d.ts",
       "import": "./dist/minimal.js"
     },
+    "./minimal-server": {
+      "types": "./dist/minimal-server.d.ts",
+      "import": "./dist/minimal-server.js"
+    },
     "./order-server": {
       "types": "./dist/order-server.d.ts",
       "import": "./dist/order-server.js"

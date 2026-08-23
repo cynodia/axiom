@@ -1,3 +1,4 @@
+import type { RemoteGateway } from './runtime-types.js';
 import type {
   ActionDef,
   AnyNode,
@@ -119,15 +120,7 @@ export interface ActionResult {
  * is dispatched and answered later, so `invokeAction` returns `pending` and the outcome
  * arrives through the same diagnostic lifecycle a local refusal uses.
  */
-export interface RemoteGateway {
-  invoke(request: {
-    actionId: NodeId;
-    arguments: Record<string, unknown>;
-    requestId: string;
-  }): Promise<{ ok: boolean; diagnostics: RuntimeDiagnostic[]; changes: Record<NodeId, unknown> }>;
-  /** The authoritative values of every observable state. */
-  snapshot?(): Promise<{ states: Record<NodeId, unknown> }>;
-}
+export type { RemoteGateway } from './runtime-types.js';
 
 /**
  * The outcome of an action's most recent invocation.
@@ -1416,10 +1409,14 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       .invoke({ actionId: action.id, arguments: args, requestId })
       .then((answer) => {
         applyAuthoritative(answer.changes ?? {});
-        answer.diagnostics.forEach(report);
-        recordOutcome(action.id, answer.ok ? 'ok' : 'failed', answer.ok ? [] : answer.diagnostics);
+        // A diagnostic from an authority is untrusted input: its `code` is a string until it
+        // matches something we know. It is carried through unchanged, because a client that
+        // rewrote a refusal would be inventing one.
+        const reported = answer.diagnostics as RuntimeDiagnostic[];
+        reported.forEach(report);
+        recordOutcome(action.id, answer.ok ? 'ok' : 'failed', answer.ok ? [] : reported);
         renderApplication();
-        return { ok: answer.ok, diagnostics: answer.diagnostics };
+        return { ok: answer.ok, diagnostics: reported };
       })
       .catch((error: unknown) => {
         // A transport failure becomes a structured diagnostic, not an escaping exception.
