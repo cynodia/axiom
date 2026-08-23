@@ -365,6 +365,31 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
    * convention about where inputs are bound.
    */
   let applyingAuthoritative = false;
+  /** Dialogs currently rendered open, so focus moves in once rather than on every render. */
+  const openDialogs = new Set<NodeId>();
+  /** The instance that held focus when each open dialog took it. */
+  const dialogReturnTargets = new Map<NodeId, string | null>();
+  /** An explicit override of where focus returns, by semantic node. */
+  const declaredReturnFocus = new Map<NodeId, NodeId>();
+  /** The instance holding focus as the current render began. */
+  let openedFromInstance: string | null = null;
+  /**
+   * Where focus goes after this render, because a dialog just closed.
+   *
+   * A **render instance**, not a node id. `returnFocusId` names a semantic node, and a node
+   * inside a `repeat` is many rendered elements — so returning focus by node id sends a
+   * keyboard user to the last row rendered rather than the row they opened the dialog from.
+   * What is remembered instead is the instance that actually held focus when the dialog
+   * opened, which is both correct for repeats and correct when the trigger was not the
+   * declared `returnFocusId` at all.
+   */
+  let pendingFocusReturn: string | null = null;
+  /** Every focusable control of the current render, by instance key. */
+  const focusableControls = new Map<string, DomElement>();
+  /** The instance that last held focus, so a dialog knows where to send it back. */
+  let lastFocusedControl: string | null = null;
+  /** Instance keys of the elements rendered for a semantic node, for `returnFocusId`. */
+  const instancesOfNode = new Map<NodeId, string[]>();
   let remoteRequests = 0;
   /** Generated once, and only when this runtime can actually talk to an authority. */
   const sessionId = remote ? `s${(runtimeSessions += 1)}-${host.uuid()}` : '';
@@ -1703,6 +1728,54 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   }
 
   /** The semantic classes a node's resolved presentation implies. No styles, no colours. */
+  /**
+   * Focus bookkeeping for an open dialog.
+   *
+   * `DomElement` is a write-only contract — the renderer never reads the DOM back — so the
+   * focusable elements of a dialog are collected as they are rendered rather than queried
+   * afterwards. That keeps focus containment working on any host, including one with no
+   * document at all.
+   */
+  interface DialogFocus {
+    dialogId: NodeId;
+    focusable: DomElement[];
+    initial?: DomElement;
+    focusedIndex: number;
+  }
+  const dialogFocusStack: DialogFocus[] = [];
+  const openDialogFocus = new Map<NodeId, DialogFocus>();
+
+  /**
+   * Registers a control the keyboard can reach.
+   *
+   * Every focusable control, not only the ones inside a dialog: a dialog has to know where
+   * focus was before it opened, and that is somewhere else in the document by definition.
+   * Every kind that can hold focus registers here — a dialog containing a text field must
+   * trap it, and a trap that only knew about buttons would let focus walk straight out.
+   */
+  function registerFocusable(target: DomElement, nodeIdentity: NodeId, instanceKeyValue: string): void {
+    focusableControls.set(instanceKeyValue, target);
+    const forNode = instancesOfNode.get(nodeIdentity) ?? [];
+    forNode.push(instanceKeyValue);
+    instancesOfNode.set(nodeIdentity, forNode);
+
+    const current = dialogFocusStack[dialogFocusStack.length - 1];
+    const index = current ? current.focusable.length : -1;
+    if (current) {
+      current.focusable.push(target);
+      const dialogNode = ir.uiNodes[current.dialogId] as { initialFocusId?: NodeId } | undefined;
+      if (dialogNode?.initialFocusId === nodeIdentity) {
+        current.initial = target;
+      }
+    }
+    target.addEventListener('focus', () => {
+      lastFocusedControl = instanceKeyValue;
+      if (current) {
+        current.focusedIndex = index;
+      }
+    });
+  }
+
   function nodeClasses(node: UINode, ...base: string[]): string {
     return presentationClasses(presentationOf(node.id), ...base);
   }
@@ -2260,6 +2333,12 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           });
         }
         inputElements.set(instance, control);
+        // A control is focusable whatever kind it is. A dialog containing a text field must
+        // trap it, and a trap that knew only about buttons would let focus walk out of the
+        // first input it met.
+        for (const [offset, focusable] of (grouped ? radios : [control]).entries()) {
+          registerFocusable(focusable, node.id, grouped ? `${instance}#${offset}` : instance);
+        }
         wrapper.appendChild(control);
 
         if (presentation?.description) {
@@ -2345,13 +2424,113 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           // The form invokes exactly this, so the button's arguments are not lost.
           button.setAttribute('type', 'submit');
           submitInvokers.set(instanceKey(submits.formId, path), invoke);
+          registerFocusable(button, node.id, instance);
           return button;
         }
         button.addEventListener('click', (event: DomEvent) => {
           event.preventDefault?.();
           invoke();
         });
+        registerFocusable(button, node.id, instance);
         return button;
+      }
+      case 'dialog': {
+        // Visibility first: a closed dialog is absent, not hidden. Nothing inside it is
+        // rendered, so nothing inside it is reachable by keyboard or by assistive technology.
+        if (!toBoolean(evaluate(node.openWhen, scope))) {
+          if (openDialogs.delete(node.id)) {
+            // It was open and is now closed: focus goes back to whatever opened it, rather
+            // than to the top of the document. A declared override wins, resolved after the
+            // render, when its instances are known.
+            const declared = declaredReturnFocus.get(node.id);
+            pendingFocusReturn = declared
+              ? `declared:${String(declared)}`
+              : (dialogReturnTargets.get(node.id) ?? null);
+            dialogReturnTargets.delete(node.id);
+          }
+          openDialogFocus.delete(node.id);
+          return null;
+        }
+        const dialog = identify(element('div', nodeClasses(node, 'axiom-dialog')));
+        dialog.setAttribute('role', 'dialog');
+        if (node.modal !== false) {
+          dialog.setAttribute('aria-modal', 'true');
+        }
+
+        // The accessible name is the title element, related by id — not a copied string, so
+        // the name and the visible heading cannot drift apart.
+        const titleId = `axiom-dialog-title-${instance}`;
+        const title = element('h2', 'axiom-dialog-title axiom-text-heading');
+        title.setAttribute('id', titleId);
+        title.textContent =
+          typeof node.title === 'string' ? node.title : toText(evaluate(node.title, scope));
+        dialog.setAttribute('aria-labelledby', titleId);
+        dialog.appendChild(title);
+
+        if (node.description !== undefined) {
+          const describedId = `axiom-dialog-description-${instance}`;
+          const description = element('p', 'axiom-dialog-description axiom-text-body');
+          description.setAttribute('id', describedId);
+          description.textContent =
+            typeof node.description === 'string'
+              ? node.description
+              : toText(evaluate(node.description, scope));
+          dialog.setAttribute('aria-describedby', describedId);
+          dialog.appendChild(description);
+        }
+
+        const focus: DialogFocus = { dialogId: node.id, focusable: [], focusedIndex: -1 };
+        dialogFocusStack.push(focus);
+        renderChildren(node.children, scope, dialog, path);
+        dialogFocusStack.pop();
+        openDialogFocus.set(node.id, focus);
+
+        // Escape dismisses by invoking the declared close action. What dismissal *means* is
+        // that action's business: the runtime never infers that closing cancels anything.
+        dialog.addEventListener('keydown', (event: DomEvent) => {
+          if (event.key === 'Escape') {
+            event.preventDefault?.();
+            runAction(node.closeActionId, {});
+            return;
+          }
+          if (event.key === 'Tab' && node.modal !== false) {
+            // Containment: a modal that lets focus walk out of it is not modal. Only the
+            // wrap is handled here; ordinary Tab movement is the host's.
+            const { focusable, focusedIndex } = focus;
+            if (focusable.length === 0) {
+              return;
+            }
+            const atStart = focusedIndex <= 0;
+            const atEnd = focusedIndex === focusable.length - 1;
+            if (event.shiftKey ? atStart : atEnd) {
+              event.preventDefault?.();
+              const wrapTo = event.shiftKey ? focusable[focusable.length - 1] : focusable[0];
+              wrapTo.focus?.();
+              focus.focusedIndex = event.shiftKey ? focusable.length - 1 : 0;
+            }
+          }
+        });
+
+        // Focus moves in when it opens, and back out to whatever opened it when it closes.
+        // Focus moves in the first time it is rendered open, and not on every re-render:
+        // a full re-render must not steal focus back from wherever the person moved it.
+        if (!openDialogs.has(node.id)) {
+          openDialogs.add(node.id);
+          // Where focus was, before this dialog took it. Captured by instance, so a trigger
+          // inside a repeat sends focus back to the row it was actually pressed in.
+          dialogReturnTargets.set(node.id, openedFromInstance ?? null);
+          const initial = focus.initial ?? focus.focusable[0];
+          initial?.focus?.();
+          focus.focusedIndex = initial ? focus.focusable.indexOf(initial) : -1;
+        }
+        // A declared `returnFocusId` is an override for the case where focus should not go
+        // back where it came from. It can only name a node, so it resolves to that node's
+        // sole rendered instance; naming one inside a repeat is ambiguous and validation
+        // rejects it.
+        if (node.returnFocusId) {
+          declaredReturnFocus.set(node.id, node.returnFocusId);
+        }
+        return dialog;
       }
       case 'diagnostic': {
         const region = identify(element('div', nodeClasses(node, 'axiom-diagnostic')));
@@ -2399,6 +2578,14 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   function renderApplication(): void {
     inputElements.clear();
     submitInvokers.clear();
+    // Which instance held focus as this render began. A dialog opening during it captures
+    // this, so closing returns focus to the control that was actually being used — the right
+    // row of a repeat, not the last one rendered.
+    openedFromInstance = lastFocusedControl;
+    // The elements are about to be replaced; the instance keys they were registered under
+    // are stable, so only the element references are stale.
+    focusableControls.clear();
+    instancesOfNode.clear();
     const scope = rootScope();
     if (!activeRoute) {
       const missing = element('div', 'axiom-no-route');
@@ -2412,6 +2599,19 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   }
 
   function restoreFocus(): void {
+    // A dialog that just closed takes precedence: focus belongs on whatever opened it, not on
+    // whatever happened to hold focus before the re-render.
+    if (pendingFocusReturn) {
+      const request = pendingFocusReturn;
+      pendingFocusReturn = null;
+      const target = request.startsWith('declared:')
+        ? focusableControls.get((instancesOfNode.get(request.slice('declared:'.length) as NodeId) ?? [])[0] ?? '')
+        : focusableControls.get(request);
+      if (target) {
+        target.focus?.();
+        return;
+      }
+    }
     if (!focusedInstance) {
       return;
     }

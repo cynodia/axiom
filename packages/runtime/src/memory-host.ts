@@ -52,6 +52,10 @@ export class MemoryElement implements DomElement {
 
   focus(): void {
     this.focused = true;
+    // A real host fires a focus event, and the renderer listens for one to track where focus
+    // is. A double that sets a flag without dispatching would let focus-dependent behaviour
+    // pass here and fail in a browser.
+    this.dispatch('focus');
   }
 
   dispatch(type: string, event: Partial<DomEvent> = {}): void {

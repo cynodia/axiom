@@ -506,6 +506,33 @@ in `packages/server/src/server.ts` is a whitelist for exactly that reason: a det
 the runtime later is withheld until somebody decides it may cross. A transition rule's
 `previousValue` is the record itself, and the caller may not be entitled to it.
 
+## Authoring metadata and renderability
+
+Two mechanisms added in 0.6.3, both generic rather than serving one consumer.
+
+**`AUTHORING_METADATA_KEY` marks metadata that describes how a node was authored.**
+`packages/core/src/authoring-metadata.ts` holds it; `compileToIR` and `compileToServerIR`
+strip it unless `includeAuthoringMetadata` is passed. Anything under that key is inert by
+construction, so nothing may branch on it at run time. It exists because free-form `metadata`
+travels into the IR and across the trust boundary, which is right for data a runtime might
+consult and wrong for a generated node's origin.
+
+**A UI node kind is in the contract only if a renderer implements it.**
+`RendererCapabilities` names a target and the kinds it can draw; `validateGraph(graph, {
+renderer })` rejects the rest with `UNSUPPORTED_UI_NODE_KIND`, and `compileToIR` applies
+`BROWSER_RENDERER_CAPABILITIES` by default. This closes a real gap: before 0.6.3 a kind could
+be added to `UI_NODE_KINDS` and pass validation with no renderer support, surfacing only as a
+runtime `UNSUPPORTED_UI_NODE` on a blank element. `packages/compiler/test/renderability.test.ts`
+renders one node of every published kind and fails if the renderer does not handle it, so the
+capability list cannot drift from the renderer.
+
+**`dialog` is the first interaction primitive.** The graph declares what is open, the
+accessible name, the content, what closes it and whether it is modal; the runtime performs
+focus movement, containment, `Escape`, focus return and the ARIA relationships. Dismissal
+invokes the declared close action and means nothing else — closing is not cancelling. It is a
+canonical node rather than a toolkit pattern because a pattern can only emit nodes that
+already exist, and none of that behaviour was expressible.
+
 ## The presentation layer
 
 `packages/core/src/presentation.ts` holds the vocabulary, `theme.ts` the translation layer,

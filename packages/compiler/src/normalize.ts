@@ -34,7 +34,9 @@ import type {
   ValidationIssue,
   ValidationResult,
 } from '@cynodia/axiom-core';
-import { isUINode } from '@cynodia/axiom-core';
+import { isUINode, stripAuthoringMetadata } from '@cynodia/axiom-core';
+import type { RendererCapabilities } from '@cynodia/axiom-core';
+import { BROWSER_RENDERER_CAPABILITIES } from '@cynodia/axiom-runtime';
 
 export class GraphValidationError extends Error {
   readonly problems: ValidationIssue[];
@@ -53,6 +55,20 @@ export class GraphValidationError extends Error {
 export interface CompileOptions {
   /** Compilation refuses invalid graphs by default; disable only for diagnostics. */
   validate?: boolean;
+  /**
+   * Keep authoring metadata in the compiled artifact.
+   *
+   * Off by default, and that default is the point: metadata describing how a node was
+   * *authored* has no business in a browser payload or across a trust boundary. A development
+   * tool, a pattern inspector or an agent debugging an expansion asks for it explicitly.
+   */
+  includeAuthoringMetadata?: boolean;
+  /**
+   * The renderer the IR is being compiled for. Defaults to the browser renderer, because
+   * that is what `compileToIR` produces a page for — so a UI node kind no browser can draw is
+   * rejected at compile time rather than discovered on screen.
+   */
+  renderer?: RendererCapabilities;
 }
 
 function compileRoute(route: RouteDef): CompiledRoute {
@@ -85,7 +101,9 @@ function compileRoute(route: RouteDef): CompiledRoute {
  */
 export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {}): ApplicationIR {
   if (options.validate !== false) {
-    const result = validateGraph(graph);
+    const result = validateGraph(graph, {
+      renderer: options.renderer ?? (BROWSER_RENDERER_CAPABILITIES as RendererCapabilities),
+    });
     if (!result.valid) {
       throw new GraphValidationError(result);
     }
@@ -115,7 +133,12 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
   const transitionConstraints: TransitionConstraintDef[] = [];
   const routes: CompiledRoute[] = [];
 
-  for (const node of graph.listNodes()) {
+  // Authoring metadata is stripped on the way in, so no later stage has to remember to.
+  const forIR = <T extends { metadata?: Record<string, unknown> }>(node: T): T =>
+    options.includeAuthoringMetadata ? node : stripAuthoringMetadata(node);
+
+  for (const raw of graph.listNodes()) {
+    const node = forIR(raw);
     nodes[node.id] = node;
     if (isUINode(node)) {
       uiNodes[node.id] = node;

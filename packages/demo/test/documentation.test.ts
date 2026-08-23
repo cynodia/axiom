@@ -212,6 +212,7 @@ test('every validation code is documented, and every documented code exists', ()
     'PRINCIPAL', 'AUTHORITIES', 'SERVER_IR_CONTRACT', 'SERVER_DIAGNOSTIC_CODES', 'PROTOCOL_VERSION',
     'AUTHORITY', 'EXECUTION', 'TRUST', 'TRANSACTION', 'CONCURRENCY', 'PROTOCOL', 'SERIALIZATION',
     'DISCLOSABLE_DETAIL_KEYS', 'PORTABILITY', 'IDEMPOTENCY', 'STARTUP', 'CHANGES',
+    'AUTHORING_METADATA_KEY', 'BROWSER_RENDERER_CAPABILITIES',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });
@@ -634,4 +635,47 @@ test('the changes contract is described identically by the docs, the runtime and
     (fixture.invocations[0].expect?.changedStates?.length ?? 0) > 0,
     'the fixtures declare which states changed',
   );
+});
+
+test('a documented count of the UI node kinds is the actual count', () => {
+  // A blind agent trusting a stale enumeration in the reference card shipped the wrong
+  // construct entirely: `dialog` had been added to the vocabulary and to UI.md, but the
+  // reference card still said "Ten kinds" and listed ten. Prose counts drift silently; this
+  // is the check that they cannot.
+  const spelled: Record<string, number> = {
+    Nine: 9, Ten: 10, Eleven: 11, Twelve: 12, Thirteen: 13, Fourteen: 14,
+  };
+  const wrong: string[] = [];
+  for (const [file, source] of ALL_DOCS) {
+    for (const match of source.matchAll(/\b(Nine|Ten|Eleven|Twelve|Thirteen|Fourteen)\b[^.\n]*\b(?:semantic )?UI node kinds?\b/gi)) {
+      const claimed = spelled[match[1][0].toUpperCase() + match[1].slice(1).toLowerCase()];
+      if (claimed !== UI_NODE_KINDS.length) {
+        wrong.push(`${file}: claims ${match[1]} UI node kinds, there are ${UI_NODE_KINDS.length}`);
+      }
+    }
+    for (const match of source.matchAll(/\bAll (nine|ten|eleven|twelve|thirteen|fourteen)\b/gi)) {
+      const claimed = spelled[match[1][0].toUpperCase() + match[1].slice(1).toLowerCase()];
+      if (claimed !== UI_NODE_KINDS.length) {
+        wrong.push(`${file}: says "All ${match[1]}", there are ${UI_NODE_KINDS.length} kinds`);
+      }
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('every UI node kind is listed wherever the kinds are enumerated', () => {
+  // Being documented somewhere is not enough: an agent reads the enumeration it finds first.
+  const enumerations = [
+    ['docs/AGENT_REFERENCE.md', /Eleven kinds:([^.]*)\./],
+    ['README.md', /Semantic interaction structure \(([^)]*)\)/],
+  ] as const;
+  for (const [file, pattern] of enumerations) {
+    const source = ALL_DOCS.get(file);
+    assert.ok(source, file);
+    const listed = pattern.exec(source)?.[1];
+    assert.ok(listed, `${file} has no enumeration matching ${String(pattern)}`);
+    for (const kind of UI_NODE_KINDS) {
+      assert.ok(listed.includes(kind), `${file} enumerates the UI kinds but omits ${kind}`);
+    }
+  }
 });

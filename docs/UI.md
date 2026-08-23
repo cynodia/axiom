@@ -1,9 +1,9 @@
 # UI
 
-Axiom 0.6.3-alpha.1. Ten semantic UI node kinds describe **what exists and what it does**.
+Axiom 0.6.3-alpha.1. Eleven semantic UI node kinds describe **what exists and what it does**.
 How it looks is [presentation](PRESENTATION.md).
 
-All nine share `UIBase`:
+All eleven share `UIBase`:
 
 ```ts
 { id, kind, name?, visibleWhen?: Expression, presentation?: Presentation, metadata? }
@@ -228,6 +228,45 @@ Lifecycle — see [`RUNTIME.md`](RUNTIME.md#action-diagnostics) for the full con
 - `severity` is the lowest severity presented. `'error'` (the default) presents only errors; `'warning'` presents both.
 - Messages come from the structured diagnostics — `failureMode.message` for a refused guard, `ConstraintDef.message` for a broken invariant. The renderer invents no wording.
 - The region is a live region (`role="alert"` for errors, `role="status"` for warnings) and is rendered even when empty, so later content is announced. A control invoking the same action is related to it with `aria-describedby` while it has content.
+
+### `dialog`
+
+```ts
+{
+  kind: 'dialog',
+  openWhen: Expression,           // true while it is open
+  title: string | Expression,     // the accessible name; required
+  description?: string | Expression,
+  children: NodeId[],
+  closeActionId: NodeId,          // what dismissal invokes
+  modal?: boolean,                // default true
+  initialFocusId?: NodeId,        // a descendant
+  returnFocusId?: NodeId,         // usually whatever opened it
+}
+```
+
+Content that interrupts, together with the interaction rules that make it a dialog rather
+than a box that appears. It is the case where composing existing nodes stops being enough:
+visibility is expressible with a `conditional`, but focus movement, focus containment,
+`Escape`, focus return and the announcement to assistive technology are behaviour no node
+describes.
+
+**The graph says what; the runtime does how.**
+
+| The graph declares | The runtime performs |
+| --- | --- |
+| what is open, and what closes it | moving focus in when it opens |
+| the accessible name and description | containing focus while it is modal |
+| the content | dismissing on `Escape` |
+| whether it is modal | returning focus when it closes |
+| where focus starts and returns to | `role="dialog"`, `aria-modal`, `aria-labelledby`, `aria-describedby` |
+
+- **Openness is ordinary state.** `openWhen` is an expression over ordinary state — usually an `ephemeral` boolean — not hidden runtime state. Opening and closing therefore go through actions and the mutation log, and are as inspectable as anything else.
+- **A closed dialog is absent, not hidden.** Nothing inside it renders, so nothing inside it is reachable by keyboard or by assistive technology.
+- **Dismissal is not cancellation.** `Escape` invokes `closeActionId` and nothing else. Closing a dialog does not revert, cancel or roll anything back unless that action does — the runtime never infers that it should.
+- **Focus moves in once**, when the dialog is first rendered open, not on every re-render. A full re-render must not take focus back from wherever the person moved it.
+- `title` MUST NOT be empty: a dialog with no accessible name is `INVALID_DIALOG`. `initialFocusId` MUST be inside the dialog and `returnFocusId` MUST NOT be, since it has to exist after the dialog is gone.
+- Nothing here names an element, a class, a position or a stacking order. A renderer that is not a browser implements the same semantics its own way.
 
 ### `conditional`
 

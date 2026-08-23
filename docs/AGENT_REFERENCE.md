@@ -316,13 +316,14 @@ boolean types (`TYPE_MISMATCH`).
 
 ## UI nodes
 
-Ten kinds: `view` `container` `text` `repeat` `field-display` `form` `input` `button`
-`conditional` `diagnostic`. Detail: [`UI.md`](UI.md).
+Eleven kinds: `view` `container` `text` `repeat` `field-display` `form` `input` `button`
+`conditional` `diagnostic` `dialog`. Detail: [`UI.md`](UI.md).
 
 - `RepeatNode` binds the current item to **the repeat node's own id**; the template refers to it as `ref(repeatNodeId)`.
 - `InputNode.binding` is `{ location }` — no expression, no field id. An input write goes through the same mutation engine and transaction as an action.
 - `ButtonNode.arguments` is keyed by **action parameter id**.
 - `FormNode` submits either a generated button (`submitActionId` + `submitLabel`) or a declared one (`submitButtonId`), which stays an ordinary queryable node.
+- **`DialogNode` is how you ask for confirmation in a modal**, not `ActionDef.requiresConfirmation`. The two are different things: `requiresConfirmation` delegates to the host's own confirmation — `window.confirm` in a browser — which the application cannot label, focus, style or observe. A `dialog` declares the accessible name, the content, what closes it and where focus starts and returns; the runtime performs focus movement, containment, `Escape` and the ARIA relationships. Use `requiresConfirmation` for a coarse "are you sure" with no content of its own, and a `dialog` for anything a person needs to read.
 - `DiagnosticNode` presents why an action refused. See [Action diagnostics](#action-diagnostics).
 - `visibleWhen` and `ConditionalNode` are interaction behavior, **not authorization**.
 
@@ -573,6 +574,27 @@ Portable artifacts, for a runtime written in another language:
 Boundary diagnostics: `UNKNOWN_SERVER_ACTION` `ARGUMENT_TYPE_MISMATCH` `AUTHORIZATION_DENIED`
 `CONCURRENCY_CONFLICT` `MALFORMED_REQUEST` `AUTHORITY_UNREACHABLE`, plus `SERVER_STATE_WRITE`
 and `REMOTE_ACTION_UNAVAILABLE` on the client.
+
+## Metadata classes
+
+```ts
+metadata: { [AUTHORING_METADATA_KEY]: { … }, tracked: true }
+//          ↑ stripped from every compiled artifact       ↑ kept
+```
+
+Authoring metadata describes how a node was authored, never how it executes. Stripped from
+client IR, server IR and the generated page by default; `compileToIR(graph, {
+includeAuthoringMetadata: true })` keeps it for a tool. Nothing may branch on it at run time.
+
+## Renderability
+
+```ts
+validateGraph(graph, { renderer: BROWSER_RENDERER_CAPABILITIES });  // UNSUPPORTED_UI_NODE_KIND
+compileToIR(graph);                                                 // applies it by default
+```
+
+A UI node kind is only in the contract if a renderer implements it. A renderer publishes
+`{ target, supportedUiKinds }` and must implement everything it publishes.
 
 ## Serialization
 

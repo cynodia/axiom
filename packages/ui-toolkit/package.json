@@ -1,0 +1,31 @@
+{
+  "name": "@cynodia/axiom-ui-toolkit",
+  "version": "0.6.3-alpha.1",
+  "description": "Research prototype: a semantic UI pattern layer above canonical Axiom UI. Not published.",
+  "private": true,
+  "license": "MIT",
+  "author": "AskTech AS",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./research": {
+      "types": "./dist/research/index.d.ts",
+      "import": "./dist/research/index.js"
+    }
+  },
+  "dependencies": {
+    "@cynodia/axiom-core": "0.6.3-alpha.1",
+    "@cynodia/axiom-agent-api": "0.6.3-alpha.1",
+    "@cynodia/axiom-compiler": "0.6.3-alpha.1",
+    "@cynodia/axiom-runtime": "0.6.3-alpha.1"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json tsconfig.test.json",
+    "test": "node --test dist-test/**/*.test.js"
+  }
+}

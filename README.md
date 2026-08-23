@@ -68,7 +68,7 @@ on-disk graph format and no semantic version control yet.
 | `ActionDef` | A transactional semantic operation. |
 | `ConstraintDef` | An invariant over proposed state. |
 | `TransitionConstraintDef` | An invariant over previous committed state → proposed state. |
-| UI nodes | Semantic interaction structure (view, container, text, repeat, field-display, form, input, button, conditional). |
+| UI nodes | Semantic interaction structure (view, container, text, repeat, field-display, form, input, button, conditional, diagnostic, dialog). |
 | `Presentation` | Semantic UX and presentation intent. Roles and tokens, never CSS. |
 | `Theme` | Translation of semantic presentation into visual design. |
 | Renderer | Platform-specific materialization. Not part of the graph. |

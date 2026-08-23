@@ -2,6 +2,7 @@ import { AGGREGATE_FUNCTIONS, BUILTIN_FUNCTIONS } from './expressions.js';
 import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
 import { VALIDATION_CODES } from './diagnostics.js';
+import type { RendererCapabilities } from './renderer-capabilities.js';
 import type { ValidationIssue, ValidationResult } from './diagnostics.js';
 import type { LiteralValue } from './nodes.js';
 import { EDGE_KINDS, actionGuards, isMutationOperation } from './nodes.js';
@@ -56,7 +57,16 @@ interface Context {
  * be executed, so every reference — nodes, fields, edges, expressions, UI children —
  * is resolved here.
  */
-export function validateGraph(graph: ApplicationGraph): ValidationResult {
+export interface ValidateOptions {
+  /**
+   * The renderer the graph is intended for. Absent, every UI node kind is accepted — a graph
+   * is not rejected for a target nobody named. Compiling for a real renderer supplies its
+   * real capabilities, which is where an unrenderable node kind is caught.
+   */
+  renderer?: RendererCapabilities;
+}
+
+export function validateGraph(graph: ApplicationGraph, options: ValidateOptions = {}): ValidationResult {
   const nodes = new Map<NodeId, AnyNode>();
   const fields = new Map<FieldId, NodeId>();
   const errors: ValidationIssue[] = [];
@@ -77,6 +87,23 @@ export function validateGraph(graph: ApplicationGraph): ValidationResult {
       continue;
     }
     nodes.set(node.id, node);
+  }
+
+  // A UI node kind the intended renderer cannot draw is an authoring error, not a runtime
+  // surprise. Without this a graph can validate and then render nothing.
+  const renderer = options.renderer;
+  if (renderer) {
+    const supported = new Set<string>(renderer.supportedUiKinds);
+    for (const node of nodes.values()) {
+      if (isUINode(node) && !supported.has(node.kind)) {
+        errors.push({
+          code: VALIDATION_CODES.unsupportedUiNodeKind,
+          message: `The ${renderer.target} renderer cannot render a ${node.kind} node`,
+          nodeId: node.id,
+          details: { kind: node.kind, target: renderer.target },
+        });
+      }
+    }
   }
 
   // Only these ids can be resolved by a `ref` expression at runtime. The principal is
@@ -641,8 +668,103 @@ function validateUiNode(node: UINode, context: Context): void {
     case 'diagnostic':
       requireKind(node.actionId, 'action', node.id, context, VALIDATION_CODES.invalidActionRef);
       return;
+    case 'dialog': {
+      validateExpression(node.openWhen, node.id, context, new Set());
+      if (typeof node.title !== 'string') {
+        validateExpression(node.title, node.id, context, new Set());
+      } else if (node.title.trim().length === 0) {
+        // An empty accessible name is worse than a missing one: it validates and announces
+        // nothing.
+        context.errors.push({
+          code: VALIDATION_CODES.invalidDialog,
+          message: `Dialog ${node.name ?? node.id} has an empty title, so it has no accessible name`,
+          nodeId: node.id,
+          details: { reason: 'empty-title' },
+        });
+      }
+      if (node.description !== undefined && typeof node.description !== 'string') {
+        validateExpression(node.description, node.id, context, new Set());
+      }
+      requireKind(node.closeActionId, 'action', node.id, context, VALIDATION_CODES.invalidActionRef);
+      // Focus targets must be inside the dialog. A focus target outside it would move focus
+      // out of a modal at the moment it opens, which is the opposite of containment.
+      const descendants = collectUiDescendants(node.children, context);
+      for (const [label, target] of [
+        ['initialFocusId', node.initialFocusId],
+        ['returnFocusId', node.returnFocusId],
+      ] as const) {
+        if (target === undefined) {
+          continue;
+        }
+        if (!context.nodes.has(target)) {
+          context.errors.push({
+            code: VALIDATION_CODES.invalidDialog,
+            message: `Dialog ${node.name ?? node.id} names ${String(target)} as ${label}, which is not a node`,
+            nodeId: node.id,
+            details: { reason: 'unknown-focus-target', target },
+          });
+          continue;
+        }
+        if (label === 'initialFocusId' && !descendants.has(target)) {
+          context.errors.push({
+            code: VALIDATION_CODES.invalidDialog,
+            message:
+              `Dialog ${node.name ?? node.id} sets initial focus to ${String(target)}, which is not inside it`,
+            nodeId: node.id,
+            details: { reason: 'focus-target-outside', target },
+          });
+        }
+        if (label === 'returnFocusId' && descendants.has(target)) {
+          context.errors.push({
+            code: VALIDATION_CODES.invalidDialog,
+            message:
+              `Dialog ${node.name ?? node.id} returns focus to ${String(target)}, which is inside it and will not exist once it closes`,
+            nodeId: node.id,
+            details: { reason: 'return-focus-inside', target },
+          });
+        }
+      }
+      if (node.modal === false && node.initialFocusId !== undefined) {
+        context.warnings.push({
+          code: VALIDATION_CODES.invalidDialog,
+          message:
+            `Dialog ${node.name ?? node.id} is non-modal but moves focus on open, which takes focus from wherever the person was`,
+          nodeId: node.id,
+          details: { reason: 'non-modal-initial-focus' },
+        });
+      }
+      return;
+    }
     default:
   }
+}
+
+/** Every UI node reachable from these children, for containment checks. */
+function collectUiDescendants(children: readonly NodeId[], context: Context): Set<NodeId> {
+  const found = new Set<NodeId>();
+  const walk = (ids: readonly NodeId[]): void => {
+    for (const id of ids) {
+      if (found.has(id)) {
+        continue;
+      }
+      found.add(id);
+      const child = context.nodes.get(id);
+      if (!child) {
+        continue;
+      }
+      if (child.kind === 'container' || child.kind === 'view' || child.kind === 'form' || child.kind === 'dialog') {
+        walk((child as { children: NodeId[] }).children);
+      }
+      if (child.kind === 'conditional') {
+        walk([...child.whenTrue, ...(child.whenFalse ?? [])]);
+      }
+      if (child.kind === 'repeat') {
+        walk([child.templateId, ...(child.emptyTemplateId ? [child.emptyTemplateId] : [])]);
+      }
+    }
+  };
+  walk(children);
+  return found;
 }
 
 /**

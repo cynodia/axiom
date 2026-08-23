@@ -1,0 +1,475 @@
+{
+  "catalog": "axiom.ui.catalog.v1",
+  "toolkit": "@cynodia/axiom-ui",
+  "version": "0.2.0-research",
+  "description": "Semantic UI patterns for Axiom. A pattern is not a component: it expands, at authoring time, into ordinary Axiom UI nodes and has no runtime existence. Declare the UX concept; the expansion is explicit, inspectable application semantics.",
+  "ownership": {
+    "default": "declaration",
+    "values": {
+      "declaration": "The pattern declaration is the source of truth. Re-expansion is authoritative and editing a generated node is drift.",
+      "graph": "The expanded graph is the source of truth. The declaration is history and edits are legitimate."
+    }
+  },
+  "patterns": [
+    {
+      "name": "action-bar",
+      "purpose": "A row of action controls whose emphasis is inferred from the actions themselves.",
+      "required": [
+        "actions"
+      ],
+      "optional": [
+        "primary",
+        "labels",
+        "arguments",
+        "alignment"
+      ],
+      "inputs": {
+        "actions": {
+          "kind": "action-list",
+          "required": true,
+          "purpose": "The actions to expose, in order."
+        },
+        "primary": {
+          "kind": "action",
+          "required": false,
+          "purpose": "Which action is the primary one.",
+          "inferredWhenAbsent": "The first action that is not destructive."
+        },
+        "labels": {
+          "kind": "text",
+          "required": false,
+          "purpose": "Override a control’s label.",
+          "inferredWhenAbsent": "The action’s own name."
+        },
+        "arguments": {
+          "kind": "nodes",
+          "required": false,
+          "purpose": "Arguments per action, keyed by action parameter id."
+        },
+        "alignment": {
+          "kind": "token",
+          "required": false,
+          "purpose": "Where the group sits along its axis.",
+          "inferredWhenAbsent": "start"
+        }
+      },
+      "slots": [],
+      "produces": [
+        "container",
+        "button"
+      ],
+      "expansion": [
+        {
+          "part": "root",
+          "kind": "container",
+          "role": "the action-group"
+        },
+        {
+          "part": "button",
+          "kind": "button",
+          "role": "one per action, emphasis from the action"
+        }
+      ],
+      "generatedIdFormat": "ui_<instance>_<part>, or ui_<instance>_<part>_<index> for a repeated part",
+      "inferred": {
+        "primary": "The first action that is not destructive.",
+        "labels": "The action’s own name.",
+        "alignment": "start"
+      }
+    },
+    {
+      "name": "entity-form",
+      "purpose": "A form over a draft state, with labels, controls, required markers and a submit action inferred from the graph.",
+      "required": [
+        "draft",
+        "submit"
+      ],
+      "optional": [
+        "mode",
+        "fields",
+        "submitArguments",
+        "submitLabel",
+        "title",
+        "titleLevel",
+        "description",
+        "secondaryActions"
+      ],
+      "inputs": {
+        "draft": {
+          "kind": "state",
+          "required": true,
+          "purpose": "The draft state the controls write into. Its entity supplies every field’s label, control and required status."
+        },
+        "submit": {
+          "kind": "action",
+          "required": true,
+          "purpose": "The action the form submits."
+        },
+        "mode": {
+          "kind": "token",
+          "required": false,
+          "purpose": "\"create\" offers the identity field; \"edit\" omits it, because an identity is not editable.",
+          "inferredWhenAbsent": "create — the direction whose mistake is visible."
+        },
+        "fields": {
+          "kind": "field-list",
+          "required": false,
+          "purpose": "Which fields to edit, in order.",
+          "inferredWhenAbsent": "Every field of the entity, in declaration order, identity included — omitting a required field would produce a form that can never submit."
+        },
+        "submitArguments": {
+          "kind": "nodes",
+          "required": false,
+          "purpose": "Arguments for the submit action."
+        },
+        "submitLabel": {
+          "kind": "text",
+          "required": false,
+          "purpose": "The submit control’s label.",
+          "inferredWhenAbsent": "The action’s own name."
+        },
+        "title": {
+          "kind": "text",
+          "required": false,
+          "purpose": "A heading above the form."
+        },
+        "titleLevel": {
+          "kind": "token",
+          "required": false,
+          "purpose": "The title’s document-outline level.",
+          "inferredWhenAbsent": "2 — the level below a page title, so a page and its form do not skip a level."
+        },
+        "description": {
+          "kind": "text",
+          "required": false,
+          "purpose": "A caption under the heading."
+        },
+        "secondaryActions": {
+          "kind": "slot",
+          "required": false,
+          "purpose": "Controls placed beside the submit button."
+        }
+      },
+      "slots": [
+        "secondaryActions"
+      ],
+      "produces": [
+        "form",
+        "input",
+        "button",
+        "container",
+        "text",
+        "diagnostic"
+      ],
+      "expansion": [
+        {
+          "part": "root",
+          "kind": "form",
+          "role": "the form; submitButtonId is the generated submit"
+        },
+        {
+          "part": "title",
+          "kind": "text",
+          "role": "optional heading, level 2"
+        },
+        {
+          "part": "description",
+          "kind": "text",
+          "role": "optional caption"
+        },
+        {
+          "part": "input",
+          "kind": "input",
+          "role": "one per field, in entity declaration order"
+        },
+        {
+          "part": "diagnostic",
+          "kind": "diagnostic",
+          "role": "where a refusal of the submit action appears"
+        },
+        {
+          "part": "actions",
+          "kind": "container",
+          "role": "action-group holding submit and the secondaryActions slot"
+        },
+        {
+          "part": "submit",
+          "kind": "button",
+          "role": "the primary action"
+        }
+      ],
+      "generatedIdFormat": "ui_<instance>_<part>, or ui_<instance>_<part>_<index> for a repeated part",
+      "inferred": {
+        "mode": "create — the direction whose mistake is visible.",
+        "fields": "Every field of the entity, in declaration order, identity included — omitting a required field would produce a form that can never submit.",
+        "submitLabel": "The action’s own name.",
+        "titleLevel": "2 — the level below a page title, so a page and its form do not skip a level."
+      }
+    },
+    {
+      "name": "entity-list",
+      "purpose": "Lists the instances of a collection, one row per member, with optional per-row actions.",
+      "required": [
+        "source"
+      ],
+      "optional": [
+        "fields",
+        "formats",
+        "rowActions",
+        "rowArguments",
+        "emptyMessage",
+        "emptyAction",
+        "emptyActionArguments",
+        "rowExtra"
+      ],
+      "inputs": {
+        "source": {
+          "kind": "state",
+          "required": true,
+          "purpose": "The collection state to list."
+        },
+        "fields": {
+          "kind": "field-list",
+          "required": false,
+          "purpose": "Which fields to display, in order.",
+          "inferredWhenAbsent": "Every field of the member entity except its identity field."
+        },
+        "formats": {
+          "kind": "nodes",
+          "required": false,
+          "purpose": "Value format per field, where the declared type cannot imply one.",
+          "inferredWhenAbsent": "number, boolean, date and datetime from the field’s type; currency and percentage are never guessed."
+        },
+        "rowActions": {
+          "kind": "action-list",
+          "required": false,
+          "purpose": "Actions offered on each row."
+        },
+        "rowArguments": {
+          "kind": "nodes",
+          "required": false,
+          "purpose": "Arguments per row action, evaluated in the row scope."
+        },
+        "emptyMessage": {
+          "kind": "text",
+          "required": false,
+          "purpose": "What the empty state says.",
+          "inferredWhenAbsent": "An empty state is still generated, with a generic caption."
+        },
+        "emptyAction": {
+          "kind": "action",
+          "required": false,
+          "purpose": "An action offered from the empty state, so it says what to do about it.",
+          "inferredWhenAbsent": "The empty state is a caption only, and validateGraph warns that it offers no recovery."
+        },
+        "emptyActionArguments": {
+          "kind": "nodes",
+          "required": false,
+          "purpose": "Arguments for the empty-state action."
+        },
+        "rowExtra": {
+          "kind": "slot",
+          "required": false,
+          "purpose": "Extra semantic content inside each row."
+        }
+      },
+      "slots": [
+        "rowExtra"
+      ],
+      "produces": [
+        "container",
+        "repeat",
+        "field-display",
+        "button",
+        "text"
+      ],
+      "expansion": [
+        {
+          "part": "root",
+          "kind": "container",
+          "role": "wraps the list"
+        },
+        {
+          "part": "rows",
+          "kind": "repeat",
+          "role": "the repeat; ref this id to address the current row"
+        },
+        {
+          "part": "row",
+          "kind": "container",
+          "role": "one row, horizontal when wide and stacked when compact"
+        },
+        {
+          "part": "cell",
+          "kind": "field-display",
+          "role": "one per field, in order"
+        },
+        {
+          "part": "row-actions",
+          "kind": "container",
+          "role": "action-group at the end of the row"
+        },
+        {
+          "part": "row-action",
+          "kind": "button",
+          "role": "one per row action"
+        },
+        {
+          "part": "empty-state",
+          "kind": "container",
+          "role": "shown when the collection is empty"
+        },
+        {
+          "part": "empty-caption",
+          "kind": "text",
+          "role": "what the empty state says"
+        },
+        {
+          "part": "empty-action",
+          "kind": "button",
+          "role": "the recovery action, when one is given"
+        }
+      ],
+      "generatedIdFormat": "ui_<instance>_<part>, or ui_<instance>_<part>_<index> for a repeated part",
+      "inferred": {
+        "fields": "Every field of the member entity except its identity field.",
+        "formats": "number, boolean, date and datetime from the field’s type; currency and percentage are never guessed.",
+        "emptyMessage": "An empty state is still generated, with a generic caption.",
+        "emptyAction": "The empty state is a caption only, and validateGraph warns that it offers no recovery."
+      }
+    },
+    {
+      "name": "metric-grid",
+      "purpose": "A reflowing grid of prominent summary values.",
+      "required": [
+        "metrics"
+      ],
+      "optional": [],
+      "inputs": {
+        "metrics": {
+          "kind": "nodes",
+          "required": true,
+          "purpose": "Each metric: a label, a value expression, an optional format, emphasis and description."
+        }
+      },
+      "slots": [],
+      "produces": [
+        "container",
+        "text"
+      ],
+      "expansion": [
+        {
+          "part": "root",
+          "kind": "container",
+          "role": "adaptive grid of metrics"
+        },
+        {
+          "part": "metric",
+          "kind": "container",
+          "role": "one raised cell per metric"
+        },
+        {
+          "part": "metric-label",
+          "kind": "text",
+          "role": "the caption, a label and not a heading"
+        },
+        {
+          "part": "metric-value",
+          "kind": "text",
+          "role": "the figure, display scale, outside the outline"
+        },
+        {
+          "part": "metric-description",
+          "kind": "text",
+          "role": "optional caption under the figure"
+        }
+      ],
+      "generatedIdFormat": "ui_<instance>_<part>, or ui_<instance>_<part>_<index> for a repeated part",
+      "inferred": {}
+    },
+    {
+      "name": "page",
+      "purpose": "A titled application page with a header region, page-level actions and a content region.",
+      "required": [
+        "title"
+      ],
+      "optional": [
+        "description",
+        "actions",
+        "content"
+      ],
+      "inputs": {
+        "title": {
+          "kind": "text",
+          "required": true,
+          "purpose": "The page heading, and the document’s level-1 heading."
+        },
+        "description": {
+          "kind": "text",
+          "required": false,
+          "purpose": "A caption under the title."
+        },
+        "actions": {
+          "kind": "slot",
+          "required": false,
+          "purpose": "Page-level controls, placed in the header.",
+          "inferredWhenAbsent": "No action group is generated."
+        },
+        "content": {
+          "kind": "slot",
+          "required": false,
+          "purpose": "The page body, in the order given."
+        }
+      },
+      "slots": [
+        "actions",
+        "content"
+      ],
+      "produces": [
+        "container",
+        "text"
+      ],
+      "expansion": [
+        {
+          "part": "root",
+          "kind": "container",
+          "role": "the page, padded and vertical"
+        },
+        {
+          "part": "header",
+          "kind": "container",
+          "role": "header-region landmark"
+        },
+        {
+          "part": "title-block",
+          "kind": "container",
+          "role": "title and description"
+        },
+        {
+          "part": "title",
+          "kind": "text",
+          "role": "the h1"
+        },
+        {
+          "part": "description",
+          "kind": "text",
+          "role": "caption under the title"
+        },
+        {
+          "part": "actions",
+          "kind": "container",
+          "role": "action-group beside the title, from the actions slot"
+        },
+        {
+          "part": "content",
+          "kind": "container",
+          "role": "content-region landmark, holding the content slot"
+        }
+      ],
+      "generatedIdFormat": "ui_<instance>_<part>, or ui_<instance>_<part>_<index> for a repeated part",
+      "inferred": {
+        "actions": "No action group is generated."
+      }
+    }
+  ]
+}

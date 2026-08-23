@@ -80,6 +80,8 @@ non-numeric collections, and obviously incompatible assignments.
 | `EPHEMERAL_STATE_PERSISTED` | `ephemeral: true` together with `persistence`. |
 | `CLIENT_WRITE_TO_SERVER_STATE` | An input bound into server-authoritative state. See [Authority](#authority). |
 | `MISSING_ACTION_ARGUMENT` | A control invokes an action without supplying a required parameter. |
+| `UNSUPPORTED_UI_NODE_KIND` | A UI node kind the intended renderer cannot draw. |
+| `INVALID_DIALOG` | A `dialog` whose declaration cannot produce a usable dialog. |
 
 ### Initial values
 
@@ -150,6 +152,8 @@ client commit authoritative state does not compile. Full model:
 | `AUTHORIZATION_WITHOUT_PRINCIPAL` | An `authorization` expression with no principal entity declared. **Also raised as a warning** when an application has server state but no action declares authorization, so every caller may invoke everything. | error / warning |
 | `PRINCIPAL_REFERENCE_ON_CLIENT` | `PRINCIPAL` is read where a client evaluates, or an `authorization` sits on an action no authority executes. | error |
 | `MISSING_ACTION_ARGUMENT` | A `button`, or a `form` submitting without one, invokes an action with a required parameter it never supplies. The invocation would always be refused for a missing argument, so it is refused here instead. | error |
+| `INVALID_DIALOG` | A `dialog` with an empty title (no accessible name), an initial focus target outside itself, or a return focus target inside itself. **Also a warning** when a non-modal dialog moves focus on open. | error / warning |
+| `UNSUPPORTED_UI_NODE_KIND` | The graph contains a UI node kind the target renderer does not implement. Raised only when `validateGraph` is given a `renderer`; `compileToIR` supplies the browser renderer's capabilities by default. Without it a graph could validate and then render nothing — the failure would surface as a runtime `UNSUPPORTED_UI_NODE` diagnostic instead of an authoring error. | error |
 | `INVALID_PRINCIPAL_ENTITY` | `principalEntityId` names something that is not an entity. | error |
 
 ### Accessibility

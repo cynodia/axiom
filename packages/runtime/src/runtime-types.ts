@@ -48,3 +48,28 @@ export interface RemoteGateway {
   /** The authoritative values of every observable state. */
   snapshot?(): Promise<{ states: Record<NodeId, unknown> }>;
 }
+
+/**
+ * The UI node kinds the browser renderer draws.
+ *
+ * It lives beside the renderer rather than in core because the renderer is what has to be
+ * true to it: a kind listed here without a `case` in `renderNode` is a lie that validation
+ * would then repeat. `packages/runtime/test/host.test.ts` renders one of every kind on this
+ * list and fails if any reports `UNSUPPORTED_UI_NODE`.
+ */
+export const BROWSER_RENDERER_CAPABILITIES = {
+  target: 'browser',
+  supportedUiKinds: [
+    'view',
+    'container',
+    'text',
+    'repeat',
+    'field-display',
+    'form',
+    'input',
+    'button',
+    'conditional',
+    'diagnostic',
+    'dialog',
+  ],
+} as const;

@@ -65,6 +65,10 @@ export const VALIDATION_CODES = {
   destructiveActionUnmarked: 'DESTRUCTIVE_ACTION_UNMARKED',
   excessiveHorizontalActions: 'EXCESSIVE_HORIZONTAL_ACTIONS',
   emptyStateWithoutRecoveryAction: 'EMPTY_STATE_WITHOUT_RECOVERY_ACTION',
+  /** A UI node kind the intended renderer cannot draw. */
+  unsupportedUiNodeKind: 'UNSUPPORTED_UI_NODE_KIND',
+  /** A dialog whose declaration cannot produce a usable dialog. */
+  invalidDialog: 'INVALID_DIALOG',
   rigidHorizontalLayout: 'RIGID_HORIZONTAL_LAYOUT',
   conflictingSizing: 'CONFLICTING_SIZING',
   interactiveElementMissingLabel: 'INTERACTIVE_ELEMENT_MISSING_LABEL',

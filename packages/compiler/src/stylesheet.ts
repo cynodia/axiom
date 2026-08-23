@@ -435,6 +435,35 @@ button.axiom-button.axiom-layout-horizontal { flex-direction: row; }
 .axiom-ux-empty-state { text-align: center; }
 .axiom-ux-form-section + .axiom-ux-form-section { padding-top: ${space('small')}; border-top: 1px solid var(--axiom-color-border); }
 
+/*
+ * A dialog. The renderer emits the semantics — role, aria-modal, the title relationship — and
+ * these are the affordances that make it read as a modal: a backdrop, elevation, centring and
+ * a scroll bound. They belong here for the same reason button metrics do: every application
+ * would otherwise have to correct the same thing, which is what makes a default a framework's
+ * job rather than an author's.
+ */
+.axiom-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  margin: auto;
+  width: min(32rem, calc(100vw - ${space('large')} * 2));
+  max-height: calc(100vh - ${space('large')} * 2);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: ${space('medium')};
+  padding: ${space('large')};
+  background: var(--axiom-color-surface-raised);
+  color: var(--axiom-color-text);
+  border: 1px solid var(--axiom-color-border);
+  border-radius: var(--axiom-radius-large);
+  box-shadow: var(--axiom-elevation-raised);
+}
+.axiom-dialog::backdrop { background: rgb(0 0 0 / 0.45); }
+.axiom-dialog > .axiom-dialog-title { margin: 0; }
+.axiom-dialog > .axiom-dialog-description { margin: 0; color: var(--axiom-color-text-subtle); }
+
 .axiom-diagnostic[data-empty="true"] { display: none; }
 .axiom-diagnostic-entry { color: inherit; }
 .axiom-no-route { padding: ${space('large')}; background: var(--axiom-color-surface); border-radius: var(--axiom-radius-medium); }

@@ -222,6 +222,20 @@ multi-node execution.
 - Action guards MUST be evaluated in declaration order, and the first that does not hold MUST stop evaluation and be the only failure reported. Guard failures MUST NOT be aggregated.
 - An application MUST NOT need to duplicate an action's guards, read console output, copy an `ActionResult` into its own state, or install a renderer-specific handler in order to present a refusal.
 
+## Metadata classes
+
+- `metadata` is free-form and travels with a node. Anything under the reserved key `AUTHORING_METADATA_KEY` is **authoring metadata**: it describes how a node was authored, never how it executes.
+- Authoring metadata MUST be stripped from every compiled artifact — client IR, server IR, generated page — unless `includeAuthoringMetadata` is passed. Semantic metadata beside it is untouched.
+- Nothing may branch on authoring metadata at run time. Removing it MUST change validation, compilation, presentation resolution, rendering and runtime behaviour by exactly nothing.
+- The mechanism is generic. A UI toolkit is the first thing that needs it, not the only one.
+
+## Renderability
+
+- A UI node kind is part of the contract only if a renderer implements it. `validateGraph(graph, { renderer })` rejects a kind the named target cannot draw, with `UNSUPPORTED_UI_NODE_KIND`.
+- `compileToIR` applies the browser renderer's capabilities by default, so compiling a page rejects an unrenderable node at authoring time rather than producing one that reports `UNSUPPORTED_UI_NODE` on screen.
+- With no renderer named, every kind is accepted: a graph is not rejected for a target nobody named.
+- A renderer publishes what it implements, and MUST implement everything it publishes.
+
 ## Render identity
 
 - A UI node inside a `repeat` is rendered once per member. `NodeId` MUST NOT be used alone to identify a rendered element.
@@ -271,6 +285,7 @@ These are current implementation limits, not design intentions.
 - Type inference is deliberately partial: it rejects obvious mismatches and stays silent where a type depends on an iteration scope.
 - Iteration scopes are ordinary `NodeId`s; misuse is caught by validation rather than by the type system.
 - Remote persistence is declared but not executed.
+- A `dialog` declares what is open, its accessible name, its content, what closes it and whether it is modal. The runtime performs focus movement, focus containment, `Escape` dismissal, focus return and the ARIA relationships. Dismissing a dialog invokes its close action and infers no other meaning: closing is not cancelling.
 - Asynchronous action semantics extend no further than a remote invocation: the outcome is `pending` until the authority answers, and the control that started it is marked busy and refuses a second press. There is no general async workflow model, no progress reporting and no cancellation.
 - An action cannot bind a value it generated earlier in the same transaction; `uuid()` in one operation is not addressable by a later one.
 - Change sets are in memory and per `AgentAPI` instance. There is no semantic version control and no on-disk graph format.

@@ -19,7 +19,9 @@
     "release:publish:dry-run": "node scripts/publish.mjs --dry-run",
     "docs:sync": "node scripts/sync-docs.mjs",
     "conformance:generate": "node scripts/conformance.mjs",
-    "schema:generate": "node scripts/schema.mjs"
+    "schema:generate": "node scripts/schema.mjs",
+    "toolkit:metrics": "node scripts/toolkit-metrics.mjs",
+    "toolkit:catalog": "node scripts/pattern-catalog.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

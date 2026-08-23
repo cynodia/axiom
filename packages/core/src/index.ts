@@ -6,6 +6,8 @@ export * from './theme.js';
 export * from './type-ref.js';
 export * from './expressions.js';
 export * from './nodes.js';
+export * from './renderer-capabilities.js';
+export * from './authoring-metadata.js';
 export * from './ui.js';
 export * from './types.js';
 export * from './graph.js';

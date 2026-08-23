@@ -1,0 +1,35 @@
+{
+  "metrics": {
+    "baseline": {
+      "authoringLines": 854,
+      "explicitIds": 107,
+      "nodeConstructionCalls": 106,
+      "presentationDeclarations": 88,
+      "manualContainers": 39,
+      "patternInstances": 0,
+      "canonicalNodes": 140,
+      "canonicalUiNodes": 112,
+      "validationErrors": 0,
+      "validationWarnings": 0
+    },
+    "toolkit": {
+      "authoringLines": 92,
+      "explicitIds": 1,
+      "nodeConstructionCalls": 0,
+      "presentationDeclarations": 0,
+      "manualContainers": 0,
+      "patternInstances": 12,
+      "canonicalNodes": 138,
+      "canonicalUiNodes": 110,
+      "validationErrors": 0,
+      "validationWarnings": 0
+    },
+    "toolkitImplementationLines": 1519
+  },
+  "summary": {
+    "authoringLines": 89.2,
+    "explicitIds": 99.1,
+    "constructionCalls": 88.7,
+    "presentationDeclarations": 100
+  }
+}

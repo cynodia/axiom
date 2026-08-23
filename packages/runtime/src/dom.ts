@@ -6,6 +6,16 @@ export interface DomEvent {
   type: string;
   preventDefault?(): void;
   target?: unknown;
+  /**
+   * The key, for a keyboard event.
+   *
+   * Named the way every host already names it, and read for exactly two purposes: dismissing
+   * a dialog on `Escape` and containing focus on `Tab`. It is not a general keyboard channel
+   * — an application cannot bind a key, because a key binding would be behaviour expressed
+   * outside the graph.
+   */
+  key?: string;
+  shiftKey?: boolean;
 }
 
 export type DomListener = (event: DomEvent) => void;

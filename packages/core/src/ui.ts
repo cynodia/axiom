@@ -13,7 +13,8 @@ export type UINodeKind =
   | 'input'
   | 'button'
   | 'conditional'
-  | 'diagnostic';
+  | 'diagnostic'
+  | 'dialog';
 
 export const UI_NODE_KINDS: readonly UINodeKind[] = [
   'view',
@@ -26,6 +27,7 @@ export const UI_NODE_KINDS: readonly UINodeKind[] = [
   'button',
   'conditional',
   'diagnostic',
+  'dialog',
 ];
 
 export interface UIBase {
@@ -223,6 +225,55 @@ export interface DiagnosticNode extends UIBase {
   severity?: 'error' | 'warning';
 }
 
+/**
+ * A dialog: content that interrupts, and the interaction rules that make it one.
+ *
+ * A dialog is the case where "compose it from existing nodes" stops being enough. Its
+ * *visibility* is expressible today — an ephemeral state and a `conditional` — but everything
+ * that makes it a dialog rather than a box that appears is behaviour no node describes: focus
+ * moves into it, focus cannot leave it, Escape dismisses it, focus returns to whatever opened
+ * it, and assistive technology is told all of that. None of it can be added by a pattern,
+ * because a pattern only emits nodes that already exist.
+ *
+ * So it is canonical semantics, and the split is deliberate:
+ *
+ * - **The graph says** what is open, what it is called, what it contains, what closes it, and whether it is modal.
+ * - **The runtime does** focus movement, focus containment, Escape, focus return, `role` and `aria-modal`.
+ *
+ * Nothing here names an element, a CSS class, a position or a z-index. A renderer that is not
+ * a browser implements the same semantics its own way.
+ */
+export interface DialogNode extends UIBase {
+  kind: 'dialog';
+  /**
+   * True while the dialog is open.
+   *
+   * An ordinary expression over ordinary state — usually an `ephemeral` boolean — rather than
+   * hidden runtime state. Openness is then inspectable, addressable and mutated through the
+   * same governed path as everything else: an action opens it, an action closes it, and the
+   * mutation log records both.
+   */
+  openWhen: Expression;
+  /** The accessible name. Required: a dialog nobody can name is a dialog nobody can use. */
+  title: string | Expression;
+  description?: string | Expression;
+  children: NodeId[];
+  /**
+   * The action that closes it, invoked when the person dismisses the dialog.
+   *
+   * Dismissal is an interaction; what it *means* is this action's business. Closing a dialog
+   * is not cancelling an operation unless this action cancels one — the runtime will never
+   * infer that it does.
+   */
+  closeActionId: NodeId;
+  /** Default true. A modal dialog contains focus; a non-modal one does not. */
+  modal?: boolean;
+  /** Which descendant receives focus when it opens. Absent, the first focusable one. */
+  initialFocusId?: NodeId;
+  /** The control focus returns to when it closes. Usually whatever opened it. */
+  returnFocusId?: NodeId;
+}
+
 export type UINode =
   | ViewNode
   | ContainerNode
@@ -233,7 +284,8 @@ export type UINode =
   | InputNode
   | ButtonNode
   | ConditionalNode
-  | DiagnosticNode;
+  | DiagnosticNode
+  | DialogNode;
 
 export function isUINode(node: { kind: string }): node is UINode {
   return (UI_NODE_KINDS as readonly string[]).includes(node.kind);
@@ -287,6 +339,7 @@ export function uiChildIds(node: UINode): NodeId[] {
     case 'view':
     case 'container':
     case 'form':
+    case 'dialog':
       return [...node.children];
     case 'repeat':
       return node.emptyTemplateId ? [node.templateId, node.emptyTemplateId] : [node.templateId];
