@@ -1,13 +1,13 @@
 # Axiom 0.8.0 Implementation Report
 
-Integrations, Effects & Triggers. Target: `@cynodia/axiom` 0.8.0-alpha.1. Baseline: 0.7.x.
+Integrations, Effects & Triggers. Target: `@cynodia/axiom` 0.8.0. Baseline: 0.7.x.
 
 This report answers spec8 §136's 44 questions directly, states the gates it requires, and
 is honest about what was not done rather than implying otherwise.
 
 ## 1. New canonical node/definition kinds
 
-Four, added to `SEMANTIC_NODE_KINDS` in `packages/core/src/types.ts`:
+Four, added to `SEMANTIC_NODE_KINDS` in `../packages/core/src/types.ts`:
 
 - `IntegrationDef` (`kind: 'integration'`) — a capability domain marker.
 - `IntegrationOperationDef` (`kind: 'integration-operation'`) — one typed operation of an
@@ -24,9 +24,9 @@ Two new `Operation` kinds, added to `OPERATION_KINDS`: `integration-query`,
 `IntegrationDef { id, name? }` names a capability domain; it carries no SDK name, host
 name, secret or HTTP client. `IntegrationOperationDef { id, integrationId, mode,
 parameters?, resultType, clientSafe?, idempotent?, retry? }` is one typed operation of it.
-An `IntegrationAdapter` (`packages/server/src/integration.ts`), registered with
+An `IntegrationAdapter` (`../packages/server/src/integration.ts`), registered with
 `createAxiomServer({ integrations: { [integrationId]: adapter } })`, is where the actual
-SDK/HTTP/credentials live — never in the graph. Full model: `docs/INTEGRATIONS.md`.
+SDK/HTTP/credentials live — never in the graph. Full model: `../docs/INTEGRATIONS.md`.
 
 ## 3. How query and effect are distinguished
 
@@ -40,7 +40,7 @@ effect records post-commit intent).
 
 No. `EXPRESSION_KINDS` is unchanged by 0.8 — no expression kind performs I/O. A query is
 reachable only through the `integration-query` `Operation`, resolved by the runtime before
-the transaction opens (`runActionAsync` in `packages/runtime/src/runtime.ts`), never during
+the transaction opens (`runActionAsync` in `../packages/runtime/src/runtime.ts`), never during
 expression evaluation. There is no `fieldDisplay.value = queryWeather()` path.
 
 ## 5. How query results are bound
@@ -50,13 +50,13 @@ scope exactly the way a `for-each`/`map`'s `scopeId` does — validated for shad
 node-id collision, threaded through the action's operation list so only operations
 *after* it can `ref(bindAs)` (checked statically, not merely documented) — except the
 whole result is bound, not a collection member (`resultScope` in
-`packages/core/src/validate.ts`, distinct from `iterationScope`). At runtime it is resolved
+`../packages/core/src/validate.ts`, distinct from `iterationScope`). At runtime it is resolved
 before the transaction opens and bound into the action's root scope alongside its
-parameters (`packages/runtime/src/runtime.ts`, `runActionAsync`).
+parameters (`../packages/runtime/src/runtime.ts`, `runActionAsync`).
 
 ## 6. How provider responses are type-validated
 
-`packages/server/src/server.ts`'s `queryIntegration` bridge runs
+`../packages/server/src/server.ts`'s `queryIntegration` bridge runs
 `validateValueAgainstType(result.value, operation.resultType, ...)` — the same walk that
 checks action arguments and seed data — before the value ever reaches `ref(bindAs)`. A
 non-conforming response is rejected as `INTEGRATION_RESULT_INVALID`, never handed to the
@@ -66,10 +66,10 @@ application as `unknown`.
 
 Post-commit, never mid-transaction. Reaching `integration-effect` only appends an
 `EffectIntentRecord` to a transaction-scoped log in the runtime
-(`packages/runtime/src/runtime.ts`, `effectIntentLog`), discarded on rollback the same way
+(`../packages/runtime/src/runtime.ts`, `effectIntentLog`), discarded on rollback the same way
 a mutation-log entry is (`settle()` backfills `outcome` for both logs together). The
 adapter is called only after `AxiomServer`'s `invoke()` commits, by a separate
-`EffectRunner` (`packages/server/src/effects.ts`), never awaited by the response.
+`EffectRunner` (`../packages/server/src/effects.ts`), never awaited by the response.
 
 ## 8. Is an outbox used?
 
@@ -84,7 +84,7 @@ terminal.
 
 At-least-once, stated as such (never exactly-once). A resumed dispatch gets a fresh full
 retry budget rather than a partially-spent one, because a process that crashed mid-call was
-never told whether that one call succeeded (`packages/server/src/effects.ts`'s local
+never told whether that one call succeeded (`../packages/server/src/effects.ts`'s local
 `attempt` counter, deliberately not seeded from persisted `attempts`).
 
 ## 10. How duplicate effects are handled
@@ -124,7 +124,7 @@ interface IntegrationAdapter {
   effect(operation, args, context: { idempotencyKey? }): Promise<IntegrationResult>;
 }
 ```
-(`packages/server/src/integration.ts`.) Provider protocol, credentials and error
+(`../packages/server/src/integration.ts`.) Provider protocol, credentials and error
 translation live entirely inside it.
 
 ## 15. Is generic HTTP supported?
@@ -132,12 +132,12 @@ translation live entirely inside it.
 Yes, `createHttpIntegrationAdapter({ baseUrl, headers?, operations })` — method + path
 template (`{param}` substitution) + JSON body per operation, `AbortController`-based
 timeout. Explicitly documented as the lower-level generic mechanism, not the canonical
-model (`docs/INTEGRATIONS.md`).
+model (`../docs/INTEGRATIONS.md`).
 
 ## 16. Does application code need fetch?
 
 No — see §36-39 and the zero-escape metrics below. The device-monitor reference
-application's graph source (`packages/demo/src/device-monitor.ts`) contains no `fetch(`.
+application's graph source (`../packages/demo/src/device-monitor.ts`) contains no `fetch(`.
 
 ## 17. How are interval triggers represented?
 
@@ -153,14 +153,14 @@ concurrently. `'queue'` runs one pending tick immediately after the in-flight on
 
 ## 19. What happens when action duration exceeds interval?
 
-Verified directly: `packages/server/test/integrations.test.ts`, "an overlapping tick is
+Verified directly: `../packages/server/test/integrations.test.ts`, "an overlapping tick is
 skipped by default, never run concurrently" — a query held open across two scheduled ticks
 produces exactly one adapter call plus one `trigger-skipped-overlap` report, never two
 concurrent invocations.
 
 ## 20. Do server intervals run without clients?
 
-Yes — `TriggerRuntime` (`packages/server/src/triggers.ts`) is scheduled via
+Yes — `TriggerRuntime` (`../packages/server/src/triggers.ts`) is scheduled via
 `ServerHost.schedule`/`scheduleOnce` inside `AxiomServer`, entirely independent of whether
 any client is connected. Not separately exercised with a literal "disconnect all clients"
 test in this session (there is no client in these tests to begin with, which is itself the
@@ -169,7 +169,7 @@ point — see the limitation in §43).
 ## 21. What happens after server restart?
 
 Pending effect intents resume (§8-9), verified end to end in
-`packages/server/test/integrations.test.ts` ("an effect intent committed before a restart
+`../packages/server/test/integrations.test.ts` ("an effect intent committed before a restart
 is not lost") across two `AxiomServer` instances sharing one `PersistenceAdapter`. Interval
 triggers restart on their normal schedule from whenever the new process starts — no attempt
 is made to "catch up" missed ticks, matching spec §60.
@@ -203,7 +203,7 @@ uses, generalized. `AxiomServer`'s `dispatchEvent` validates the payload, then
 ## 26. How are external/webhook events authenticated?
 
 `serveOverHttp({ webhooks: { [path]: { verify, decode } } })`
-(`packages/server/src/node-host.ts`). `verify` runs over the **raw, unparsed** request
+(`../packages/server/src/node-host.ts`). `verify` runs over the **raw, unparsed** request
 first; an unverified delivery never reaches `decode` or the semantic layer at all
 (`WEBHOOK_VERIFICATION_FAILED`, HTTP 401). Provider-specific signing/headers stay entirely
 inside `verify`/`decode`.
@@ -223,12 +223,12 @@ observability.
 ## 29. Do triggered actions use normal authorization and constraints?
 
 Yes, unconditionally. Every triggered/event-originated invocation runs through the exact
-same `invokeCore` function an `InvokeRequest` does (`packages/server/src/server.ts`) —
+same `invokeCore` function an `InvokeRequest` does (`../packages/server/src/server.ts`) —
 same argument checking, same `authorize()`, same transaction, same constraint and
 transition-constraint evaluation. Verified directly: "a constraint violation from a
 trigger rolls back, same as any other invocation" and "a system-triggered action still
 evaluates authorization, and can be refused by it"
-(`packages/server/test/integrations.test.ts`).
+(`../packages/server/test/integrations.test.ts`).
 
 ## 30. Are events/actions protected against runaway cycles?
 
@@ -237,17 +237,17 @@ Yes. A `depth` counter is carried from the invocation that creates an effect int
 (`TriggerRuntime.fireEvent(eventId, payload, depth)`), capped at `MAX_EVENT_DISPATCH_DEPTH`
 (8). Verified with a deliberately self-referential fixture (an effect whose own success
 re-fires the event that triggers it) in
-`packages/server/test/integrations.test.ts`: the cascade stops at a fixed ceiling rather
+`../packages/server/test/integrations.test.ts`: the cascade stops at a fixed ceiling rather
 than growing without bound.
 
 ## 31. Are integration/trigger relationships visible to AgentAPI?
 
-Yes — nine new query methods on `GraphQueries` (`packages/agent-api/src/queries.ts`):
+Yes — nine new query methods on `GraphQueries` (`../packages/agent-api/src/queries.ts`):
 `listIntegrations`, `listIntegrationOperations`, `getIntegrationOperation`,
 `getActionsUsingIntegration`, `getEffectsForAction`, `getTriggersForAction`,
 `getActionsTriggeredByEvent`, `getExternalDependencies`, `getTimedTriggers`,
 `getWebhookEvents` — all derived from graph edges/kind filters, nothing duplicated.
-Exercised in `packages/agent-api/test/integrations.test.ts`.
+Exercised in `../packages/agent-api/test/integrations.test.ts`.
 
 ## 32. Are external dependencies machine-discoverable?
 
@@ -266,7 +266,7 @@ pre-existing conformance fixtures are unchanged by this release — see §35).
 
 ## 34. Which server contract version carries 0.8 vocabulary?
 
-`axiom.server.v3` — added to `SERVER_IR_CONTRACTS` in `packages/core/src/server-ir.ts`,
+`axiom.server.v3` — added to `SERVER_IR_CONTRACTS` in `../packages/core/src/server-ir.ts`,
 computed (never hand-asserted) via `usesIntegrationVocabulary(document)` combined with the
 existing v1/v2 checks through a `maxContract` helper. `createAxiomServer` refuses a
 document whose declared contract understates its actual vocabulary, exactly as it already
@@ -279,14 +279,14 @@ diff` producing no change to any individual fixture file after regenerating them
 (only `manifest.json`'s `release` metadata field moved). **No new portable JSON conformance
 fixtures were added for integrations/effects/triggers/events in this release** — see the
 explicit scope cut in §43. The behavior is instead covered by executable tests
-(`packages/server/test/integrations.test.ts`, `packages/demo/test/device-monitor.test.ts`)
+(`../packages/server/test/integrations.test.ts`, `../packages/demo/test/device-monitor.test.ts`)
 against the real runtime, which is not the same portability guarantee a data-only fixture
 gives an implementer in another language.
 
 ## 36-39. The reference polling application
 
-`packages/demo/src/device-monitor.ts`, spec §89's recommended domain. Verified by grep in
-`packages/demo/test/device-monitor.test.ts` ("zero escape pressure"):
+`../packages/demo/src/device-monitor.ts`, spec §89's recommended domain. Verified by grep in
+`../packages/demo/test/device-monitor.test.ts` ("zero escape pressure"):
 
 ```
 application fetch() ................ 0
@@ -384,45 +384,44 @@ external-agent experiment spec §130 asks for.
   never appear in `ApplicationGraph`, `ApplicationIR` or `ServerIR` — only in a host-side
   `IntegrationAdapter`.
 - **Durability gate (§140).** "An effect intent committed before a restart is not lost" —
-  `packages/server/test/integrations.test.ts` — a real second `AxiomServer` instance,
+  `../packages/server/test/integrations.test.ts` — a real second `AxiomServer` instance,
   sharing only the persistence adapter, resumes and completes an effect a first instance's
   adapter never answered.
 - **Timer gate (§141).** Every interval/delay/retry-delay test uses
   `createDeterministicServerHost()` + `advance(ms)`. No test in this release waits on a
   real clock.
-- **Toolkit/UI independence (§142).** `packages/ui-toolkit`'s `package.json` is untouched;
+- **Toolkit/UI independence (§142).** `../packages/ui-toolkit`'s `../package.json` is untouched;
   its `architecture.test.ts` (`the published package depends on core and on nothing else`)
   still asserts `dependencies` is exactly `['@cynodia/axiom-core']` and passes unmodified.
 - **Zero-escape target (§143).** See §36-39.
 
 ## Files touched (by package)
 
-- `packages/core`: `integrations.ts`, `events.ts`, `triggers.ts` (new); `nodes.ts`,
+- `../packages/core`: `integrations.ts`, `events.ts`, `triggers.ts` (new); `nodes.ts`,
   `types.ts`, `diagnostics.ts`, `validate.ts`, `validate-authority.ts`, `authority.ts`,
   `derive-edges.ts`, `ir.ts`, `server-ir.ts`, `index.ts`, `graph.ts` (default version).
-- `packages/compiler`: `normalize.ts`, `server.ts`.
-- `packages/runtime`: `dom.ts` (`queryIntegration`, `IntegrationQueryOutcome`), `runtime.ts`
+- `../packages/compiler`: `normalize.ts`, `server.ts`.
+- `../packages/runtime`: `dom.ts` (`queryIntegration`, `IntegrationQueryOutcome`), `runtime.ts`
   (`EffectIntentRecord`, `getEffectIntents`, `evaluateWithBindings`, `runActionAsync`,
   `actionHasIntegrationQuery`, new `RUNTIME_DIAGNOSTIC_CODES`, new operation-execution
   cases).
-- `packages/server`: `host.ts` (`schedule`/`scheduleOnce`, `DeterministicServerHost`),
+- `../packages/server`: `host.ts` (`schedule`/`scheduleOnce`, `DeterministicServerHost`),
   `persistence.ts` (`EffectRecord`, outbox methods), `sqlite-persistence.ts` (effects
   table), `integration.ts`, `effects.ts`, `triggers.ts` (new), `protocol.ts`
   (`EventRequest`/`EventResponse`), `node-host.ts` (`webhooks`), `server.ts` (the bulk of
   the wiring), `index.ts`.
-- `packages/agent-api`: `queries.ts` (nine new methods).
-- `packages/demo`: `device-monitor.ts` (new reference application), `index.ts`,
-  `package.json` (subpath export).
-- `docs/`: new `INTEGRATIONS.md`, `EFFECTS.md`, `TRIGGERS.md`, `EVENTS.md`; updated
+- `../packages/agent-api`: `queries.ts` (nine new methods).
+- `../packages/demo`: `device-monitor.ts` (new reference application), `index.ts`,
+  `../package.json` (subpath export).
+- `../docs`: new `INTEGRATIONS.md`, `EFFECTS.md`, `TRIGGERS.md`, `EVENTS.md`; updated
   `VALIDATION.md`, `RUNTIME.md`, `ACTIONS_TRANSACTIONS.md`, `AUTHORITY.md`,
   `AGENT_REFERENCE.md`, `GRAPH_MODEL.md`.
-- `README.md`, package READMEs (`core`, `server`), `scripts/schema.mjs` (v3 schema
+- `../README.md`, package READMEs (`core`, `server`), `../scripts/schema.mjs` (v3 schema
   generation).
-- Tests: `packages/compiler/test/collections.test.ts` (new fixtures for the two operation
-  kinds), `packages/server/test/schema.test.ts` (contract-aware vocabulary checks),
-  `packages/server/test/integrations.test.ts` (new, 12 scenarios),
-  `packages/agent-api/test/integrations.test.ts` (new, 6 scenarios),
-  `packages/demo/test/device-monitor.test.ts` (new, 6 scenarios),
-  `packages/demo/test/documentation.test.ts` (extended checks).
-- Version: `0.7.0-alpha.2` → `0.8.0-alpha.1` across every manifest and documented version
-  string.
+- Tests: `../packages/compiler/test/collections.test.ts` (new fixtures for the two operation
+  kinds), `../packages/server/test/schema.test.ts` (contract-aware vocabulary checks),
+  `../packages/server/test/integrations.test.ts` (new, 12 scenarios),
+  `../packages/agent-api/test/integrations.test.ts` (new, 6 scenarios),
+  `../packages/demo/test/device-monitor.test.ts` (new, 6 scenarios),
+  `../packages/demo/test/documentation.test.ts` (extended checks).
+- Version: `0.7.0-alpha.2` → `0.8.0` across every manifest and documented version string.

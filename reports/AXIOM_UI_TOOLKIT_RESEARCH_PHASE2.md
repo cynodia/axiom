@@ -1,6 +1,6 @@
 # Axiom UI Toolkit — Research Phase 2
 
-Status: architectural closure. Baseline: Axiom 0.7.0-alpha.1 + `packages/ui-toolkit` (private).
+Status: architectural closure. Baseline: Axiom 0.7.0-alpha.1 + `../packages/ui-toolkit` (private).
 Phase 1 result: T1 / Model H / MORE RESEARCH.
 
 **Classification: R1 — architecture ready.**
@@ -132,7 +132,7 @@ validateGraph(graph, { renderer: BROWSER_RENDERER_CAPABILITIES });  // UNSUPPORT
 compileToIR(graph);                                                  // applies it by default
 ```
 
-- A renderer publishes `{ target, supportedUiKinds }` and **must implement everything it publishes** — `packages/compiler/test/renderability.test.ts` renders one node of every published kind and fails if any reports `UNSUPPORTED_UI_NODE`, so the list cannot drift from the switch.
+- A renderer publishes `{ target, supportedUiKinds }` and **must implement everything it publishes** — `../packages/compiler/test/renderability.test.ts` renders one node of every published kind and fails if any reports `UNSUPPORTED_UI_NODE`, so the list cannot drift from the switch.
 - With no renderer named, every kind is accepted. A graph is not rejected for a target nobody mentioned.
 - A restricted target — a signage renderer with five kinds — reports 34 errors against the research application, each naming the kind and the target.
 

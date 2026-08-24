@@ -11,8 +11,8 @@ halves follow from that — the browser page and the authoritative server that d
 mutations and persists them. Neither is written by hand: there is no route, controller,
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
-**Status: experimental / alpha (0.8.0-alpha.x).** The API may change between alpha
-releases. This documentation describes 0.8.0-alpha.1.
+**Status: experimental / alpha.** The API may change between alpha releases. This
+documentation describes 0.8.0.
 
 ## Who this is for
 

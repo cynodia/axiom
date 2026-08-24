@@ -1,6 +1,6 @@
 # Axiom 0.7.0 — Implementation Report
 
-Target: `@cynodia/axiom` 0.7.0-alpha.1. Baseline: 0.6.3-alpha.1 + `packages/ui-toolkit`
+Target: `@cynodia/axiom` 0.7.0-alpha.1. Baseline: 0.6.3-alpha.1 + `../packages/ui-toolkit`
 (private research prototype).
 
 **Classification: B — RELEASE READY WITH DOCUMENTED LIMITATIONS.**
@@ -31,9 +31,9 @@ are listed in §9 because they are the most useful thing this release produced.
 
 ## 2. The 43 required answers (§113)
 
-**1. Is `@cynodia/axiom-ui` now public?** Yes. `packages/ui-toolkit` publishes as
+**1. Is `@cynodia/axiom-ui` now public?** Yes. `../packages/ui-toolkit` publishes as
 `@cynodia/axiom-ui` 0.7.0-alpha.1, with `publishConfig.access: public`, a `files` whitelist, its
-own README and LICENCE, and `scripts/verify-packages.mjs` checking the packed tarball (38 files,
+own README and LICENCE, and `../scripts/verify-packages.mjs` checking the packed tarball (38 files,
 45.7 KiB). It is **not** re-exported from the facade: an authoring dependency that every
 application carried forever would make "this application no longer needs the toolkit"
 unstatable and untestable, which is exactly what §102 asks to be demonstrated.
@@ -68,7 +68,7 @@ in the consumer test. `AUTHORING_METADATA_KEY` is stripped by `compileToIR` and
 
 **9. Does the catalogue describe generated structure?** Yes, and it is now drift-tested.
 Each pattern publishes an `expansion` array — part name, canonical node kind, role — plus
-`generatedIdFormat`. `packages/ui-toolkit/test/catalog.test.ts` asserts that every documented
+`generatedIdFormat`. `../packages/ui-toolkit/test/catalog.test.ts` asserts that every documented
 part is stamped by a real expansion, that nothing is stamped that the catalogue omits, and that
 the node kind claimed for a part is the kind that part actually is.
 
@@ -131,7 +131,7 @@ name the way a screen reader would. A closed dialog is absent from the tree enti
 
 **23. Does the browser renderer advertise all supported kinds accurately?** Yes, and it is
 pinned: `BROWSER_RENDERER_CAPABILITIES` lists eleven kinds, and
-`packages/compiler/test/renderability.test.ts` renders one node of each and fails if any
+`../packages/compiler/test/renderability.test.ts` renders one node of each and fails if any
 reports `UNSUPPORTED_UI_NODE`.
 
 **24. Can an unsupported kind still silently compile?** No. `compileToIR` applies the browser
@@ -177,7 +177,7 @@ being written out. A test asserts the two answers are equal.
 file and expands it — 0 core, compiler, runtime or renderer changes.
 
 **33. Can a materialized application run without `axiom-ui` installed?** Yes, and this is now
-proven from outside the repository. `scripts/consumer-test.mjs` builds a project from the packed
+proven from outside the repository. `../scripts/consumer-test.mjs` builds a project from the packed
 tarballs, runs a pattern-built application, materializes every expansion, writes the graph to
 disk, **uninstalls `@cynodia/axiom-ui`**, and runs a second entry point that asserts the toolkit
 cannot be resolved and then validates, compiles and runs the graph to the same observable result.
@@ -319,11 +319,11 @@ rule.
 
 | Where | Carries |
 | --- | --- |
-| `README.md` | The toolkit in the package map, the install line, and **why the facade does not re-export it** |
-| `docs/UI.md` | Dialog's browser-verified guarantees and its two honest limits; the interaction-primitive rule and classification table; the pattern / primitive / node decision table |
-| `docs/AGENT_REFERENCE.md` | `group` and `expressionRef` in the expression list; the authoring decision table; named expressions with their MUST / MUST NOT; capabilities describe node kinds, not partial support |
-| `docs/EXPRESSIONS.md` | The full `group` ordering contract and the isolation rule for `expressionRef` |
-| `docs/VALIDATION.md` | Six new codes, each with what causes it |
+| `../README.md` | The toolkit in the package map, the install line, and **why the facade does not re-export it** |
+| `../docs/UI.md` | Dialog's browser-verified guarantees and its two honest limits; the interaction-primitive rule and classification table; the pattern / primitive / node decision table |
+| `../docs/AGENT_REFERENCE.md` | `group` and `expressionRef` in the expression list; the authoring decision table; named expressions with their MUST / MUST NOT; capabilities describe node kinds, not partial support |
+| `../docs/EXPRESSIONS.md` | The full `group` ordering contract and the isolation rule for `expressionRef` |
+| `../docs/VALIDATION.md` | Six new codes, each with what causes it |
 | `@cynodia/axiom-ui` docs | The toolkit contract: reference, catalogue, ownership, provenance, third-party authoring |
 
 Two hand-written counts were removed rather than corrected (§87): the reference card now says
@@ -401,7 +401,7 @@ application: an empty state offering no recovery action, and a heading level ski
    41) are unanswered. **This is the reason the classification is B rather than A.**
 2. **A modal contains the keyboard, not the pointer.** Focus containment, `Escape`, focus return
    and `aria-modal` are all verified. The rest of the document is not made `inert`, so a pointer
-   can still reach what is behind the dialog. Documented in `docs/UI.md`.
+   can still reach what is behind the dialog. Documented in `../docs/UI.md`.
 3. **Renderer capabilities describe node kinds, not partial support.** A renderer cannot say it
    draws a kind but not one of its options. Nothing in the vocabulary needs it yet; documented as
    a future extension rather than left implicit.

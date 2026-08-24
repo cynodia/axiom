@@ -1,7 +1,7 @@
 # Axiom UI Toolkit — Architecture Research
 
 Status: research complete, prototype retained, no release recommended yet.
-Baseline: Axiom 0.7.0-alpha.1. Prototype: `packages/ui-toolkit` (private, never published).
+Baseline: Axiom 0.7.0-alpha.1. Prototype: `../packages/ui-toolkit` (private, never published).
 
 **Classification: T1 — semantic toolkit validated.**
 **Model: H — hybrid. Application patterns → B (provenance-preserving expansion). Interaction primitives → C (first-class canonical semantics), and not yet.**
@@ -20,7 +20,7 @@ have to be resolved before a public API, and neither is cosmetic.
 | Catalogue | `listPatterns`, `describePattern`, `describeToolkit` |
 | Inspection | `axiomUi.inspect(graph, instance)` → declaration, generated nodes, explanations, findings |
 | Test application | Order desk: products, customers, orders, dashboard, order editor — built twice |
-| Measurement | `npm run toolkit:metrics` → `packages/ui-toolkit/metrics.json` |
+| Measurement | `npm run toolkit:metrics` → `../packages/ui-toolkit/metrics.json` |
 | Evaluation | 41 tests across equivalence, inspectability, architecture and the Dialog probe |
 
 Both applications are built from **one shared domain graph** (`research/domain.ts`): identical
@@ -83,7 +83,7 @@ nothing and is why its benefits are almost free.
 
 ### Model C, measured rather than argued
 
-A first-class `entity-list` node kind was added to `packages/core` and the result measured:
+A first-class `entity-list` node kind was added to `../packages/core` and the result measured:
 
 - **0 TypeScript errors.** The type system does not force implementation — the renderer's switch has a `default`.
 - **1 failing test**, and it is the *documentation* drift test.

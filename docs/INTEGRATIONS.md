@@ -1,6 +1,6 @@
 # Integrations
 
-Axiom 0.8.0-alpha.1. How an application declares and calls an external system, without
+Axiom 0.8.0. How an application declares and calls an external system, without
 embedding a transport, an SDK or a secret in the graph. The authority boundary this
 depends on is [`AUTHORITY.md`](AUTHORITY.md#external-systems); this file is the vocabulary.
 
