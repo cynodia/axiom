@@ -1,7 +1,7 @@
 # @cynodia/axiom-ui
 
 Semantic UI authoring for [Axiom](https://github.com/cynodia/axiom). Pre-release
-(`0.8.0`); the API may change.
+(`0.8.0-alpha.1`); the API may change.
 
 A pattern compresses a recurring UX concept into a declaration and expands it, **at authoring
 time**, into ordinary Axiom UI nodes. It has no runtime existence, renders nothing and owns

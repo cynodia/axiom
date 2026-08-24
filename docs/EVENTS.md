@@ -1,6 +1,6 @@
 # Events
 
-Axiom 0.8.0. An event is a typed fact — something that happened — never work
+Axiom 0.8.0-alpha.1. An event is a typed fact — something that happened — never work
 itself. [`AUTHORITY.md`](AUTHORITY.md#external-events) is the load-bearing statement;
 this file is the vocabulary and the webhook delivery mechanism.
 

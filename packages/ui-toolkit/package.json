@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom-ui",
-  "version": "0.8.0",
+  "version": "0.8.0-alpha.1",
   "description": "Semantic UI authoring for Axiom: patterns that expand, at build time, into ordinary Axiom UI nodes.",
   "license": "MIT",
   "author": "AskTech AS",
@@ -30,7 +30,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@cynodia/axiom-core": "0.8.0"
+    "@cynodia/axiom-core": "0.8.0-alpha.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",

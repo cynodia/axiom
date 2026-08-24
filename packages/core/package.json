@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom-core",
-  "version": "0.8.0",
+  "version": "0.8.0-alpha.1",
   "description": "Application Graph, semantic types, locations and validation for Axiom.",
   "license": "MIT",
   "author": "AskTech AS",
