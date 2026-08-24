@@ -1,12 +1,44 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse as HttpServerResponse } from 'node:http';
 import { dispatch } from './transport.js';
-import { createAxiomServer } from './server.js';
+import { SERVER_DIAGNOSTIC_CODES, createAxiomServer } from './server.js';
 import type { AxiomServer } from './server.js';
 import { createServerHost } from './host.js';
 import type { PrincipalRecord } from './host.js';
 import type { PersistenceAdapter } from './persistence.js';
-import type { ServerIR } from './deps.js';
+import { PROTOCOL_VERSION } from './protocol.js';
+import type { NodeId, ServerIR } from './deps.js';
+
+/**
+ * What a webhook handler gets to verify and decode a delivery: the raw, unparsed request —
+ * signature verification runs over the exact bytes a provider signed, not a re-serialized
+ * JSON parse of them.
+ */
+export interface WebhookRequestInfo {
+  headers: Record<string, string | string[] | undefined>;
+  rawBody: Buffer;
+}
+
+/**
+ * A registered webhook route: provider-specific verification and decoding, kept entirely
+ * out of application semantics (spec §52-55). `verify` runs first — an unverified request
+ * never reaches `decode`, and no `EventRequest` is ever constructed for it (spec §53).
+ */
+export interface WebhookConfig {
+  verify(request: WebhookRequestInfo): boolean | Promise<boolean>;
+  /**
+   * Translates a verified provider payload into a typed Axiom event. `deliveryId`, when the
+   * provider supplies one, is what a bounded recent-deliveries window dedupes on (spec
+   * §56,99) — a duplicate delivery within that window is acknowledged without dispatching
+   * the event again. There is no claim of durable, unbounded deduplication.
+   */
+  decode(
+    request: WebhookRequestInfo,
+  ): { eventId: NodeId; payload: unknown; deliveryId?: string } | Promise<{ eventId: NodeId; payload: unknown; deliveryId?: string }>;
+}
+
+/** How many recent delivery ids each webhook route remembers, for duplicate detection. */
+const WEBHOOK_DEDUP_WINDOW = 512;
 
 /**
  * The reference Node host.
@@ -25,6 +57,13 @@ export interface NodeHostOptions {
    * the client and answers it. Omit to run a bare authority.
    */
   page?: string;
+  /**
+   * Webhook routes, keyed by the URL path a provider posts to (e.g. `/webhooks/stripe`).
+   * An application author never declares an HTTP route (spec §54); this is the one place
+   * a deployment registers one, and only to translate provider deliveries into semantic
+   * events — the graph never mentions it.
+   */
+  webhooks?: Record<string, WebhookConfig>;
 }
 
 export interface RunningNodeHost {
@@ -53,9 +92,38 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
 }
 
+async function readRawBody(request: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = chunk as Buffer;
+    size += buffer.length;
+    if (size > MAX_BODY_BYTES) {
+      throw new Error('Request body is too large');
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 export async function serveOverHttp(options: NodeHostOptions): Promise<RunningNodeHost> {
   const path = options.path ?? '/axiom';
   await options.server.start();
+
+  // One bounded, most-recent-first window of delivery ids per webhook route.
+  const seenDeliveries = new Map<string, string[]>();
+  function isDuplicateDelivery(webhookPath: string, deliveryId: string): boolean {
+    const seen = seenDeliveries.get(webhookPath) ?? [];
+    if (seen.includes(deliveryId)) {
+      return true;
+    }
+    seen.push(deliveryId);
+    if (seen.length > WEBHOOK_DEDUP_WINDOW) {
+      seen.shift();
+    }
+    seenDeliveries.set(webhookPath, seen);
+    return false;
+  }
 
   const http: Server = createServer((request: IncomingMessage, response: HttpServerResponse) => {
     void (async () => {
@@ -65,6 +133,59 @@ export async function serveOverHttp(options: NodeHostOptions): Promise<RunningNo
         // application-specific: every Axiom application is served by exactly this handler.
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         response.end(options.page);
+        return;
+      }
+      const webhook = options.webhooks?.[target];
+      if (webhook && request.method === 'POST') {
+        try {
+          const rawBody = await readRawBody(request);
+          const info: WebhookRequestInfo = { headers: request.headers, rawBody };
+          // Verification happens before any event is constructed — an unverified request
+          // never reaches `decode` (spec §53).
+          const verified = await webhook.verify(info);
+          if (!verified) {
+            response.writeHead(401, { 'content-type': 'application/json' });
+            response.end(
+              JSON.stringify({
+                kind: 'error',
+                diagnostics: [
+                  {
+                    code: SERVER_DIAGNOSTIC_CODES.WEBHOOK_VERIFICATION_FAILED,
+                    message: 'Webhook signature verification failed',
+                    severity: 'error',
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+          const decoded = await webhook.decode(info);
+          if (decoded.deliveryId && isDuplicateDelivery(target, decoded.deliveryId)) {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(
+              JSON.stringify({ kind: 'event-result', protocol: PROTOCOL_VERSION, ok: true, diagnostics: [] }),
+            );
+            return;
+          }
+          const answer = await options.server.handle({
+            kind: 'event',
+            protocol: PROTOCOL_VERSION,
+            eventId: decoded.eventId,
+            payload: decoded.payload,
+          });
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify(answer));
+        } catch (error) {
+          response.writeHead(400, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              kind: 'error',
+              diagnostics: [
+                { code: 'MALFORMED_REQUEST', message: error instanceof Error ? error.message : String(error), severity: 'error' },
+              ],
+            }),
+          );
+        }
         return;
       }
       if (request.method !== 'POST' || target !== path) {

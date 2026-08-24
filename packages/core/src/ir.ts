@@ -16,6 +16,7 @@ import type { TypeRef } from './type-ref.js';
 import type { Authority } from './authority.js';
 import type { ResolvedPresentation } from './presentation.js';
 import type { Theme } from './theme.js';
+import type { TriggerDef } from './triggers.js';
 
 export interface RouteSegment {
   kind: 'static' | 'parameter';
@@ -104,4 +105,12 @@ export interface ApplicationIR {
    * second renderer remains possible.
    */
   presentation: Record<NodeId, ResolvedPresentation>;
+  /**
+   * Client-authority triggers only — `interval`/`delay`/`lifecycle('application-start' |
+   * 'runtime-ready')` triggers whose target action executes locally, plus
+   * `lifecycle('route-enter' | 'route-leave')` triggers, which are inherently a client
+   * concept. No `event`-kind trigger, no integration, and no secret ever reaches this IR
+   * (spec §80).
+   */
+  triggers: TriggerDef[];
 }

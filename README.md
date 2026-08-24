@@ -11,8 +11,8 @@ halves follow from that — the browser page and the authoritative server that d
 mutations and persists them. Neither is written by hand: there is no route, controller,
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
-**Status: experimental / alpha (0.7.0-alpha.x).** The API may change between alpha
-releases. This documentation describes 0.7.0-alpha.2.
+**Status: experimental / alpha (0.8.0-alpha.x).** The API may change between alpha
+releases. This documentation describes 0.8.0-alpha.1.
 
 ## Who this is for
 
@@ -126,6 +126,13 @@ full in the linked contract.
 24. **A declared submit button invokes its action with its own arguments**, whether clicked or submitted through the form.
 25. **`InvokeResponse.changes` names every observable state whose value moved, and no others.** Not what was written, not what was recomputed — what changed.
 26. **`axiom.server.v1` is frozen and language-independent.** Its semantics are defined by [`docs/AUTHORITY.md`](docs/AUTHORITY.md#server-ir-v1-is-frozen), the published JSON Schemas and the conformance fixtures — not by this implementation.
+27. **External systems are reached through typed integration operations**, never through `NativeOperation` or a request embedded in the graph. Full model: [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md).
+28. **An external query is explicit execution, resolved before the transaction it feeds opens** — never a pure `Expression`. A query never runs mid-transaction.
+29. **External effects are not rollback-capable state mutations.** Reaching `integration-effect` only records intent; the adapter runs only after the transaction commits. Full model: [`docs/EFFECTS.md`](docs/EFFECTS.md).
+30. **Effect intent is committed atomically with the state write that requested it**, before external execution — the outbox invariant. A crash between the two does not lose it, for the two shipped `PersistenceAdapter`s.
+31. **A trigger invokes an ordinary action**, under exactly the guards, constraints, transition constraints and authorization any other caller is subject to — never a weaker path. Full model: [`docs/TRIGGERS.md`](docs/TRIGGERS.md).
+32. **A triggered or event-originated action runs under a system context, never an impersonated user.** `principal: null`, exactly like an anonymous client request; authorization still evaluates.
+33. **An event is a typed fact, validated before any action sees it; an action is where work happens.** Full model: [`docs/EVENTS.md`](docs/EVENTS.md).
 
 ## Installation
 
@@ -473,6 +480,10 @@ the published package — no repository access is needed to obtain the contract.
 | Presentation, UX intent, themes, formatting | [`docs/PRESENTATION.md`](docs/PRESENTATION.md) |
 | **Authority, the trust boundary, the protocol, persistence, deploying** | [**`docs/AUTHORITY.md`**](docs/AUTHORITY.md) |
 | **Implementing a conforming runtime in another language** | [`docs/AUTHORITY.md`](docs/AUTHORITY.md#server-ir-v1-is-frozen) + the shipped schemas and fixtures |
+| External systems: integration operations, adapters, secrets | [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) |
+| External effects: the outbox, retries, delivery guarantees | [`docs/EFFECTS.md`](docs/EFFECTS.md) |
+| Timed and lifecycle execution, event-invoked actions | [`docs/TRIGGERS.md`](docs/TRIGGERS.md) |
+| Typed facts, webhooks, event dispatch | [`docs/EVENTS.md`](docs/EVENTS.md) |
 | Runtime API, startup lifecycle and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
 | Machine queries and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 | Validation codes and what rejects a graph | [`docs/VALIDATION.md`](docs/VALIDATION.md) |

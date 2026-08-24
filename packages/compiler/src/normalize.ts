@@ -30,6 +30,7 @@ import type {
   RouteSegment,
   StateDef,
   TransitionConstraintDef,
+  TriggerDef,
   TypeRef,
   UINode,
   ValidationIssue,
@@ -141,6 +142,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
   const transitionConstraints: TransitionConstraintDef[] = [];
   const expressionDefs: Record<NodeId, ExpressionDef> = {};
   const routes: CompiledRoute[] = [];
+  const triggers: TriggerDef[] = [];
 
   // Authoring metadata is stripped on the way in, so no later stage has to remember to.
   const forIR = <T extends { metadata?: Record<string, unknown> }>(node: T): T =>
@@ -230,6 +232,30 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
         }
         expressionDefs[node.id] = node;
         break;
+      case 'integration':
+      case 'integration-operation':
+      case 'event':
+        // Server-only vocabulary: no client concern ever needs to know an integration,
+        // its operations or the events it can raise exist (spec §80).
+        delete nodes[node.id];
+        break;
+      case 'trigger': {
+        // Only client-authority, non-event triggers belong in the client IR. An `event`
+        // trigger only ever fires from a server-dispatched event, and a trigger whose
+        // target action is server-authority executes there, not here.
+        const target = authorityOf.actions.get(node.actionId);
+        const triggerAuthority = target ? actionAuthority(target, authorityOf) : 'client';
+        const triggerExpressions = [
+          ...Object.values(node.arguments ?? {}),
+          ...(node.enabledWhen ? [node.enabledWhen] : []),
+        ];
+        if (node.when.kind === 'event' || triggerAuthority === 'server' || readsHiddenState(triggerExpressions)) {
+          delete nodes[node.id];
+          break;
+        }
+        triggers.push(node);
+        break;
+      }
       default:
     }
   }
@@ -315,6 +341,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
     remoteActionIds,
     theme,
     presentation,
+    triggers,
   };
 }
 

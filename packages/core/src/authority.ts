@@ -152,9 +152,25 @@ function operationExpressions(operation: Operation): Expression[] {
         found.push(...locationExpressions(operation.resultTarget));
       }
       break;
+    case 'integration-query':
+      found.push(...Object.values(operation.arguments ?? {}));
+      break;
+    case 'integration-effect':
+      found.push(...Object.values(operation.arguments ?? {}));
+      if (operation.idempotencyKey) {
+        found.push(operation.idempotencyKey);
+      }
+      break;
     default:
   }
   return found;
+}
+
+/** Whether an action calls out to an integration anywhere in its top-level operations. */
+export function actionUsesIntegration(action: ActionDef): boolean {
+  return (action.operations ?? []).some(
+    (operation) => operation.kind === 'integration-query' || operation.kind === 'integration-effect',
+  );
 }
 
 /** The states an action writes, following `for-each`, `invoke` and declared native effects. */
@@ -197,6 +213,12 @@ export function statesWrittenBy(
               found.add(effect.stateId);
             }
           }
+          break;
+        case 'integration-query':
+        case 'integration-effect':
+          // Neither writes Axiom state directly: a query's result is a transaction-local
+          // scope binding, and an effect's outcome reaches state only through a follow-up
+          // action invoked from its success/failure event.
           break;
         default:
       }
@@ -247,6 +269,12 @@ export function statesReadByAction(
  * cannot disagree with what the action actually does.
  */
 export function actionAuthority(action: ActionDef, context: AuthorityContext): Authority {
+  // Integrations default server-only (spec §65: secrets, trust, CORS, auditability,
+  // deterministic authority), so an action that calls one is unconditionally server —
+  // independent of what it writes.
+  if (actionUsesIntegration(action)) {
+    return 'server';
+  }
   for (const stateId of statesWrittenBy(action, context)) {
     const state = context.states.get(stateId);
     if (state && stateAuthority(state) === 'server') {

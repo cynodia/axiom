@@ -58,6 +58,20 @@ export interface ConfirmationRequest {
   message: string;
 }
 
+export interface IntegrationQuerySuccess {
+  ok: true;
+  value: unknown;
+}
+
+export interface IntegrationQueryFailure {
+  ok: false;
+  code: string;
+  message: string;
+  retryable?: boolean;
+}
+
+export type IntegrationQueryOutcome = IntegrationQuerySuccess | IntegrationQueryFailure;
+
 /** Everything the runtime needs from its environment, so nothing is read from globals. */
 export interface HostEnvironment {
   document: DomDocument;
@@ -71,4 +85,16 @@ export interface HostEnvironment {
   uuid(): string;
   storage?: StorageAdapter;
   report?(message: string): void;
+  /**
+   * Executes an integration query operation by id and returns its result.
+   *
+   * Only the authoritative runtime ever calls this, executing an `integration-query`
+   * operation: no client-compiled action ever contains one (integrations default
+   * server-only), so a browser host never needs to implement it.
+   */
+  queryIntegration?(
+    operationId: string,
+    args: Record<string, unknown>,
+    options: { timeoutMs?: number },
+  ): Promise<IntegrationQueryOutcome>;
 }

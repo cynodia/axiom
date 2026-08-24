@@ -4,10 +4,12 @@ import {
   authorityContext,
   expressionDefsIn,
   isObservable,
+  maxContract,
   requiredServerContract,
   serverIRExpressions,
   serverStateClosure,
   stateAuthority,
+  usesIntegrationVocabulary,
   validateGraph,
 } from '@cynodia/axiom-core';
 import type {
@@ -15,12 +17,16 @@ import type {
   ApplicationGraph,
   ConstraintDef,
   EntityDef,
+  EventDef,
   ExpressionDef,
   FieldId,
+  IntegrationDef,
+  IntegrationOperationDef,
   NodeId,
   ServerIR,
   StateDef,
   TransitionConstraintDef,
+  TriggerDef,
 } from '@cynodia/axiom-core';
 import { GraphValidationError } from './normalize.js';
 import type { CompileOptions } from './normalize.js';
@@ -52,6 +58,9 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
   const constraints: ConstraintDef[] = [];
   const transitionConstraints: TransitionConstraintDef[] = [];
   const expressionDefs: Record<NodeId, ExpressionDef> = {};
+  const integrations: IntegrationDef[] = [];
+  const integrationOperations: Record<NodeId, IntegrationOperationDef> = {};
+  const events: EventDef[] = [];
   for (const node of nodes) {
     if (node.kind === 'entity') {
       entities.push(node);
@@ -61,6 +70,12 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
       transitionConstraints.push(node);
     } else if (node.kind === 'expression') {
       expressionDefs[node.id] = node;
+    } else if (node.kind === 'integration') {
+      integrations.push(node);
+    } else if (node.kind === 'integration-operation') {
+      integrationOperations[node.id] = node;
+    } else if (node.kind === 'event') {
+      events.push(node);
     }
   }
 
@@ -92,6 +107,19 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     };
   }
 
+  // Only the triggers whose target action executes here. A `route-enter`/`route-leave`
+  // trigger's target is always client-authority (validated), so it is naturally excluded.
+  const triggers: TriggerDef[] = [];
+  for (const node of nodes) {
+    if (node.kind !== 'trigger') {
+      continue;
+    }
+    const target = context.actions.get(node.actionId);
+    if (target && actionAuthority(target, context) === 'server') {
+      triggers.push(node);
+    }
+  }
+
   const fields: Record<FieldId, ServerIR['fields'][FieldId]> = {} as ServerIR['fields'];
   for (const entry of graph.listFields()) {
     fields[entry.field.id] = entry;
@@ -109,6 +137,10 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     transitionConstraints,
     ...(graph.principalEntityId ? { principalEntityId: graph.principalEntityId } : {}),
     observableStateIds,
+    ...(integrations.length > 0 ? { integrations } : {}),
+    ...(Object.keys(integrationOperations).length > 0 ? { integrationOperations } : {}),
+    ...(events.length > 0 ? { events } : {}),
+    ...(triggers.length > 0 ? { triggers } : {}),
   };
 
   // Only the definitions the authority's own rules reach. A calculation used by the client
@@ -129,12 +161,14 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
 
   /**
    * The label follows the vocabulary the document actually uses. An application that uses
-   * nothing from 0.7 compiles to the same `axiom.server.v1` document it always did; one
-   * that groups or names an expression says so, because a v1 runtime could not execute it.
+   * nothing from 0.7 or 0.8 compiles to the same `axiom.server.v1` document it always did;
+   * one that groups or names an expression, or uses any integration/trigger/event
+   * vocabulary, says so, because an older runtime could not execute it.
    */
-  const contract = carriesDefinitions
-    ? 'axiom.server.v2'
-    : requiredServerContract(serverIRExpressions(document));
+  const contract = maxContract(
+    carriesDefinitions ? 'axiom.server.v2' : requiredServerContract(serverIRExpressions(document)),
+    usesIntegrationVocabulary(document) ? 'axiom.server.v3' : 'axiom.server.v1',
+  );
 
   return { contract, ...document };
 }

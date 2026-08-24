@@ -44,7 +44,7 @@ export class ApplicationGraph {
     incoming: Map<NodeId, GraphEdge[]>;
   };
 
-  constructor(id: string, name: string, version = '0.7.0') {
+  constructor(id: string, name: string, version = '0.8.0') {
     this.data = { id, name, version, nodes: {}, edges: {} };
   }
 

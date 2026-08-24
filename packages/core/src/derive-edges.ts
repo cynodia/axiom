@@ -208,6 +208,27 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
         // bindings, no caller scope. Its parameters resolve to nothing here by design.
         reads(node.id, node.expression, new Map());
         break;
+      case 'integration-operation':
+        link(node.id, node.integrationId, 'references');
+        break;
+      case 'trigger':
+        link(node.id, node.actionId, 'invokes');
+        if (node.when.kind === 'event') {
+          link(node.id, node.when.eventId, 'references');
+        }
+        if (node.when.kind === 'lifecycle' && node.when.routeId) {
+          link(node.id, node.when.routeId, 'depends-on');
+        }
+        for (const argument of Object.values(node.arguments ?? {})) {
+          reads(node.id, argument, rootScope);
+        }
+        if (node.enabledWhen) {
+          reads(node.id, node.enabledWhen, rootScope);
+        }
+        break;
+      case 'integration':
+      case 'event':
+        break;
       default:
     }
   }
@@ -549,6 +570,27 @@ function linkOperations(
           if (effect.kind === 'writes-state') {
             linker.link(actionId, effect.stateId, 'writes');
           }
+        }
+        break;
+      case 'integration-query':
+        linker.link(actionId, operation.operationId, 'references');
+        for (const argument of Object.values(operation.arguments ?? {})) {
+          linker.reads(actionId, argument, scope);
+        }
+        break;
+      case 'integration-effect':
+        linker.link(actionId, operation.operationId, 'references');
+        for (const argument of Object.values(operation.arguments ?? {})) {
+          linker.reads(actionId, argument, scope);
+        }
+        if (operation.idempotencyKey) {
+          linker.reads(actionId, operation.idempotencyKey, scope);
+        }
+        if (operation.succeededEventId) {
+          linker.link(actionId, operation.succeededEventId, 'references');
+        }
+        if (operation.failedEventId) {
+          linker.link(actionId, operation.failedEventId, 'references');
         }
         break;
       default:

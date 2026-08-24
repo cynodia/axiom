@@ -244,7 +244,9 @@ export type Operation =
   | ForEachOperation
   | InvokeOperation
   | NavigateOperation
-  | NativeOperation;
+  | NativeOperation
+  | IntegrationQueryOperation
+  | IntegrationEffectOperation;
 
 export type OperationKind = Operation['kind'];
 
@@ -257,6 +259,8 @@ export const OPERATION_KINDS: readonly OperationKind[] = [
   'invoke',
   'navigate',
   'native',
+  'integration-query',
+  'integration-effect',
 ];
 
 /** Every mutation is a set, an insert or a remove against an addressed Location. */
@@ -344,6 +348,46 @@ export interface NavigateOperation {
   path?: string;
   /** Keyed by route parameter id. */
   parameters?: Record<string, Expression>;
+}
+
+/**
+ * Executes an integration query and binds its result into scope for later operations in
+ * the same action.
+ *
+ * A query is awaited mid-transaction — its result may inform the mutations that follow —
+ * but evaluating it is not an ordinary Expression, because it is not deterministic over
+ * semantic state alone. `bindAs` introduces a scope the way a `for-each`'s `scopeId` does:
+ * later operations refer to the whole result as `ref(bindAs)`. Never legal inside
+ * `for-each`.
+ */
+export interface IntegrationQueryOperation {
+  kind: 'integration-query';
+  /** The `IntegrationOperationDef` to call. Must declare `mode: 'query'`. */
+  operationId: NodeId;
+  arguments?: Record<string, Expression>;
+  bindAs: NodeId;
+  timeoutMs?: number;
+}
+
+/**
+ * Records intent to perform an external effect. It never calls the adapter during the
+ * transaction: reaching this operation only appends an effect intent, discarded on
+ * rollback exactly like a mutation is. Dispatch to the adapter happens only after the
+ * surrounding transaction commits — the outbox invariant (spec §18) — so an effect is
+ * never rollback-capable and never mid-transaction. Never legal inside `for-each`.
+ *
+ * `succeededEventId`/`failedEventId`, when declared, are dispatched through the ordinary
+ * event pipeline once the effect's outcome is known — an effect's result is never folded
+ * back into the transaction that requested it.
+ */
+export interface IntegrationEffectOperation {
+  kind: 'integration-effect';
+  /** The `IntegrationOperationDef` to call. Must declare `mode: 'effect'`. */
+  operationId: NodeId;
+  arguments?: Record<string, Expression>;
+  idempotencyKey?: Expression;
+  succeededEventId?: NodeId;
+  failedEventId?: NodeId;
 }
 
 export type NativeEffect =

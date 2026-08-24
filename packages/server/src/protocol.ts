@@ -43,7 +43,23 @@ export interface InvokeRequest {
   requestId?: string;
 }
 
-export type ServerRequest = SnapshotRequest | InvokeRequest;
+/**
+ * Delivers a semantic event — an already-verified webhook payload, most commonly — for
+ * dispatch to whatever `TriggerDef{when:{kind:'event'}}` is bound to it. Verification of
+ * provider authenticity happens in the host adapter before this request is even
+ * constructed (spec §53): a request that reaches this kind is treated as already trusted
+ * to *have arrived*, though its payload is still validated against `EventDef.payloadType`
+ * before any action sees it.
+ */
+export interface EventRequest {
+  kind: 'event';
+  protocol: typeof PROTOCOL_VERSION;
+  eventId: NodeId;
+  payload: unknown;
+  credential?: Credential;
+}
+
+export type ServerRequest = SnapshotRequest | InvokeRequest | EventRequest;
 
 /**
  * The authoritative value of the observable states the caller may see.
@@ -87,7 +103,14 @@ export interface ErrorResponse {
   diagnostics: RuntimeDiagnostic[];
 }
 
-export type ServerResponse = InvokeResponse | SnapshotResponse | ErrorResponse;
+export interface EventResponse {
+  kind: 'event-result';
+  protocol: typeof PROTOCOL_VERSION;
+  ok: boolean;
+  diagnostics: RuntimeDiagnostic[];
+}
+
+export type ServerResponse = InvokeResponse | SnapshotResponse | ErrorResponse | EventResponse;
 
 /**
  * How a client reaches an authority. The first implementation is in-process and the second
@@ -105,6 +128,6 @@ export function isServerRequest(value: unknown): value is ServerRequest {
   const candidate = value as Partial<ServerRequest>;
   return (
     candidate.protocol === PROTOCOL_VERSION &&
-    (candidate.kind === 'invoke' || candidate.kind === 'snapshot')
+    (candidate.kind === 'invoke' || candidate.kind === 'snapshot' || candidate.kind === 'event')
   );
 }

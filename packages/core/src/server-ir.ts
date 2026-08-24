@@ -10,6 +10,9 @@ import type {
 import type { Expression } from './expressions.js';
 import type { FieldIndexEntry } from './graph.js';
 import { walkExpression } from './expressions.js';
+import type { EventDef } from './events.js';
+import type { IntegrationDef, IntegrationOperationDef } from './integrations.js';
+import type { TriggerDef } from './triggers.js';
 
 /**
  * The contracts a Server IR may declare. A runtime that does not recognize the value MUST
@@ -18,13 +21,15 @@ import { walkExpression } from './expressions.js';
  * `axiom.server.v1` is frozen and stays frozen. 0.7 adds two constructs to the expression
  * vocabulary — `group` and `expression-ref`, with the `expressionDefs` they resolve against
  * — and a document that uses them is **not** a v1 document: a conforming v1 runtime has
- * never heard of them and must refuse it rather than execute half of it. So the vocabulary a
- * document actually uses decides its label.
+ * never heard of them and must refuse it rather than execute half of it. 0.8 adds
+ * integrations, effects, triggers and events, which is a third, independent reason a
+ * document may not be a v1 (or v2) document. So the vocabulary a document actually uses
+ * decides its label.
  *
  * Every existing application therefore still compiles to a byte-identical
  * `axiom.server.v1` document, and the frozen conformance fixtures stay frozen.
  */
-export const SERVER_IR_CONTRACTS = ['axiom.server.v1', 'axiom.server.v2'] as const;
+export const SERVER_IR_CONTRACTS = ['axiom.server.v1', 'axiom.server.v2', 'axiom.server.v3'] as const;
 
 export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
 
@@ -32,7 +37,7 @@ export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
 export const SERVER_IR_CONTRACT: ServerIRContract = 'axiom.server.v1';
 
 /** The newest contract this implementation produces and executes. */
-export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v2';
+export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v3';
 
 /** Expression kinds that `axiom.server.v1` does not contain. */
 export const SERVER_IR_V2_EXPRESSION_KINDS: readonly string[] = ['group', 'expression-ref'];
@@ -56,6 +61,29 @@ export function requiredServerContract(expressions: readonly Expression[]): Serv
   return required;
 }
 
+/**
+ * Whether a document's integration/trigger/event vocabulary requires `axiom.server.v3` —
+ * none of it exists in v1 or v2, so any of it present is enough.
+ */
+export function usesIntegrationVocabulary(ir: {
+  integrations?: readonly unknown[];
+  integrationOperations?: Record<string, unknown>;
+  events?: readonly unknown[];
+  triggers?: readonly unknown[];
+}): boolean {
+  return (
+    (ir.integrations?.length ?? 0) > 0 ||
+    Object.keys(ir.integrationOperations ?? {}).length > 0 ||
+    (ir.events?.length ?? 0) > 0 ||
+    (ir.triggers?.length ?? 0) > 0
+  );
+}
+
+/** The higher of two contracts, ordered by `SERVER_IR_CONTRACTS`. */
+export function maxContract(a: ServerIRContract, b: ServerIRContract): ServerIRContract {
+  return SERVER_IR_CONTRACTS.indexOf(b) > SERVER_IR_CONTRACTS.indexOf(a) ? b : a;
+}
+
 /** Every expression a Server IR document contains, in no particular order. */
 export function serverIRExpressions(ir: {
   states: readonly StateDef[];
@@ -63,6 +91,7 @@ export function serverIRExpressions(ir: {
   constraints: readonly ConstraintDef[];
   transitionConstraints: readonly TransitionConstraintDef[];
   expressionDefs?: Record<NodeId, ExpressionDef>;
+  triggers?: readonly TriggerDef[];
 }): Expression[] {
   const found: Expression[] = [];
   for (const state of ir.states) {
@@ -81,6 +110,12 @@ export function serverIRExpressions(ir: {
   }
   for (const definition of Object.values(ir.expressionDefs ?? {})) {
     found.push(definition.expression);
+  }
+  for (const trigger of ir.triggers ?? []) {
+    found.push(...Object.values(trigger.arguments ?? {}));
+    if (trigger.enabledWhen) {
+      found.push(trigger.enabledWhen);
+    }
   }
   return found;
 }
@@ -111,6 +146,15 @@ function actionExpressions(action: ActionDef): Expression[] {
           break;
         case 'native':
           found.push(...Object.values(operation.inputs ?? {}));
+          break;
+        case 'integration-query':
+          found.push(...Object.values(operation.arguments ?? {}));
+          break;
+        case 'integration-effect':
+          found.push(...Object.values(operation.arguments ?? {}));
+          if (operation.idempotencyKey) {
+            found.push(operation.idempotencyKey);
+          }
           break;
         default:
       }
@@ -161,4 +205,16 @@ export interface ServerIR {
   principalEntityId?: NodeId;
   /** The states a client is permitted to observe, in declaration order. */
   observableStateIds: NodeId[];
+  /**
+   * External capability domains this document calls out to. Absent in `axiom.server.v1`
+   * and `v2` documents, which have no way to reference one. Never carries a secret,
+   * host name or SDK — only the semantic operation shape (spec §5).
+   */
+  integrations?: IntegrationDef[];
+  /** Typed operations the integrations above expose, by id — dispatched by id constantly. */
+  integrationOperations?: Record<NodeId, IntegrationOperationDef>;
+  /** Semantic facts this document's triggers react to. */
+  events?: EventDef[];
+  /** Server-authority triggers only — interval, delay, lifecycle and event triggers whose target action executes here. */
+  triggers?: TriggerDef[];
 }

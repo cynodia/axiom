@@ -9,14 +9,18 @@ The Application Graph and its semantic model: nodes, fields, structured types,
 expressions, **locations** (addressable writable positions), edge derivation, validation
 and type inference. It also owns the presentation and UX layer — semantic roles, layout and
 spacing tokens, device classes, value formats and the `Theme` — with presentation
-resolution and validation.
+resolution and validation. As of 0.8 it also owns the vocabulary for external
+integrations, effects, triggers and events: `IntegrationDef`, `IntegrationOperationDef`,
+`EventDef`, `TriggerDef`, and the `integration-query`/`integration-effect` operation
+kinds — see [`docs/INTEGRATIONS.md`](https://github.com/cynodia/axiom/blob/main/docs/INTEGRATIONS.md).
 
 Presentation lives here because it is part of the canonical graph: it is intent, not
 styling, and it names no colour, length or CSS property.
 
 Main exports: `ApplicationGraph`, `TypeRef` builders, expression builders, `Location`
 builders, `Presentation`, `Theme`, `resolvePresentationMap`, `validateGraph`,
-`VALIDATION_CODES`, `ApplicationIR`.
+`VALIDATION_CODES`, `ApplicationIR`, `ServerIR`, `IntegrationDef`, `IntegrationOperationDef`,
+`EventDef`, `TriggerDef`.
 
 ## Installation
 

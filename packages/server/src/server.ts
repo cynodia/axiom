@@ -4,28 +4,40 @@ import {
   SERVER_IR_CONTRACTS,
   optionalType,
   entityType,
+  maxContract,
   requiredServerContract,
   serverIRExpressions,
+  usesIntegrationVocabulary,
   validateValueAgainstType,
 } from '@cynodia/axiom-core';
 import type {
   ActionDef,
   ApplicationIR,
   EntityDef,
+  EventDef,
+  Expression,
+  IntegrationOperationDef,
   LiteralValue,
   NodeId,
   ServerIR,
   ServerIRContract,
   StateDef,
+  TriggerDef,
 } from '@cynodia/axiom-core';
 import { MemoryElement, createAxiomRuntime, createMemoryHost, valuesEqual } from '@cynodia/axiom-runtime';
-import type { AxiomRuntime, MutationLogEntry, RuntimeDiagnostic } from '@cynodia/axiom-runtime';
+import type { AxiomRuntime, EffectIntentRecord, MutationLogEntry, RuntimeDiagnostic } from '@cynodia/axiom-runtime';
 import { createMemoryPersistence } from './persistence.js';
-import type { PersistenceAdapter } from './persistence.js';
+import type { EffectRecord, PersistenceAdapter } from './persistence.js';
 import { createServerHost } from './host.js';
 import type { ExecutionContext, PrincipalRecord, ServerEvent, ServerHost } from './host.js';
+import { createEffectRunner } from './effects.js';
+import type { IntegrationAdapterRegistry } from './integration.js';
+import { createTriggerRuntime } from './triggers.js';
+import type { TriggerRuntime } from './triggers.js';
 import { PROTOCOL_VERSION } from './protocol.js';
 import type {
+  EventRequest,
+  EventResponse,
   InvokeRequest,
   InvokeResponse,
   ServerRequest,
@@ -51,6 +63,20 @@ export const SERVER_DIAGNOSTIC_CODES = {
   MALFORMED_REQUEST: 'MALFORMED_REQUEST',
   /** The authority could not be reached, or did not answer. */
   AUTHORITY_UNREACHABLE: 'AUTHORITY_UNREACHABLE',
+  /** An external effect's adapter reported failure after exhausting its retry policy. */
+  EFFECT_FAILED: 'EFFECT_FAILED',
+  /** A trigger's target action reported failure, or its arguments failed to evaluate. */
+  TRIGGER_INVOCATION_FAILED: 'TRIGGER_INVOCATION_FAILED',
+  /** An external event's payload did not conform to its `EventDef.payloadType`. */
+  EVENT_PAYLOAD_INVALID: 'EVENT_PAYLOAD_INVALID',
+  /** An interval trigger tick fired while the previous invocation was still running. */
+  TRIGGER_OVERLAP_SKIPPED: 'TRIGGER_OVERLAP_SKIPPED',
+  /** The Server IR requires an integration with no registered adapter. */
+  INTEGRATION_ADAPTER_MISSING: 'INTEGRATION_ADAPTER_MISSING',
+  /** An event→action→effect→event chain was stopped before it could recurse unboundedly. */
+  EVENT_DISPATCH_DEPTH_EXCEEDED: 'EVENT_DISPATCH_DEPTH_EXCEEDED',
+  /** A webhook delivery failed provider signature verification and was refused. */
+  WEBHOOK_VERIFICATION_FAILED: 'WEBHOOK_VERIFICATION_FAILED',
 } as const;
 
 export type ServerDiagnosticCode =
@@ -62,6 +88,12 @@ export interface AxiomServerOptions {
   host?: ServerHost;
   /** How many request ids to remember for idempotent retries. */
   idempotencyWindow?: number;
+  /**
+   * One adapter per integration the Server IR declares, keyed by `IntegrationDef.id`.
+   * Checked at `start()`: a required integration with no adapter fails startup clearly
+   * rather than at first invocation (spec §116).
+   */
+  integrations?: IntegrationAdapterRegistry;
 }
 
 export interface AxiomServer {
@@ -75,6 +107,11 @@ export interface AxiomServer {
   revision(): number;
   /** Every mutation this authority has applied, with its outcome. */
   mutationLog(): MutationLogEntry[];
+  /**
+   * Every effect intent this authority has recorded, distinct from the mutation log
+   * because an effect is not a state mutation (spec §73).
+   */
+  effectLog(): EffectRecord[];
   stop(): Promise<void>;
 }
 
@@ -174,10 +211,51 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   /** Persistable state: derived values are recomputed, never stored. */
   const durableStateIds = ir.states.filter((state) => !state.derivation).map((state) => state.id);
 
-  const runtime = buildRuntime(ir, host);
+  const integrationOperations: Record<NodeId, IntegrationOperationDef> = ir.integrationOperations ?? {};
+  const adapters: IntegrationAdapterRegistry = options.integrations ?? {};
+  const eventsById = new Map<NodeId, EventDef>((ir.events ?? []).map((event) => [event.id, event]));
+
+  /** Bridges an `integration-query` operation to its registered adapter, result-typed. */
+  async function queryIntegration(
+    operationId: string,
+    args: Record<string, unknown>,
+    context: { timeoutMs?: number },
+  ): Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string; retryable?: boolean }> {
+    const operation = integrationOperations[operationId as NodeId];
+    if (!operation) {
+      return { ok: false, code: 'UNKNOWN_INTEGRATION_OPERATION', message: `No integration operation ${operationId}` };
+    }
+    const adapter = adapters[operation.integrationId];
+    if (!adapter) {
+      return {
+        ok: false,
+        code: 'INTEGRATION_ADAPTER_MISSING',
+        message: `No adapter registered for ${operation.integrationId}`,
+      };
+    }
+    const result = await adapter.query(operation, args, context);
+    if (!result.ok) {
+      return result;
+    }
+    const problems = validateValueAgainstType(result.value, operation.resultType, {
+      path: 'result',
+      getEntity: (id) => entities.get(id),
+    });
+    if (problems.length > 0) {
+      return {
+        ok: false,
+        code: 'INTEGRATION_RESULT_INVALID',
+        message: `${operation.name ?? operation.id} returned a value that does not conform to its declared result type`,
+      };
+    }
+    return { ok: true, value: result.value };
+  }
+
+  const runtime = buildRuntime(ir, host, queryIntegration);
   let storeRevision = 0;
   const revisions = new Map<NodeId, number>();
   const replies = new Map<string, InvokeResponse>();
+  const effectRecords = new Map<string, EffectRecord>();
   let queue: Promise<unknown> = Promise.resolve();
   let started = false;
 
@@ -349,20 +427,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   }
 
   async function invoke(request: InvokeRequest): Promise<ServerResponse> {
-    const startedAt = Date.now();
-
     // Who is calling is established before anything is answered, because the idempotency
     // record is scoped to them. Authenticating first discloses nothing: it is the same work
     // whether or not the action turns out to exist.
     const context: ExecutionContext = {
       principal: await resolvePrincipal(request),
+      source: 'client',
       ...(request.credential !== undefined ? { credential: request.credential } : {}),
       ...(request.requestId ? { requestId: request.requestId } : {}),
     };
-    // The caller is bound for the whole invocation, not only for the authorization check.
-    // An operation that records who acted — `field(ref(PRINCIPAL), F_USER_ID)` — must resolve
-    // whether or not the action also happens to carry an authorization rule.
-    runtime.hydrateState(PRINCIPAL, context.principal);
     const replayKey = request.requestId ? recordKey(context.principal, request.requestId) : undefined;
     if (replayKey) {
       const previous = replies.get(replayKey);
@@ -372,26 +445,65 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         return { ...previous, replayed: true };
       }
     }
+    return invokeCore(request.actionId, request.arguments ?? {}, context, request.requestId, replayKey, 0);
+  }
+
+  /**
+   * Runs a triggered/event-originated action under the system principal (spec §68): no
+   * credential is authenticated, and `principal` is `null` exactly as an anonymous
+   * client request's is, so an action's `.authorization` still evaluates and cannot be
+   * silently bypassed (spec §69,104). `depth` is the event-dispatch cycle guard.
+   */
+  async function invokeSystem(
+    actionId: NodeId,
+    args: Record<string, unknown>,
+    depth: number,
+  ): Promise<InvokeResponse> {
+    const context: ExecutionContext = { principal: null, source: 'system' };
+    const response = await invokeCore(actionId, args, context, undefined, undefined, depth);
+    return response as InvokeResponse;
+  }
+
+  /**
+   * The shared execution path every invocation — client request or system trigger —
+   * funnels through, so a triggered action gets exactly the same semantics an ordinary
+   * one does (spec §102): the same guards, constraints, transition constraints and
+   * authorization.
+   */
+  async function invokeCore(
+    actionId: NodeId,
+    args: Record<string, unknown>,
+    context: ExecutionContext,
+    requestId: string | undefined,
+    replayKey: string | undefined,
+    depth: number,
+  ): Promise<ServerResponse> {
+    const startedAt = Date.now();
+
+    // The caller is bound for the whole invocation, not only for the authorization check.
+    // An operation that records who acted — `field(ref(PRINCIPAL), F_USER_ID)` — must resolve
+    // whether or not the action also happens to carry an authorization rule.
+    runtime.hydrateState(PRINCIPAL, context.principal);
 
     // Resolved from this authority's own IR. A client's idea of what an action does is
     // never consulted.
-    const action = ir.actions[request.actionId];
+    const action = ir.actions[actionId];
     if (!action) {
       const diagnostics = [
         diagnostic(
           SERVER_DIAGNOSTIC_CODES.UNKNOWN_SERVER_ACTION,
-          `This authority does not execute ${String(request.actionId)}`,
-          { actionId: request.actionId },
+          `This authority does not execute ${String(actionId)}`,
+          { actionId },
         ),
       ];
-      report({ kind: 'reject', actionId: request.actionId, ok: false, diagnostics });
-      return refusal(diagnostics, request.requestId);
+      report({ kind: 'reject', actionId, ok: false, diagnostics });
+      return refusal(diagnostics, requestId);
     }
 
-    const argumentProblems = checkArguments(action, request.arguments ?? {});
+    const argumentProblems = checkArguments(action, args);
     if (argumentProblems.length > 0) {
       report({ kind: 'reject', actionId: action.id, ok: false, diagnostics: argumentProblems });
-      return refusal(argumentProblems, request.requestId);
+      return refusal(argumentProblems, requestId);
     }
 
     const denial = authorize(action, context);
@@ -403,7 +515,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         principal: principalIdentity(context.principal),
         diagnostics: [denial],
       });
-      return refusal([denial], request.requestId);
+      return refusal([denial], requestId);
     }
 
     // Everything the transaction might touch, as it stands now, so a refused commit can be
@@ -419,27 +531,32 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     for (const stateId of ir.observableStateIds) {
       observedBefore.set(stateId, runtime.getState(stateId));
     }
-    const mark = runtime.getMutationLog().length;
+    const mutationMark = runtime.getMutationLog().length;
+    const effectMark = runtime.getEffectIntents().length;
 
     runtime.clearDiagnostics();
-    const result = runtime.invokeAction(action.id, request.arguments ?? {});
+    const result = await runtime.invokeActionAsync(action.id, args);
 
     const written = new Set<NodeId>();
-    for (const entry of runtime.getMutationLog().slice(mark)) {
+    for (const entry of runtime.getMutationLog().slice(mutationMark)) {
       if (entry.outcome === 'committed') {
         written.add(entry.path.rootStateId);
       }
     }
     const writes = [...written].filter((stateId) => durableStateIds.includes(stateId));
+    const committedIntents: EffectIntentRecord[] = runtime
+      .getEffectIntents()
+      .slice(effectMark)
+      .filter((entry) => entry.outcome === 'committed');
 
-    if (!result.ok || writes.length === 0) {
-      const response = respond(result.ok, result.diagnostics, {}, request.requestId);
+    if (!result.ok || (writes.length === 0 && committedIntents.length === 0)) {
+      const response = respond(result.ok, result.diagnostics, {}, requestId);
       report({
         kind: 'invoke',
         actionId: action.id,
         ok: result.ok,
         principal: principalIdentity(context.principal),
-        requestId: request.requestId,
+        requestId,
         durationMs: Date.now() - startedAt,
         revision: storeRevision,
         diagnostics: result.diagnostics,
@@ -455,9 +572,16 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     for (const stateId of writes) {
       expected[stateId] = revisions.get(stateId) ?? 0;
     }
+    const effectsToCommit: EffectRecord[] = committedIntents.map((intent) => ({
+      ...intent,
+      status: 'pending',
+      attempts: 0,
+      dispatchDepth: depth,
+    }));
     const outcome = await persistence.commit({
       writes: writes.map((stateId) => ({ stateId, value: runtime.getState(stateId) })),
       expected,
+      ...(effectsToCommit.length > 0 ? { effects: effectsToCommit } : {}),
     });
 
     if (!outcome.committed) {
@@ -473,7 +597,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         ),
       ];
       report({ kind: 'conflict', actionId: action.id, ok: false, diagnostics, revision: outcome.revision });
-      const response = refusal(diagnostics, request.requestId);
+      const response = refusal(diagnostics, requestId);
       if (replayKey) {
         remember(replayKey, response as InvokeResponse);
       }
@@ -484,16 +608,26 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     for (const stateId of writes) {
       revisions.set(stateId, outcome.revision);
     }
+    for (const effect of effectsToCommit) {
+      effectRecords.set(effect.id, effect);
+      report({ kind: 'effect-requested', actionId: action.id, effectId: effect.id, operationId: effect.operationId });
+    }
+    if (effectsToCommit.length > 0) {
+      // Never awaited: the transaction has already committed, and the response the caller
+      // gets back reflects "committed, effect pending" (spec §123), not the effect's own
+      // eventual success or failure.
+      effectRunner.dispatch(effectsToCommit);
+    }
 
     const changes: Record<NodeId, unknown> = changedObservables(observedBefore);
 
-    const response = respond(true, result.diagnostics, changes, request.requestId);
+    const response = respond(true, result.diagnostics, changes, requestId);
     report({
       kind: 'invoke',
       actionId: action.id,
       ok: true,
       principal: principalIdentity(context.principal),
-      requestId: request.requestId,
+      requestId,
       durationMs: Date.now() - startedAt,
       revision: storeRevision,
       committed: writes,
@@ -545,12 +679,105 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     return respond(false, diagnostics, {}, requestId);
   }
 
+  /** Validates an external/internal event's payload, then dispatches it to bound triggers. */
+  async function dispatchEvent(eventId: NodeId, payload: unknown, depth: number): Promise<RuntimeDiagnostic[]> {
+    const event = eventsById.get(eventId);
+    report({ kind: 'event-received', eventId });
+    if (!event) {
+      return [diagnostic(SERVER_DIAGNOSTIC_CODES.EVENT_PAYLOAD_INVALID, `Unknown event ${String(eventId)}`, { eventId })];
+    }
+    const problems = validateValueAgainstType(payload, event.payloadType, {
+      path: 'payload',
+      getEntity: (id) => entities.get(id),
+    });
+    if (problems.length > 0) {
+      return [
+        diagnostic(
+          SERVER_DIAGNOSTIC_CODES.EVENT_PAYLOAD_INVALID,
+          `${event.name ?? event.id}'s payload does not conform to its declared type`,
+          { eventId, problems: problems.map((problem) => problem.message) },
+        ),
+      ];
+    }
+    await triggerRuntime.fireEvent(eventId, payload, depth);
+    report({ kind: 'event-dispatched', eventId });
+    return [];
+  }
+
+  function evaluateForTrigger(
+    expression: Expression,
+    bindings?: Record<string, unknown>,
+  ): { ok: true; value: unknown } | { ok: false } {
+    const outcome = bindings ? runtime.evaluateWithBindings(expression, bindings) : runtime.evaluate(expression);
+    return outcome.ok ? { ok: true, value: outcome.value } : { ok: false };
+  }
+
+  async function invokeFromTrigger(
+    actionId: NodeId,
+    args: Record<string, unknown>,
+    depth: number,
+  ): Promise<{ ok: boolean }> {
+    const response = await invokeSystem(actionId, args, depth);
+    return { ok: response.ok };
+  }
+
+  const triggerRuntime: TriggerRuntime = createTriggerRuntime({
+    triggers: ir.triggers ?? [],
+    events: ir.events ?? [],
+    host,
+    evaluate: evaluateForTrigger,
+    invoke: invokeFromTrigger,
+    report: (event) => {
+      const kind =
+        event.kind === 'skipped-overlap'
+          ? 'trigger-skipped-overlap'
+          : event.kind === 'fired'
+            ? 'trigger-fired'
+            : 'trigger-invocation-failed';
+      report({ kind, triggerId: event.triggerId, actionId: event.actionId });
+    },
+  });
+
+  /** Dispatches a terminal effect's declared success/failure event, if it declares one. */
+  async function onEffectTerminal(record: EffectRecord): Promise<void> {
+    effectRecords.set(record.id, record);
+    const eventId = record.status === 'succeeded' ? record.succeededEventId : record.failedEventId;
+    if (!eventId) {
+      return;
+    }
+    // The success payload is the effect operation's own declared result; the failure
+    // payload is its error, formatted as text — both must match what the graph declared
+    // for the corresponding `EventDef.payloadType`, checked the same way any event is.
+    const payload =
+      record.status === 'succeeded'
+        ? record.result
+        : `${record.lastError?.code ?? 'EFFECT_FAILED'}: ${record.lastError?.message ?? 'unknown error'}`;
+    await dispatchEvent(eventId, payload, (record.dispatchDepth ?? 0) + 1);
+  }
+
+  const effectRunner = createEffectRunner({
+    adapters,
+    integrationOperations,
+    persistence,
+    host,
+    onTerminal: onEffectTerminal,
+    report: (event) => report({ kind: event.kind, effectId: event.effectId, operationId: event.operationId, attempt: event.attempt }),
+  });
+
   return {
     async start(): Promise<void> {
       if (started) {
         return;
       }
       started = true;
+      // Every integration this document requires must have a registered adapter before
+      // any request is accepted — not deferred to first invocation (spec §116).
+      const missing = (ir.integrations ?? []).filter((integration) => !adapters[integration.id]);
+      if (missing.length > 0) {
+        throw new Error(
+          `Missing integration adapter(s): ${missing.map((integration) => integration.name ?? integration.id).join(', ')}`,
+        );
+      }
       // Committed state is restored administratively: it is already authoritative, so it
       // is not re-validated as though it were being proposed.
       for (const entry of await persistence.load()) {
@@ -560,6 +787,19 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         }
       }
       storeRevision = await persistence.revision();
+      // A crash between an effect intent's commit and its dispatch must not lose it: every
+      // pending intent found on restart resumes dispatch here (spec §19,96,140).
+      const pending = (await persistence.loadPendingEffects?.()) ?? [];
+      for (const effect of pending) {
+        effectRecords.set(effect.id, effect);
+      }
+      if (pending.length > 0) {
+        effectRunner.dispatch(pending);
+      }
+      // Startup triggers run only once persistence and effect resumption have completed
+      // (spec §119), and before this call returns — so `accept external requests` in that
+      // ordering is exactly "after `start()` resolves".
+      await triggerRuntime.start();
     },
 
     handle(request: ServerRequest): Promise<ServerResponse> {
@@ -601,6 +841,16 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         if (request.kind === 'invoke') {
           return invoke(request);
         }
+        if (request.kind === 'event') {
+          const diagnostics = await dispatchEvent((request as EventRequest).eventId, (request as EventRequest).payload, 0);
+          const response: EventResponse = {
+            kind: 'event-result',
+            protocol: PROTOCOL_VERSION,
+            ok: diagnostics.length === 0,
+            diagnostics: diagnostics.map(disclosable),
+          };
+          return response;
+        }
         return {
           kind: 'error' as const,
           protocol: PROTOCOL_VERSION,
@@ -618,8 +868,10 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     getState: (id: NodeId) => runtime.getState(id),
     revision: () => storeRevision,
     mutationLog: () => runtime.getMutationLog(),
+    effectLog: () => [...effectRecords.values()].map((entry) => ({ ...entry })),
 
     async stop(): Promise<void> {
+      triggerRuntime.stop();
       await queue.catch(() => undefined);
       await persistence.close?.();
     },
@@ -639,14 +891,21 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
  * disagree about the same file.
  */
 function understatedContract(ir: ServerIR): ServerIRContract | undefined {
-  const required = ir.expressionDefs
-    ? 'axiom.server.v2'
-    : requiredServerContract(serverIRExpressions(ir));
+  const required = maxContract(
+    ir.expressionDefs ? 'axiom.server.v2' : requiredServerContract(serverIRExpressions(ir)),
+    usesIntegrationVocabulary(ir) ? 'axiom.server.v3' : 'axiom.server.v1',
+  );
   const order = SERVER_IR_CONTRACTS as readonly string[];
   return order.indexOf(required) > order.indexOf(String(ir.contract)) ? required : undefined;
 }
 
-function buildRuntime(ir: ServerIR, host: ServerHost): AxiomRuntime {
+type QueryIntegration = (
+  operationId: string,
+  args: Record<string, unknown>,
+  context: { timeoutMs?: number },
+) => Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string; retryable?: boolean }>;
+
+function buildRuntime(ir: ServerIR, host: ServerHost, queryIntegration: QueryIntegration): AxiomRuntime {
   const nodes: ApplicationIR['nodes'] = {};
   for (const entity of ir.entities) {
     nodes[entity.id] = entity;
@@ -703,12 +962,18 @@ function buildRuntime(ir: ServerIR, host: ServerHost): AxiomRuntime {
     remoteActionIds: [],
     theme: DEFAULT_THEME,
     presentation: {},
+    triggers: [],
   };
 
   const dom = createMemoryHost();
   return createAxiomRuntime({
     ir: applicationIR,
     rootElement: new MemoryElement('div'),
-    host: { ...dom, now: () => host.now(), uuid: () => host.uuid() },
+    host: {
+      ...dom,
+      now: () => host.now(),
+      uuid: () => host.uuid(),
+      queryIntegration: (operationId, args, options) => queryIntegration(operationId, args, options),
+    },
   });
 }

@@ -1,4 +1,10 @@
-import type { PersistenceAdapter, PersistedState, PersistenceCommit, CommitOutcome } from './persistence.js';
+import type {
+  CommitOutcome,
+  EffectRecord,
+  PersistedState,
+  PersistenceAdapter,
+  PersistenceCommit,
+} from './persistence.js';
 import type { NodeId } from './deps.js';
 
 /**
@@ -49,6 +55,8 @@ export async function createSqlitePersistence(
   const table = options.table ?? 'axiom_state';
   const database = new module.DatabaseSync(options.location);
 
+  const effectsTable = `${table}_effects`;
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS ${table} (
       state_id TEXT PRIMARY KEY,
@@ -58,6 +66,11 @@ export async function createSqlitePersistence(
     CREATE TABLE IF NOT EXISTS ${table}_meta (
       key TEXT PRIMARY KEY,
       value INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ${effectsTable} (
+      effect_id TEXT PRIMARY KEY,
+      record TEXT NOT NULL,
+      status TEXT NOT NULL
     );
   `);
 
@@ -71,6 +84,16 @@ export async function createSqlitePersistence(
   const setRevision = database.prepare(
     `INSERT INTO ${table}_meta (key, value) VALUES ('revision', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  );
+  const insertEffect = database.prepare(
+    `INSERT INTO ${effectsTable} (effect_id, record, status) VALUES (?, ?, ?)`,
+  );
+  const readPendingEffects = database.prepare(
+    `SELECT record FROM ${effectsTable} WHERE status != 'succeeded' AND status != 'failed'`,
+  );
+  const readEffect = database.prepare(`SELECT record FROM ${effectsTable} WHERE effect_id = ?`);
+  const updateEffect = database.prepare(
+    `UPDATE ${effectsTable} SET record = ?, status = ? WHERE effect_id = ?`,
   );
 
   const currentRevision = (): number => Number(readRevision.get()?.value ?? 0);
@@ -96,14 +119,18 @@ export async function createSqlitePersistence(
       }
 
       const revision = currentRevision() + 1;
-      // One SQL transaction for one semantic transaction. A failure part-way leaves the
-      // store exactly as it was.
+      // One SQL transaction for one semantic transaction — the state writes and the effect
+      // intents this transaction recorded commit atomically, which is the outbox invariant
+      // (spec §18): a crash right after this call cannot lose an intent that was here.
       database.exec('BEGIN IMMEDIATE');
       try {
         for (const write of commit.writes) {
           upsert.run(write.stateId, revision, JSON.stringify(write.value ?? null));
         }
         setRevision.run(revision);
+        for (const effect of commit.effects ?? []) {
+          insertEffect.run(effect.id, JSON.stringify(effect), effect.status);
+        }
         database.exec('COMMIT');
       } catch (error) {
         database.exec('ROLLBACK');
@@ -114,6 +141,20 @@ export async function createSqlitePersistence(
 
     async revision(): Promise<number> {
       return currentRevision();
+    },
+
+    async loadPendingEffects(): Promise<EffectRecord[]> {
+      return readPendingEffects.all().map((row) => JSON.parse(String(row.record)) as EffectRecord);
+    },
+
+    async recordEffectAttempt(id: string, update: Partial<EffectRecord>): Promise<void> {
+      const row = readEffect.get(id);
+      if (!row) {
+        return;
+      }
+      const existing = JSON.parse(String(row.record)) as EffectRecord;
+      const updated: EffectRecord = { ...existing, ...update };
+      updateEffect.run(JSON.stringify(updated), updated.status, id);
     },
 
     async close(): Promise<void> {

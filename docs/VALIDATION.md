@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.7.0-alpha.2. Validation is authoring-time structural checking. It is not the same
+Axiom 0.8.0-alpha.1. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -36,7 +36,7 @@ non-numeric collections, and obviously incompatible assignments.
 
 ## Codes
 
-55 codes, exported as `VALIDATION_CODES`. Every one is reachable.
+72 codes, exported as `VALIDATION_CODES`. Every one is reachable.
 
 ### Ids and references
 
@@ -114,6 +114,22 @@ Recursive, with a `path` naming the position.
 | --- | --- |
 | `MISSING_IDENTITY_FIELD` | A transition constraint on an entity that declares no `identityFieldId`. |
 | `UNSUPPORTED_CONSTRAINT_SCOPE` | A constraint scope the runtime cannot evaluate. |
+
+### Integrations, effects, triggers and events
+
+Full model: [`INTEGRATIONS.md`](INTEGRATIONS.md), [`EFFECTS.md`](EFFECTS.md),
+[`TRIGGERS.md`](TRIGGERS.md), [`EVENTS.md`](EVENTS.md).
+
+| Code | Raised when |
+| --- | --- |
+| `UNKNOWN_INTEGRATION` | An `IntegrationOperationDef.integrationId` that does not resolve to an `integration` node. |
+| `UNKNOWN_INTEGRATION_OPERATION` | An `integration-query`/`integration-effect` operation's `operationId` that does not resolve to an `integration-operation` node. |
+| `INTEGRATION_OPERATION_MODE_MISMATCH` | An `integration-query` naming an operation whose `mode` is `'effect'`, or an `integration-effect` naming one whose `mode` is `'query'`. |
+| `INTEGRATION_ARGUMENT_MISMATCH` | A missing required argument to an integration operation, or an argument it declares no parameter for. |
+| `TRIGGER_ACTION_NOT_FOUND` | A `TriggerDef.actionId` that does not resolve to an action. |
+| `TRIGGER_INTERVAL_NOT_POSITIVE` | An `interval` trigger's `everyMs`, or a `delay` trigger's `afterMs`, that is not a positive number. |
+| `UNKNOWN_EVENT` | An event id that does not resolve to an `EventDef` — a trigger's `eventId`, or an `integration-effect`'s `succeededEventId`/`failedEventId`. |
+| `TRIGGER_WRONG_AUTHORITY` | An `event` trigger targeting a client-authority action (only the server dispatches events), or a `route-enter`/`route-leave` trigger targeting a server-authority one (only the client router dispatches those). |
 
 ### UI and routing
 

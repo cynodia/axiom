@@ -14,13 +14,24 @@ A client requests semantic actions; it never sends operations. Authorization, gu
 argument validation are evaluated here and nowhere else.
 
 Adapters keep the semantics free of infrastructure: `PersistenceAdapter` (in-memory and
-SQLite), `TransportAdapter` (in-process and HTTP), and `ServerHost` for time, identifiers
-and authentication. Nothing in an ApplicationGraph mentions HTTP, SQL or a route.
+SQLite), `TransportAdapter` (in-process and HTTP), `ServerHost` for time, identifiers,
+scheduling and authentication, and `IntegrationAdapter` for external systems. Nothing in
+an ApplicationGraph mentions HTTP, SQL, a route or an SDK.
+
+As of 0.8 this package also owns timed and event-driven execution: it schedules and
+dispatches `TriggerDef`s, records `integration-effect` intent atomically with the state
+write that requested it (the transactional outbox), dispatches an effect's committed
+intents to its `IntegrationAdapter` post-commit with retry, and translates verified
+webhook deliveries into semantic events. See
+[`docs/INTEGRATIONS.md`](https://github.com/cynodia/axiom/blob/main/docs/INTEGRATIONS.md),
+[`docs/EFFECTS.md`](https://github.com/cynodia/axiom/blob/main/docs/EFFECTS.md) and
+[`docs/TRIGGERS.md`](https://github.com/cynodia/axiom/blob/main/docs/TRIGGERS.md).
 
 Main exports: `createAxiomServer`, `createMemoryPersistence`, `createSqlitePersistence`,
 `createServerHost`, `createDeterministicServerHost`, `createDirectTransport`,
 `createHttpTransport`, `createRemoteGateway`, `serveOverHttp`, `serveAxiomApplication`,
-`SERVER_DIAGNOSTIC_CODES`.
+`createFakeIntegrationAdapter`, `createHttpIntegrationAdapter`, `createTriggerRuntime`,
+`createEffectRunner`, `SERVER_DIAGNOSTIC_CODES`.
 
 `serveAxiomApplication` is the whole deployment story: it serves the generated page at `GET /`
 and the semantic endpoint at `POST /axiom`, from one process, for any Axiom application. No
@@ -34,7 +45,9 @@ implementation in another language needs to conform to it:
 ```
 @cynodia/axiom-server/conformance                       the fixture manifest
 @cynodia/axiom-server/conformance/<name>.json           one fixture: IR, state, invocations, expectations
-@cynodia/axiom-server/schema/server-ir.v1.schema.json   JSON Schema for the IR
+@cynodia/axiom-server/schema/server-ir.v1.schema.json   JSON Schema for the frozen v1 IR
+@cynodia/axiom-server/schema/server-ir.v2.schema.json   JSON Schema for v2 (+ group, expression-ref)
+@cynodia/axiom-server/schema/server-ir.v3.schema.json   JSON Schema for v3 (+ integrations, effects, triggers, events)
 @cynodia/axiom-server/schema/protocol.v1.schema.json    JSON Schema for the protocol
 ```
 

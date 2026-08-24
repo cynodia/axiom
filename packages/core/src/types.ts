@@ -11,6 +11,9 @@ import type {
 import type { NodeId } from './ids.js';
 import type { UINode, UINodeKind } from './ui.js';
 import type { ThemeInput } from './theme.js';
+import type { EventDef } from './events.js';
+import type { IntegrationDef, IntegrationOperationDef } from './integrations.js';
+import type { TriggerDef } from './triggers.js';
 
 export type SemanticNodeKind =
   | 'entity'
@@ -19,7 +22,11 @@ export type SemanticNodeKind =
   | 'constraint'
   | 'transition-constraint'
   | 'route'
-  | 'expression';
+  | 'expression'
+  | 'integration'
+  | 'integration-operation'
+  | 'event'
+  | 'trigger';
 
 /** Every semantic node kind, enumerated so tests can walk them. */
 export const SEMANTIC_NODE_KINDS: readonly SemanticNodeKind[] = [
@@ -30,6 +37,10 @@ export const SEMANTIC_NODE_KINDS: readonly SemanticNodeKind[] = [
   'transition-constraint',
   'route',
   'expression',
+  'integration',
+  'integration-operation',
+  'event',
+  'trigger',
 ];
 
 export type NodeKind = SemanticNodeKind | UINodeKind;
@@ -42,6 +53,10 @@ export type AnyNode =
   | TransitionConstraintDef
   | RouteDef
   | ExpressionDef
+  | IntegrationDef
+  | IntegrationOperationDef
+  | EventDef
+  | TriggerDef
   | UINode;
 
 export type NodeOfKind<K extends NodeKind> = Extract<AnyNode, { kind: K }>;

@@ -19,6 +19,9 @@ const {
   SERVER_IR_V2_EXPRESSION_KINDS,
 } = core;
 
+/** Operation kinds `axiom.server.v1`/`v2` do not contain — integrations are 0.8/v3 vocabulary. */
+const SERVER_IR_V3_OPERATION_KINDS = ['integration-query', 'integration-effect'];
+
 const BINARY_OPERATORS = [
   'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'and', 'or', 'add', 'subtract', 'multiply', 'divide',
 ];
@@ -84,6 +87,14 @@ const buildServerIR = (contract) => ({
     ...(contract === 'axiom.server.v1'
       ? {}
       : { expressionDefs: { type: 'object', additionalProperties: ref('ExpressionDef') } }),
+    ...(contract === 'axiom.server.v3'
+      ? {
+          integrations: { type: 'array', items: ref('IntegrationDef') },
+          integrationOperations: { type: 'object', additionalProperties: ref('IntegrationOperationDef') },
+          events: { type: 'array', items: ref('EventDef') },
+          triggers: { type: 'array', items: ref('TriggerDef') },
+        }
+      : {}),
   },
   $defs: {
     NodeId: id,
@@ -218,7 +229,7 @@ const buildServerIR = (contract) => ({
     ),
 
     Operation: {
-      description: `Every operation kind: ${OPERATION_KINDS.join(', ')}.`,
+      description: `Every operation kind: ${operationKindsFor(contract).join(', ')}.`,
       oneOf: [
         ref('MutationOperation'),
         variant('for-each', { collection: expression, scopeId: id, operations: { type: 'array', items: ref('MutationOperation') } }, ['collection', 'scopeId', 'operations']),
@@ -230,6 +241,23 @@ const buildServerIR = (contract) => ({
           resultTarget: location,
           declaredEffects: { type: 'array', items: { type: 'object' } },
         }, ['implementationId']),
+        ...(contract === 'axiom.server.v3'
+          ? [
+              variant('integration-query', {
+                operationId: id,
+                arguments: { type: 'object', additionalProperties: expression },
+                bindAs: id,
+                timeoutMs: { type: 'number' },
+              }, ['operationId', 'bindAs']),
+              variant('integration-effect', {
+                operationId: id,
+                arguments: { type: 'object', additionalProperties: expression },
+                idempotencyKey: expression,
+                succeededEventId: id,
+                failedEventId: id,
+              }, ['operationId']),
+            ]
+          : []),
       ],
     },
     MutationOperation: {
@@ -312,6 +340,71 @@ const buildServerIR = (contract) => ({
             ['id', 'kind', 'expression'],
           ),
         }),
+
+    ...(contract !== 'axiom.server.v3'
+      ? {}
+      : {
+          IntegrationDef: object(
+            { id, kind: { const: 'integration' }, name: { type: 'string' }, metadata: { type: 'object' } },
+            ['id', 'kind'],
+          ),
+          IntegrationOperationParameter: object(
+            { id, name: { type: 'string' }, valueType: ref('TypeRef'), required: { type: 'boolean' } },
+            ['id', 'valueType'],
+          ),
+          RetryPolicy: object(
+            {
+              policy: { enum: ['none', 'fixed', 'exponential'] },
+              maxAttempts: { type: 'number' },
+              delayMs: { type: 'number' },
+            },
+            ['policy'],
+          ),
+          IntegrationOperationDef: object(
+            {
+              id,
+              kind: { const: 'integration-operation' },
+              name: { type: 'string' },
+              metadata: { type: 'object' },
+              integrationId: id,
+              mode: { enum: ['query', 'effect'] },
+              parameters: { type: 'array', items: ref('IntegrationOperationParameter') },
+              resultType: ref('TypeRef'),
+              clientSafe: { type: 'boolean' },
+              idempotent: { type: 'boolean' },
+              retry: ref('RetryPolicy'),
+            },
+            ['id', 'kind', 'integrationId', 'mode', 'resultType'],
+          ),
+          EventDef: object(
+            { id, kind: { const: 'event' }, name: { type: 'string' }, metadata: { type: 'object' }, payloadType: ref('TypeRef') },
+            ['id', 'kind', 'payloadType'],
+          ),
+          TriggerSpec: {
+            oneOf: [
+              variant('interval', { everyMs: { type: 'number' }, overlap: { enum: ['skip', 'queue'] } }, ['everyMs']),
+              variant('delay', { afterMs: { type: 'number' } }, ['afterMs']),
+              variant('lifecycle', {
+                event: { enum: ['application-start', 'runtime-ready', 'route-enter', 'route-leave'] },
+                routeId: id,
+              }, ['event']),
+              variant('event', { eventId: id }, ['eventId']),
+            ],
+          },
+          TriggerDef: object(
+            {
+              id,
+              kind: { const: 'trigger' },
+              name: { type: 'string' },
+              metadata: { type: 'object' },
+              actionId: id,
+              when: ref('TriggerSpec'),
+              arguments: { type: 'object', additionalProperties: expression },
+              enabledWhen: expression,
+            },
+            ['id', 'kind', 'actionId', 'when'],
+          ),
+        }),
   },
 });
 
@@ -324,6 +417,12 @@ function expressionKindsFor(contract) {
   return contract === 'axiom.server.v1'
     ? EXPRESSION_KINDS.filter((kind) => !SERVER_IR_V2_EXPRESSION_KINDS.includes(kind))
     : [...EXPRESSION_KINDS];
+}
+
+function operationKindsFor(contract) {
+  return contract === 'axiom.server.v3'
+    ? [...OPERATION_KINDS]
+    : OPERATION_KINDS.filter((kind) => !SERVER_IR_V3_OPERATION_KINDS.includes(kind));
 }
 
 const PROTOCOL_VERSION = 'axiom.protocol.v1';
@@ -359,7 +458,7 @@ const protocol = {
     RuntimeDiagnostic: diagnostic,
     Credential: { type: ['string', 'null'] },
 
-    ServerRequest: { oneOf: [ref('SnapshotRequest'), ref('InvokeRequest')] },
+    ServerRequest: { oneOf: [ref('SnapshotRequest'), ref('InvokeRequest'), ref('EventRequest')] },
     SnapshotRequest: object(
       {
         kind: { const: 'snapshot' },
@@ -381,7 +480,29 @@ const protocol = {
       ['kind', 'protocol', 'actionId'],
     ),
 
-    ServerResponse: { oneOf: [ref('SnapshotResponse'), ref('InvokeResponse'), ref('ErrorResponse')] },
+    EventRequest: object(
+      {
+        kind: { const: 'event' },
+        protocol: { const: PROTOCOL_VERSION },
+        eventId: id,
+        payload: {},
+        credential: ref('Credential'),
+      },
+      ['kind', 'protocol', 'eventId', 'payload'],
+    ),
+    EventResponse: object(
+      {
+        kind: { const: 'event-result' },
+        protocol: { const: PROTOCOL_VERSION },
+        ok: { type: 'boolean' },
+        diagnostics: { type: 'array', items: diagnostic },
+      },
+      ['kind', 'protocol', 'ok', 'diagnostics'],
+    ),
+
+    ServerResponse: {
+      oneOf: [ref('SnapshotResponse'), ref('InvokeResponse'), ref('ErrorResponse'), ref('EventResponse')],
+    },
     StateSnapshot: object(
       {
         revision: { type: 'integer', minimum: 0 },

@@ -16,6 +16,9 @@ import type {
   StateDef,
   TransitionConstraintDef,
 } from './nodes.js';
+import type { EventDef } from './events.js';
+import type { IntegrationDef, IntegrationOperationDef } from './integrations.js';
+import type { TriggerDef } from './triggers.js';
 import { entityType } from './type-ref.js';
 import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD, isGroupFieldId } from './group.js';
 import type { TypeRef } from './type-ref.js';
@@ -203,6 +206,18 @@ function validateNode(node: AnyNode, context: Context): void {
     case 'expression':
       validateExpressionDef(node, context);
       return;
+    case 'integration':
+      validateIntegrationDef(node, context);
+      return;
+    case 'integration-operation':
+      validateIntegrationOperation(node, context);
+      return;
+    case 'event':
+      validateEvent(node, context);
+      return;
+    case 'trigger':
+      validateTrigger(node, context);
+      return;
     default:
       context.errors.push({
         code: VALIDATION_CODES.danglingNodeRef,
@@ -317,8 +332,9 @@ function validateAction(action: ActionDef, context: Context): void {
   for (const postcondition of action.postconditions ?? []) {
     validateExpression(postcondition, action.id, context, local);
   }
+  let scoped: Scoped = local;
   for (const operation of action.operations ?? []) {
-    validateOperation(operation, action, context, local);
+    scoped = validateOperation(operation, action, context, scoped);
   }
 }
 
@@ -327,7 +343,7 @@ function validateOperation(
   action: ActionDef,
   context: Context,
   local: Scoped,
-): void {
+): Scoped {
   switch (operation.kind) {
     case 'for-each': {
       validateExpression(operation.collection, action.id, context, local);
@@ -351,13 +367,13 @@ function validateOperation(
         }
         validateOperation(nested, action, context, scoped);
       }
-      return;
+      return local;
     }
     case 'set': {
       checkLocation(operation.target, action.id, context, local, true);
       validateExpression(operation.value, action.id, context, local);
       checkAssignment(operation.target, operation.value, action.id, context, local);
-      return;
+      return local;
     }
     case 'insert': {
       checkLocation(operation.target, action.id, context, local, true);
@@ -369,7 +385,7 @@ function validateOperation(
           message: `Action ${action.id} inserts into a ${target.kind} location, which is not a collection`,
           nodeId: action.id,
         });
-        return;
+        return local;
       }
       if (target?.kind === 'collection') {
         reportIncompatible(
@@ -379,11 +395,11 @@ function validateOperation(
           context,
         );
       }
-      return;
+      return local;
     }
     case 'remove':
       checkLocation(operation.target, action.id, context, local, true);
-      return;
+      return local;
     case 'invoke': {
       requireKind(operation.actionId, 'action', action.id, context, VALIDATION_CODES.invalidActionRef);
       const target = context.nodes.get(operation.actionId);
@@ -397,7 +413,7 @@ function validateOperation(
           });
         }
       }
-      return;
+      return local;
     }
     case 'navigate':
       if (operation.routeId) {
@@ -413,7 +429,7 @@ function validateOperation(
       for (const argument of Object.values(operation.parameters ?? {})) {
         validateExpression(argument, action.id, context, local);
       }
-      return;
+      return local;
     case 'native':
       for (const input of Object.values(operation.inputs ?? {})) {
         validateExpression(input, action.id, context, local);
@@ -426,13 +442,73 @@ function validateOperation(
           requireKind(effect.stateId, 'state', action.id, context, VALIDATION_CODES.invalidStateRef);
         }
       }
-      return;
+      return local;
+    case 'integration-query': {
+      requireKind(
+        operation.operationId,
+        'integration-operation',
+        action.id,
+        context,
+        VALIDATION_CODES.unknownIntegrationOperation,
+      );
+      const target = context.nodes.get(operation.operationId);
+      let resultType: TypeRef | undefined;
+      if (target?.kind === 'integration-operation') {
+        if (target.mode !== 'query') {
+          context.errors.push({
+            code: VALIDATION_CODES.integrationOperationModeMismatch,
+            message: `Action ${action.id} uses integration-query with ${operation.operationId}, which is an effect operation`,
+            nodeId: action.id,
+          });
+        }
+        resultType = target.resultType;
+        checkIntegrationArguments(target, operation.arguments ?? {}, action.id, context);
+      }
+      for (const argument of Object.values(operation.arguments ?? {})) {
+        validateExpression(argument, action.id, context, local);
+      }
+      return resultScope(local, operation.bindAs, resultType, context, action.id);
+    }
+    case 'integration-effect': {
+      requireKind(
+        operation.operationId,
+        'integration-operation',
+        action.id,
+        context,
+        VALIDATION_CODES.unknownIntegrationOperation,
+      );
+      const target = context.nodes.get(operation.operationId);
+      if (target?.kind === 'integration-operation') {
+        if (target.mode !== 'effect') {
+          context.errors.push({
+            code: VALIDATION_CODES.integrationOperationModeMismatch,
+            message: `Action ${action.id} uses integration-effect with ${operation.operationId}, which is a query operation`,
+            nodeId: action.id,
+          });
+        }
+        checkIntegrationArguments(target, operation.arguments ?? {}, action.id, context);
+      }
+      for (const argument of Object.values(operation.arguments ?? {})) {
+        validateExpression(argument, action.id, context, local);
+      }
+      if (operation.idempotencyKey) {
+        validateExpression(operation.idempotencyKey, action.id, context, local);
+      }
+      if (operation.succeededEventId) {
+        requireKind(operation.succeededEventId, 'event', action.id, context, VALIDATION_CODES.unknownEvent);
+      }
+      if (operation.failedEventId) {
+        requireKind(operation.failedEventId, 'event', action.id, context, VALIDATION_CODES.unknownEvent);
+      }
+      return local;
+    }
     default:
       context.errors.push({
         code: VALIDATION_CODES.danglingNodeRef,
         message: `Unknown operation kind in action ${action.id}`,
         nodeId: action.id,
       });
+      return local;
   }
 }
 
@@ -664,6 +740,136 @@ function validateRoute(route: RouteDef, context: Context): void {
       });
     }
   }
+}
+
+function validateIntegrationDef(_integration: IntegrationDef, _context: Context): void {
+  // A capability-domain marker with no fields to check beyond the shared node identity
+  // checks already applied — declared explicitly so a new node kind never falls to the
+  // erroring `default:` branch of `validateNode`.
+}
+
+function validateIntegrationOperation(operation: IntegrationOperationDef, context: Context): void {
+  requireKind(operation.integrationId, 'integration', operation.id, context, VALIDATION_CODES.unknownIntegration);
+  for (const parameter of operation.parameters ?? []) {
+    validateTypeRef(parameter.valueType, operation.id, context);
+  }
+  validateTypeRef(operation.resultType, operation.id, context);
+}
+
+function validateEvent(event: EventDef, context: Context): void {
+  validateTypeRef(event.payloadType, event.id, context);
+}
+
+function validateTrigger(trigger: TriggerDef, context: Context): void {
+  requireKind(trigger.actionId, 'action', trigger.id, context, VALIDATION_CODES.triggerActionNotFound);
+  const action = context.nodes.get(trigger.actionId);
+
+  if (trigger.when.kind === 'interval' && !(trigger.when.everyMs > 0)) {
+    context.errors.push({
+      code: VALIDATION_CODES.triggerIntervalNotPositive,
+      message: `Trigger ${trigger.id} declares a non-positive interval`,
+      nodeId: trigger.id,
+    });
+  }
+  if (trigger.when.kind === 'delay' && !(trigger.when.afterMs > 0)) {
+    context.errors.push({
+      code: VALIDATION_CODES.triggerIntervalNotPositive,
+      message: `Trigger ${trigger.id} declares a non-positive delay`,
+      nodeId: trigger.id,
+    });
+  }
+  if (trigger.when.kind === 'lifecycle' && trigger.when.routeId) {
+    requireKind(trigger.when.routeId, 'route', trigger.id, context, VALIDATION_CODES.danglingNodeRef);
+  }
+
+  // An `event` trigger's arguments/enabledWhen may `ref` the trigger's own id to read the
+  // event payload — the same mechanism a `for-each`/`map` scopeId provides.
+  let local = emptyScope();
+  if (trigger.when.kind === 'event') {
+    requireKind(trigger.when.eventId, 'event', trigger.id, context, VALIDATION_CODES.unknownEvent);
+    const event = context.nodes.get(trigger.when.eventId);
+    local = emptyScope(new Set([trigger.id]));
+    if (event?.kind === 'event') {
+      local.types.set(trigger.id, event.payloadType);
+    }
+  }
+
+  if (trigger.enabledWhen) {
+    validateExpression(trigger.enabledWhen, trigger.id, context, local);
+  }
+
+  if (action?.kind === 'action') {
+    requireArguments(trigger.actionId, trigger.arguments ?? {}, trigger.id, context, `Trigger ${trigger.id} supplies`);
+    for (const [parameterId, argument] of Object.entries(trigger.arguments ?? {})) {
+      validateExpression(argument, trigger.id, context, local);
+      if (!(action.parameters ?? []).some((p) => p.id === parameterId)) {
+        context.errors.push({
+          code: VALIDATION_CODES.danglingNodeRef,
+          message: `Trigger ${trigger.id} passes unknown parameter ${parameterId} to ${trigger.actionId}`,
+          nodeId: trigger.id,
+        });
+      }
+    }
+  }
+}
+
+/** Missing required arguments, and arguments the operation declares no parameter for. */
+function checkIntegrationArguments(
+  operation: IntegrationOperationDef,
+  args: Record<string, Expression>,
+  ownerId: NodeId,
+  context: Context,
+): void {
+  const declared = new Set((operation.parameters ?? []).map((parameter) => String(parameter.id)));
+  const missing = (operation.parameters ?? [])
+    .filter((parameter) => parameter.required && !(String(parameter.id) in args))
+    .map((parameter) => String(parameter.id));
+  if (missing.length > 0) {
+    context.errors.push({
+      code: VALIDATION_CODES.integrationArgumentMismatch,
+      message: `${ownerId} calls ${operation.id} without ${missing.join(', ')}`,
+      nodeId: ownerId,
+      details: { operationId: String(operation.id), missing },
+    });
+  }
+  for (const key of Object.keys(args)) {
+    if (!declared.has(key)) {
+      context.errors.push({
+        code: VALIDATION_CODES.integrationArgumentMismatch,
+        message: `${ownerId} supplies unknown argument ${key} to ${operation.id}`,
+        nodeId: ownerId,
+        details: { operationId: String(operation.id), argument: key },
+      });
+    }
+  }
+}
+
+/**
+ * Extends a scope with an integration query's whole result type — unlike `iterationScope`,
+ * the bound value is not unwrapped to a collection member.
+ */
+function resultScope(scope: Scoped, scopeId: NodeId, resultType: TypeRef | undefined, context: Context, ownerId: NodeId): Scoped {
+  if (scope.ids.has(scopeId)) {
+    context.errors.push({
+      code: VALIDATION_CODES.scopeShadowing,
+      message: `Scope ${scopeId} in ${ownerId} is already bound by an enclosing scope`,
+      nodeId: ownerId,
+    });
+  }
+  if (context.nodes.has(scopeId)) {
+    context.errors.push({
+      code: VALIDATION_CODES.scopeCollidesWithNode,
+      message: `Scope ${scopeId} in ${ownerId} has the same id as a graph node`,
+      nodeId: ownerId,
+    });
+  }
+  const types = new Map(scope.types);
+  if (resultType) {
+    types.set(scopeId, resultType);
+  } else {
+    types.delete(scopeId);
+  }
+  return { ids: new Set([...scope.ids, scopeId]), types };
 }
 
 function validateUiNode(node: UINode, context: Context): void {

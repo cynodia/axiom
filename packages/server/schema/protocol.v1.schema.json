@@ -4,7 +4,7 @@
   "title": "Axiom semantic protocol v1",
   "description": "What a client may send an authority and what it may receive back. A client requests semantic operations — \"invoke action X with arguments Y\" — never a mutation program. Nothing here mentions a transport.",
   "contract": "axiom.protocol.v1",
-  "release": "0.7.0-alpha.2",
+  "release": "0.8.0-alpha.1",
   "oneOf": [
     {
       "$ref": "#/$defs/ServerRequest"
@@ -77,6 +77,9 @@
         },
         {
           "$ref": "#/$defs/InvokeRequest"
+        },
+        {
+          "$ref": "#/$defs/EventRequest"
         }
       ]
     },
@@ -133,6 +136,102 @@
       ],
       "additionalProperties": false
     },
+    "EventRequest": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "protocol": {
+          "const": "axiom.protocol.v1"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "payload": {},
+        "credential": {
+          "$ref": "#/$defs/Credential"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "eventId",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "EventResponse": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event-result"
+        },
+        "protocol": {
+          "const": "axiom.protocol.v1"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "nodeId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "actionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "constraintId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "stateId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "transactionId": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "severity"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "ok",
+        "diagnostics"
+      ],
+      "additionalProperties": false
+    },
     "ServerResponse": {
       "oneOf": [
         {
@@ -143,6 +242,9 @@
         },
         {
           "$ref": "#/$defs/ErrorResponse"
+        },
+        {
+          "$ref": "#/$defs/EventResponse"
         }
       ]
     },

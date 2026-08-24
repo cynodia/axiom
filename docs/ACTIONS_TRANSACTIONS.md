@@ -1,6 +1,6 @@
 # Actions and transactions
 
-Axiom 0.7.0-alpha.2. An action is behavior expressed as data, executed as a transaction.
+Axiom 0.8.0-alpha.1. An action is behavior expressed as data, executed as a transaction.
 
 ```ts
 {
@@ -86,7 +86,7 @@ All four failure sources are evaluated; the action does not stop at the first.
 
 ## Operations
 
-Seven kinds, enumerated by `OPERATION_KINDS`. `set`, `insert` and `remove` are the
+Nine kinds, enumerated by `OPERATION_KINDS`. `set`, `insert` and `remove` are the
 mutations; each addresses a [`Location`](LOCATIONS.md).
 
 ### `set`
@@ -178,6 +178,37 @@ The controlled boundary for behavior the operation vocabulary cannot express.
 
 **Use it only where no semantic primitive exists.** A native operation is opaque to every
 analysis Axiom offers.
+
+### `integration-query`
+
+```ts
+{ kind: 'integration-query', operationId: NodeId, arguments?: Record<string, Expression>, bindAs: NodeId, timeoutMs?: number }
+```
+
+Calls a `mode: 'query'` `IntegrationOperationDef` and binds its result into scope: later
+operations in the same action refer to it as `ref(bindAs)`, the same way a `for-each`'s
+`scopeId` introduces the current member. Resolved **before the transaction opens**, ahead
+of guards — a query is awaited, but never mid-transaction. Never legal inside `for-each`.
+Full model: [`INTEGRATIONS.md`](INTEGRATIONS.md).
+
+### `integration-effect`
+
+```ts
+{
+  kind: 'integration-effect',
+  operationId: NodeId,
+  arguments?: Record<string, Expression>,
+  idempotencyKey?: Expression,
+  succeededEventId?: NodeId,
+  failedEventId?: NodeId,
+}
+```
+
+Calls a `mode: 'effect'` `IntegrationOperationDef`. It **never calls the adapter during the
+transaction**: reaching this operation only records intent, discarded on rollback exactly
+like a mutation is. The adapter runs only after the transaction commits, and the response
+this action's caller gets back never waits for it — "committed, effect pending." Never legal
+inside `for-each`. Full model: [`EFFECTS.md`](EFFECTS.md).
 
 ## Authorization
 

@@ -1,6 +1,6 @@
 # Runtime
 
-Axiom 0.7.0-alpha.2. The runtime executes an `ApplicationIR`. It is domain-independent: it
+Axiom 0.8.0-alpha.1. The runtime executes an `ApplicationIR`. It is domain-independent: it
 contains no knowledge of any application.
 
 ## Constructing
@@ -50,8 +50,14 @@ interface HostEnvironment {
   uuid(): string;
   storage?: { read(key): string | null; write(key, value): void };
   report?(message: string): void;
+  queryIntegration?(operationId: string, args, options: { timeoutMs? }): Promise<IntegrationQueryOutcome>;
 }
 ```
+
+`queryIntegration` is only ever called by the authoritative runtime executing an
+`integration-query` operation. A browser host never implements it: no client-compiled
+action ever contains one, because integrations default server-only. See
+[`INTEGRATIONS.md`](INTEGRATIONS.md).
 
 Memory-host helpers for driving and inspecting a rendered tree: `findAll`, `findByNodeId`,
 `findByTag`, `textOf`, `typeInto`, `toggle`, `click`, `submit`. Every rendered element
@@ -72,12 +78,14 @@ carries `data-node="<node id>"`.
 | `clearDiagnostics()` | — | Empties the running log **and** every recorded action outcome. |
 | `getActionOutcome(id)` | — | The outcome of that action's most recent invocation. See below. |
 | `getMutationLog()` | — | Every attempted mutation, with source, path and outcome. |
+| `getEffectIntents()` | — | Every `integration-effect` intent recorded so far — a log distinct from the mutation log, because an effect is not a state mutation. See [`EFFECTS.md`](EFFECTS.md). |
 | `registerNativeOperation(id, fn)` | — | Registers an implementation for a `native` operation. |
-| `invokeActionAsync(id, args?)` | **yes** | Awaits the outcome, including an authority's answer. |
+| `invokeActionAsync(id, args?)` | **yes** | Awaits the outcome, including an authority's answer. For an action with a top-level `integration-query` operation, this is also what awaits the query itself — see [`INTEGRATIONS.md`](INTEGRATIONS.md). |
 | `syncAuthoritativeState()` | — | Loads the authoritative snapshot and applies it. Idempotent; may be called at any time. See [`AUTHORITY.md`](AUTHORITY.md). |
 | `authoritativeStateLoaded()` | — | Whether a snapshot has been applied. `false` also after a failed load, which is why it is not the same question as "is this collection empty". |
 | `settled()` | — | Resolves when no remote invocation is outstanding. An action started by a click or a form submit leaves no promise for a caller to hold; this is how to wait for it without guessing a delay. |
 | `evaluate(expression)` | — | Evaluates in the root scope, reporting rather than throwing. A pure read. |
+| `evaluateWithBindings(expression, bindings)` | — | Evaluates with extra ids bound in scope, keyed by id. How a trigger's `arguments`/`enabledWhen` resolve `ref()` of the trigger's own id to read an event payload. |
 
 ### `hydrateState` bypasses semantic enforcement
 
@@ -214,6 +222,10 @@ interface RuntimeDiagnostic {
 | `NATIVE_OPERATION_MISSING` | No implementation registered for an `implementationId`. | `native` operation | — |
 | `REMOTE_ACTION_UNAVAILABLE` | An action belonging to the authority was invoked with no gateway configured, or the transport failed. | remote invocation | — |
 | `AUTHORITY_UNREACHABLE` | **Warning.** `start()` could not load authoritative state: no answer from the authority. The page renders with what it has, and `authoritativeStateLoaded()` stays false. | startup | — |
+| `INTEGRATION_UNAVAILABLE` | An `integration-query` operation ran, but the host has no `queryIntegration` capability configured. | `integration-query` | — |
+| `INTEGRATION_TIMEOUT` | An integration query did not answer within its declared `timeoutMs`. | `integration-query` | `operationId` |
+| `INTEGRATION_RESULT_INVALID` | A provider's response did not conform to the operation's declared `resultType`. | `integration-query` | `operationId` |
+| `INTEGRATION_QUERY_FAILED` | An integration query failed for any other reason. Never carries a provider secret. | `integration-query` | `operationId`, `retryable` |
 | `UI_NODE_MISSING` | A child id that is not a UI node in the IR. | render | — |
 | `UNSUPPORTED_UI_NODE` | An unknown UI node kind. | render | — |
 | `PERSISTED_STATE_UNREADABLE` | **Warning.** A stored value could not be parsed; the initial value was used. | startup | — |

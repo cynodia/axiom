@@ -39,6 +39,8 @@ import type {
   ConstraintDef,
   EntityDef,
   Expression,
+  IntegrationDef,
+  IntegrationOperationDef,
   RouteDef,
   StateDef,
   ViewNode,
@@ -603,6 +605,25 @@ test('every declared expression kind is evaluated by the runtime', () => {
 test('every declared operation kind is executed by the runtime', () => {
   const graph = buildGraph();
   const route = nodeId('route_root');
+  const integration = nodeId('integration_probe');
+  const integrationQueryOp = nodeId('integration_operation_probe_query');
+  const integrationEffectOp = nodeId('integration_operation_probe_effect');
+  const scopeQuery = nodeId('scope_integration_query');
+  graph.addNode<IntegrationDef>({ id: integration, kind: 'integration', name: 'probe' });
+  graph.addNode<IntegrationOperationDef>({
+    id: integrationQueryOp,
+    kind: 'integration-operation',
+    integrationId: integration,
+    mode: 'query',
+    resultType: primitiveType('string'),
+  });
+  graph.addNode<IntegrationOperationDef>({
+    id: integrationEffectOp,
+    kind: 'integration-operation',
+    integrationId: integration,
+    mode: 'effect',
+    resultType: primitiveType('string'),
+  });
   const actions: Record<string, ActionDef['operations']> = {
     set: [{ kind: 'set', target: stateLocation(STATE_COUNTER), value: literal(1) }],
     insert: [
@@ -633,6 +654,10 @@ test('every declared operation kind is executed by the runtime', () => {
     invoke: [{ kind: 'invoke', actionId: ACTION_DOUBLE }],
     navigate: [{ kind: 'navigate', routeId: route }],
     native: [{ kind: 'native', implementationId: 'test.echo', inputs: { value: literal(1) } }],
+    'integration-query': [
+      { kind: 'integration-query', operationId: integrationQueryOp, bindAs: scopeQuery },
+    ],
+    'integration-effect': [{ kind: 'integration-effect', operationId: integrationEffectOp }],
   };
   assert.deepEqual(Object.keys(actions).sort(), [...OPERATION_KINDS].sort());
 

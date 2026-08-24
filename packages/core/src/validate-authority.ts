@@ -153,6 +153,36 @@ export function validateAuthority(
     }
   }
 
+  // An `event` trigger only ever fires where the server dispatches an event, so its
+  // target action must be server-authority. A `route-enter`/`route-leave` trigger only
+  // ever fires from the client router, so its target must be client-authority.
+  for (const node of nodes) {
+    if (node.kind !== 'trigger') {
+      continue;
+    }
+    const target = context.actions.get(node.actionId);
+    if (!target) {
+      continue;
+    }
+    const authority = actionAuthority(target, context);
+    if (node.when.kind === 'event' && authority !== 'server') {
+      errors.push({
+        code: VALIDATION_CODES.triggerWrongAuthority,
+        message: `Trigger ${node.name ?? node.id} fires on an event, which only the server dispatches, but ${target.name ?? target.id} is client-authority`,
+        nodeId: node.id,
+        details: { actionId: target.id, authority },
+      });
+    }
+    if (node.when.kind === 'lifecycle' && (node.when.event === 'route-enter' || node.when.event === 'route-leave') && authority !== 'client') {
+      errors.push({
+        code: VALIDATION_CODES.triggerWrongAuthority,
+        message: `Trigger ${node.name ?? node.id} fires on ${node.when.event}, which only the client router dispatches, but ${target.name ?? target.id} is server-authority`,
+        nodeId: node.id,
+        details: { actionId: target.id, authority },
+      });
+    }
+  }
+
   // The principal exists only where an authority evaluates. Reading it anywhere a client
   // evaluates would be a rule the client could simply not apply.
   reportPrincipalOnClient(nodes, context, errors);

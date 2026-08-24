@@ -99,4 +99,19 @@ export const VALIDATION_CODES = {
   serverOnlyStateObserved: 'SERVER_ONLY_STATE_OBSERVED',
   invalidPrincipalEntity: 'INVALID_PRINCIPAL_ENTITY',
   missingActionArgument: 'MISSING_ACTION_ARGUMENT',
+
+  // Integrations, effects, triggers and events.
+  /** An `IntegrationOperationDef.integrationId`, or an operation's `operationId`, that does not resolve. */
+  unknownIntegration: 'UNKNOWN_INTEGRATION',
+  unknownIntegrationOperation: 'UNKNOWN_INTEGRATION_OPERATION',
+  /** An `integration-query` operation naming an effect, or an `integration-effect` naming a query. */
+  integrationOperationModeMismatch: 'INTEGRATION_OPERATION_MODE_MISMATCH',
+  /** A missing required argument, or an argument the operation declares no parameter for. */
+  integrationArgumentMismatch: 'INTEGRATION_ARGUMENT_MISMATCH',
+  triggerActionNotFound: 'TRIGGER_ACTION_NOT_FOUND',
+  triggerIntervalNotPositive: 'TRIGGER_INTERVAL_NOT_POSITIVE',
+  /** An event id that does not resolve to an `EventDef` — a trigger's `eventId`, or an effect's success/failure event. */
+  unknownEvent: 'UNKNOWN_EVENT',
+  /** An `event` trigger targeting a client-authority action, or a `route-enter`/`route-leave` trigger targeting a server-authority one. */
+  triggerWrongAuthority: 'TRIGGER_WRONG_AUTHORITY',
 } as const;

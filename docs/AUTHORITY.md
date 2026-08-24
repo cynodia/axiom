@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.7.0-alpha.2. How an application crosses the trust boundary.
+Axiom 0.8.0-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -32,6 +32,13 @@ describes both halves, so there is no backend to write.
 11. **IDEMPOTENCY** — an automatically generated request id is unique across runtime instances, whatever the host's uuid provider does. See [Idempotency](#idempotency).
 12. **CHANGES** — `InvokeResponse.changes` names every observable state whose value moved, and no others. See [Observing authoritative state](#observing-authoritative-state).
 13. **PORTABILITY** — `axiom.server.v1` semantics are language-independent, defined normatively by this document, the [schemas](#machine-readable-contracts) and the [conformance fixtures](#conformance). See [Server IR v1](#server-ir-v1-is-frozen).
+14. **INTEGRATION** — external systems are accessed through typed integration operations, never through `NativeOperation` or a raw request embedded in the graph. See [External systems](#external-systems).
+15. **QUERY** — an external query is explicit action/trigger execution, resolved before the transaction it feeds opens — never a pure `Expression`. See [External systems](#external-systems).
+16. **EFFECT** — an external effect is not a rollback-capable state mutation. It is recorded as intent, and dispatched only after the transaction that requested it commits. See [External effects](#external-effects).
+17. **OUTBOX** — effect intent is committed atomically with the state write that requested it, before the adapter is ever called. See [External effects](#external-effects).
+18. **TRIGGER** — a trigger invokes an ordinary action, under the same guards, constraints, transition constraints and authorization any other caller is subject to. See [Triggers](#triggers).
+19. **EVENT** — an event is a typed fact, validated against its declared payload type before any action sees it; an action is where work happens. See [External events](#external-events).
+20. **SECRET** — integration credentials live in host configuration, never in `ApplicationGraph`. See [External systems](#external-systems).
 
 ## Authority and persistence are different questions
 
@@ -311,13 +318,22 @@ Transport-independent by construction. One endpoint, semantic requests:
 ```ts
 { kind: 'snapshot', protocol: 'axiom.protocol.v1', credential?, sinceRevision? }
 { kind: 'invoke',   protocol: 'axiom.protocol.v1', actionId, arguments?, credential?, requestId? }
+{ kind: 'event',    protocol: 'axiom.protocol.v1', eventId, payload, credential? }
 ```
 
 ```ts
-{ kind: 'result',   ok, diagnostics, changes, revision, requestId?, replayed? }
-{ kind: 'snapshot', snapshot: { revision, states, partial? } }
-{ kind: 'error',    diagnostics }
+{ kind: 'result',       ok, diagnostics, changes, revision, requestId?, replayed? }
+{ kind: 'snapshot',     snapshot: { revision, states, partial? } }
+{ kind: 'error',        diagnostics }
+{ kind: 'event-result', ok, diagnostics }
 ```
+
+`event` (spec 0.8) is an **additive** request kind under the same `axiom.protocol.v1`
+identifier, not a new protocol version: unlike a Server IR document, a protocol message
+carries no document-wide vocabulary ceiling a receiver could silently misinterpret. A
+pre-0.8 server's `isServerRequest` check already rejects an unrecognized `kind` as
+malformed rather than misreading it as something else, so an older implementation degrades
+safely without needing to know the new kind exists.
 
 ### `sinceRevision`
 
@@ -412,6 +428,13 @@ does for a local failure.
 | `CONCURRENCY_CONFLICT` | Another transaction committed the same state first. Nothing was applied. |
 | `MALFORMED_REQUEST` | The request was not an Axiom semantic request, or spoke an unknown protocol. |
 | `AUTHORITY_UNREACHABLE` | The authority could not be reached, timed out, or answered with a transport error. |
+| `EFFECT_FAILED` | An external effect's adapter reported failure after exhausting its retry policy. |
+| `TRIGGER_INVOCATION_FAILED` | A trigger's target action reported failure, or its arguments failed to evaluate. |
+| `EVENT_PAYLOAD_INVALID` | An external event's payload did not conform to its declared `EventDef.payloadType`. |
+| `TRIGGER_OVERLAP_SKIPPED` | An interval trigger's tick fired while its previous invocation was still running, and the default `'skip'` overlap policy discarded it. |
+| `INTEGRATION_ADAPTER_MISSING` | The Server IR requires an integration with no registered adapter — refused at `start()`, never deferred to first invocation. |
+| `EVENT_DISPATCH_DEPTH_EXCEEDED` | An event → action → effect → event chain was stopped before it could recurse unboundedly. |
+| `WEBHOOK_VERIFICATION_FAILED` | A webhook delivery failed provider signature verification and was refused before an event was ever constructed. |
 
 Two client-side codes belong to the boundary as well:
 
@@ -505,6 +528,8 @@ of them and no others. No fixture is permitted to disagree with the shipped runt
 
 ```
 @cynodia/axiom-server/schema/server-ir.v1.schema.json
+@cynodia/axiom-server/schema/server-ir.v2.schema.json
+@cynodia/axiom-server/schema/server-ir.v3.schema.json
 @cynodia/axiom-server/schema/protocol.v1.schema.json
 ```
 
@@ -523,15 +548,16 @@ page plus the conformance fixtures.
 | --- | --- | --- |
 | `axiom.server.v1` | the frozen 0.6.1 contract, below | 0.6.1 |
 | `axiom.server.v2` | the expression kinds `group` and `expression-ref`, and the `expressionDefs` they resolve against | 0.7.0 |
+| `axiom.server.v3` | integrations, integration operations, events, triggers, and the `integration-query`/`integration-effect` operation kinds | 0.8.0 |
 
-`SERVER_IR_CONTRACTS` enumerates both. The rules:
+`SERVER_IR_CONTRACTS` enumerates all three. The rules:
 
-- **A document declares the oldest contract that can carry it.** `compileToServerIR` computes the label from the vocabulary the document actually uses, so an application that uses nothing from 0.7 produces a byte-identical `axiom.server.v1` document, and the committed v1 conformance fixtures are unchanged.
+- **A document declares the oldest contract that can carry it.** `compileToServerIR` computes the label from the vocabulary the document actually uses, so an application that uses nothing from 0.7 or 0.8 produces a byte-identical `axiom.server.v1` document, and the committed v1 conformance fixtures are unchanged.
 - **A runtime MUST refuse a contract it does not implement**, and MUST refuse a document whose vocabulary exceeds its declared contract. A v2 runtime executing a v1-labelled document that uses `group` would accept what a conforming v1 runtime elsewhere refuses, and the two would then disagree about the same file. `createAxiomServer` raises rather than executing one.
-- **A frozen contract gains nothing.** `axiom.server.v1` does not contain `group`, `expression-ref` or `expressionDefs`, and `server-ir.v1.schema.json` is byte-frozen. Vocabulary arrives under a new identifier or not at all.
+- **A frozen contract gains nothing.** `axiom.server.v1` does not contain `group`, `expression-ref`, `expressionDefs`, an integration, a trigger, an event, or the `integration-query`/`integration-effect` operation kinds, and `server-ir.v1.schema.json` is byte-frozen. Vocabulary arrives under a new identifier or not at all.
 
 There is one JSON Schema per contract, each generated from the runtime's own vocabulary and
-each shipped: `server-ir.v1.schema.json`, `server-ir.v2.schema.json`.
+each shipped: `server-ir.v1.schema.json`, `server-ir.v2.schema.json`, `server-ir.v3.schema.json`.
 
 **`group`.** Partitions a collection: `Collection<A>` → `Collection<Group<K, A>>`. Groups appear
 in the order their key was **first seen** in the source; members keep source order; two keys are
@@ -598,16 +624,111 @@ result is identical to some serial order. Across processes, correctness rests on
 persistence adapter's revision check — the contract guarantees that a commit from a stale
 snapshot is refused, not that two processes coordinate.
 
-## Not in 0.7.0
+## External systems
+
+0.8 adds a typed boundary to systems Axiom does not own: an `IntegrationDef` names a
+capability domain (a shipping provider, a device fleet), and an `IntegrationOperationDef`
+names one typed operation of it, with a declared `mode: 'query' | 'effect'`. The graph
+never mentions an SDK, a host name, an HTTP client or a secret — those are supplied by an
+`IntegrationAdapter`, registered with the authority (`AxiomServerOptions.integrations`),
+keyed by integration id. **Integrations default server-only** (secrets, trust, CORS,
+auditability, deterministic authority): an operation is client-invokable only if it
+declares `clientSafe: true`, and client safety is never inferred from the absence of a
+declared secret.
+
+**A missing adapter fails `start()`, not the first invocation.** Every integration a
+document requires is checked against the registry before any request is accepted
+(`INTEGRATION_ADAPTER_MISSING`).
+
+**A query is explicit execution, never a pure `Expression`.** An `integration-query`
+operation calls its adapter and binds the (type-checked) result into scope as
+`ref(bindAs)`, resolved **before the transaction opens** — ahead of guards, so a query
+never runs mid-transaction and a guard can never reference its result. A malformed
+provider response is rejected at this boundary (`INTEGRATION_RESULT_INVALID`) rather than
+handed to the application as `unknown`. Full model: `docs/INTEGRATIONS.md`.
+
+## External effects
+
+**An external effect is not a rollback-capable state mutation**, and 0.8 does not pretend
+otherwise (spec §15,16). Axiom can roll back a state write; it cannot roll back an email,
+a payment or a shipment request.
+
+Reaching an `integration-effect` operation only **records intent** — appended to the same
+per-transaction log a mutation is, and discarded on rollback the same way. The adapter is
+never called during the transaction. Only once the transaction **commits** — effect intent
+persisted atomically with the state write that requested it, the transactional outbox
+invariant — does an `EffectRunner` dispatch it, and the response the caller receives never
+waits for that: "action committed, effect pending," not "action committed and its effect
+succeeded." A `PersistenceAdapter` that implements `loadPendingEffects`/
+`recordEffectAttempt` (both shipped adapters do) resumes any intent that was committed but
+never reached a terminal status, so a crash between commit and dispatch does not lose it —
+**at-least-once delivery**, not exactly-once. Effect operations may declare `idempotent:
+true` and a `retry` policy (`'none' | 'fixed' | 'exponential'`); an idempotency key,
+computed from `idempotencyKey`, is handed to the adapter on every attempt so a provider can
+deduplicate a retried call.
+
+An effect's outcome is never folded back into the transaction that requested it. Instead,
+its declared `succeededEventId`/`failedEventId` — an ordinary `EventDef` — is dispatched
+through the same event pipeline an external webhook uses, once the outcome is known. There
+is no automatic compensation: a semantic inverse (`refundPayment`) is another explicit
+action, never an implicit `rollback(createPayment)`. Full model: `docs/EFFECTS.md`.
+
+## Triggers
+
+A `TriggerDef` says **when** an action should be invoked — `interval`, `delay`,
+`lifecycle` (`application-start`, `runtime-ready` on the server; `route-enter`,
+`route-leave` on the client) or `event` — without embedding callback code. **A triggered
+action runs through exactly the same semantics any other caller does**: the same guards,
+constraints, transition constraints and authorization. There is no weaker, trigger-specific
+execution path.
+
+Timed and event triggers whose target action is server-authority run **on the authority**,
+continuing whether or not a browser is connected; `application-start`/`runtime-ready`
+triggers run once, in startup order, before requests are accepted (see
+[Startup](#startup)). An interval trigger's default overlap policy is `'skip'`: a tick that
+fires while the previous invocation is still running is discarded, not queued and never run
+concurrently (`TRIGGER_OVERLAP_SKIPPED`); `'queue'` runs one pending tick immediately after.
+
+**Timed and event-originated invocations run under a system context, never an impersonated
+user.** `ExecutionContext.principal` is `null` — exactly what an anonymous client request's
+is — and `.source` is `'system'`, carried only for observability. Authorization still
+evaluates against that; it is never bypassed. An action whose authorization rule can never
+be satisfied by a `null` principal is correctly refused when a trigger invokes it — the
+graph decides, by declaring authorization or not on the actions it targets. Full model:
+`docs/TRIGGERS.md`.
+
+## External events
+
+An `EventDef` is a typed fact — a webhook delivery, an effect's outcome — never work
+itself; a `TriggerDef{when:{kind:'event'}}` is what says what happens next. The semantic
+protocol's `EventRequest` (`kind: 'event'`) carries only `eventId` and `payload`; the
+payload is validated against `EventDef.payloadType` **before any action sees it**
+(`EVENT_PAYLOAD_INVALID` otherwise) — malformed input never reaches trusted code.
+
+**Provider authenticity is verified before an event is even constructed.** A webhook route
+is registered on the Node host (`serveOverHttp({ webhooks })`), never declared by the
+application: `verify` runs over the raw request first, and an unverified delivery never
+reaches `decode` or the semantic layer. A provider `deliveryId`, when supplied, is
+deduplicated against a bounded recent-deliveries window per route — a duplicate within that
+window is acknowledged without dispatching the event again, with no claim of durable,
+unbounded deduplication.
+
+**Event dispatch is depth-guarded**, so a cycle (an event whose triggered effect's own
+success re-fires it) is stopped rather than recursing unboundedly
+(`EVENT_DISPATCH_DEPTH_EXCEEDED`, `MAX_EVENT_DISPATCH_DEPTH` dispatches deep). Full model:
+`docs/EVENTS.md`.
+
+## Not in 0.8.0
 
 Stated plainly rather than left to discovery:
 
-- **Generated values cannot be bound within an action.** An operation cannot name a value an earlier operation produced: `uuid()` evaluated in one `insert` cannot be referred to by a later `insert` in the same action. Give the record an identity the action already has — a parameter, or a field of something it read — or perform the second write in a second action. A semantic binding for this (`bindAs` on an operation, `ref` to it later) needs a lexical lifetime, a type, `for-each` and nested-invoke semantics, serialization and dependency analysis all decided together; doing that hastily would weaken a contract that is now frozen, so it is deferred to 0.7.
+- **Generated values cannot be bound within an action, in general.** An operation cannot name a value an earlier operation produced: `uuid()` evaluated in one `insert` cannot be referred to by a later `insert` in the same action. Give the record an identity the action already has — a parameter, or a field of something it read — or perform the second write in a second action. 0.8 adds exactly one narrow, purpose-built exception: an `integration-query`'s `bindAs` result, resolved before the transaction opens (see [External systems](#external-systems)) — not a general operation-result binding mechanism.
 - **Read authorization per caller or per record.** Visibility is per state.
-
-- **External effects.** A database write rolls back; an email does not. Nothing here makes an external side effect participate in a transaction, and `NativeOperation` MUST NOT be used to smuggle one in. A deliberate effect model — commands, a transactional outbox, idempotency — is future work.
+- **Absolute/cron schedules.** `interval` and `delay` triggers cover "every N milliseconds" and "once after N milliseconds"; a calendar schedule ("every day at 09:00") is not modeled.
+- **Client-side execution of interval, delay and lifecycle triggers.** `ApplicationIR.triggers` carries client-authority triggers for inspection, but the browser runtime does not yet schedule or dispatch them itself — only the authoritative runtime does. A client-authority trigger declared in a graph today is compiled and analyzable, not executed.
+- **Durable effect delivery beyond the two shipped `PersistenceAdapter`s.** At-least-once delivery across a restart is real for `createMemoryPersistence` (within the process) and `createSqlitePersistence`; a third adapter earns the same claim only by implementing `loadPendingEffects`/`recordEffectAttempt` itself.
 - **Realtime synchronization**, subscriptions and collaboration. Request/response only.
 - **Query semantics.** Authoritative collections are loaded into runtime state; large-data querying needs its own design.
 - **Relational schema generation**, migrations and ORM behaviour.
 - **Multi-node distributed execution.** Correctness is guaranteed within one authority process.
-- **File storage, background jobs, scheduling.**
+- **File storage, background worker fleets, a general job queue, a saga engine, a workflow language.** Effects and triggers are deliberately not a distributed job system (spec §2).

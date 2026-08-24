@@ -12,20 +12,26 @@ export type {
   Authority,
   ConstraintDef,
   EntityDef,
+  EventDef,
   Expression,
   FieldDef,
   FieldId,
+  IntegrationDef,
+  IntegrationOperationDef,
   LiteralValue,
   NodeId,
   ServerIR,
   StateDef,
   TransitionConstraintDef,
+  TriggerDef,
+  TriggerSpec,
   TypeRef,
 } from '@cynodia/axiom-core';
 
 export type {
   ActionOutcome,
   ActionResult,
+  EffectIntentRecord,
   RuntimeDiagnostic,
   RuntimeDiagnosticCode,
 } from '@cynodia/axiom-runtime';

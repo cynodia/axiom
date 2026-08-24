@@ -15,6 +15,7 @@ import {
   EMPHASIS_LEVELS,
   EXPRESSION_KINDS,
   ICON_NAMES,
+  INTEGRATION_OPERATION_MODES,
   LAYOUT_KINDS,
   OPERATION_KINDS,
   PRESENTATION_ROLES,
@@ -23,6 +24,7 @@ import {
   SURFACE_ROLES,
   TEXT_ROLES,
   TREATMENTS,
+  TRIGGER_KINDS,
   UX_ROLES,
   VALIDATION_CODES,
   VALUE_FORMAT_KINDS,
@@ -48,7 +50,7 @@ import {
   toBoolean,
 } from '@cynodia/axiom';
 import type { EntityDef, RouteDef, StateDef, ViewNode } from '@cynodia/axiom';
-import { SERVER_DIAGNOSTIC_CODES } from '@cynodia/axiom-server';
+import { MAX_EVENT_DISPATCH_DEPTH, SERVER_DIAGNOSTIC_CODES } from '@cynodia/axiom-server';
 import { runMinimalExample } from '@cynodia/axiom-demo/minimal';
 import { runSeatingExample } from '@cynodia/axiom-demo/minimal-server';
 
@@ -225,6 +227,9 @@ test('every validation code is documented, and every documented code exists', ()
     'AUTHORING_METADATA_KEY', 'BROWSER_RENDERER_CAPABILITIES',
     'GROUP_KEY_FIELD', 'GROUP_ITEMS_FIELD', 'UI_NODE_KINDS', 'SERVER_IR_CONTRACTS',
     'SERVER_IR_LATEST_CONTRACT', 'TYPE_REF_KINDS', 'SEMANTIC_NODE_KINDS',
+    // Integrations, effects, triggers and events (0.8): exported vocabulary, not codes.
+    'INTEGRATION_OPERATION_MODES', 'RETRY_POLICY_KINDS', 'TRIGGER_KINDS',
+    'TRIGGER_OVERLAP_POLICIES', 'LIFECYCLE_EVENTS', 'MAX_EVENT_DISPATCH_DEPTH',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });
@@ -267,6 +272,8 @@ test('every construct in the public vocabulary is documented', () => {
   require_(expressions, 'EXPRESSIONS.md', BUILTIN_FUNCTIONS, 'builtin');
   require_(expressions, 'EXPRESSIONS.md', EXPRESSION_KINDS, 'expression kind');
   require_(actions, 'ACTIONS_TRANSACTIONS.md', OPERATION_KINDS, 'operation');
+  require_(ALL_DOCS.get('docs/INTEGRATIONS.md') ?? '', 'INTEGRATIONS.md', INTEGRATION_OPERATION_MODES, 'integration operation mode');
+  require_(ALL_DOCS.get('docs/TRIGGERS.md') ?? '', 'TRIGGERS.md', TRIGGER_KINDS, 'trigger kind');
   require_(ALL_DOCS.get('docs/UI.md') ?? '', 'UI.md', UI_NODE_KINDS, 'UI node kind');
   require_(presentation, 'PRESENTATION.md', PRESENTATION_ROLES, 'role');
   require_(presentation, 'PRESENTATION.md', UX_ROLES, 'UX role');

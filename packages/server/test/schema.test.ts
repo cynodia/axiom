@@ -145,19 +145,43 @@ test('the schema names exactly the vocabulary the runtime implements', () => {
     ((schema.$defs as Record<string, Schema>).Expression.oneOf as Schema[]).map(
       (branch) => ((branch.properties as Record<string, Schema>).kind as Schema).const,
     );
+  const operationKindsOf = (schema: Schema): unknown[] => {
+    const schemaDefs = schema.$defs as Record<string, Schema>;
+    return (schemaDefs.Operation.oneOf as Schema[]).flatMap((branch) =>
+      branch.$ref
+        ? (schemaDefs.MutationOperation.oneOf as Schema[]).map(
+            (mutation) => ((mutation.properties as Record<string, Schema>).kind as Schema).const,
+          )
+        : [((branch.properties as Record<string, Schema>).kind as Schema).const],
+    );
+  };
+  // 0.8's integration operation kinds are v3-only, exactly as 0.7's expression kinds are
+  // v2-only — declared once here rather than re-deriving from the schema itself.
+  const V3_OPERATION_KINDS = ['integration-query', 'integration-effect'];
 
   // The newest contract carries the whole vocabulary...
-  const latest = irSchemas.get('axiom.server.v2') as Schema;
+  const latestContract = SERVER_IR_CONTRACTS[SERVER_IR_CONTRACTS.length - 1] as string;
+  const latest = irSchemas.get(latestContract) as Schema;
   assert.deepEqual(
     [...kindsOf(latest)].sort(),
     [...EXPRESSION_KINDS].sort(),
     'every expression kind, and no others',
   );
+  assert.deepEqual(
+    [...operationKindsOf(latest)].sort(),
+    [...OPERATION_KINDS].sort(),
+    'every operation kind, and no others',
+  );
   // ...and the frozen one carries exactly what it carried when it was frozen.
   assert.deepEqual(
     [...kindsOf(irSchema)].sort(),
     [...EXPRESSION_KINDS].filter((kind) => !SERVER_IR_V2_EXPRESSION_KINDS.includes(kind)).sort(),
-    'axiom.server.v1 gained no vocabulary',
+    'axiom.server.v1 gained no expression vocabulary',
+  );
+  assert.deepEqual(
+    [...operationKindsOf(irSchema)].sort(),
+    [...OPERATION_KINDS].filter((kind) => !V3_OPERATION_KINDS.includes(kind)).sort(),
+    'axiom.server.v1 gained no operation vocabulary',
   );
 
   const call = (defs.Expression.oneOf as Schema[]).find(
@@ -166,14 +190,6 @@ test('the schema names exactly the vocabulary the runtime implements', () => {
   const functions = ((call?.properties as Record<string, Schema>).function as Schema).enum as string[];
   assert.deepEqual([...functions].sort(), [...BUILTIN_FUNCTIONS].sort());
 
-  const operations = (defs.Operation.oneOf as Schema[]).flatMap((branch) =>
-    branch.$ref
-      ? (defs.MutationOperation.oneOf as Schema[]).map(
-          (mutation) => ((mutation.properties as Record<string, Schema>).kind as Schema).const,
-        )
-      : [((branch.properties as Record<string, Schema>).kind as Schema).const],
-  );
-  assert.deepEqual([...operations].sort(), [...OPERATION_KINDS].sort());
   for (const [contract, schema] of irSchemas) {
     assert.equal(schema.contract, contract, 'each schema names the contract it describes');
   }

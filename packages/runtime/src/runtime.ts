@@ -81,6 +81,14 @@ export const RUNTIME_DIAGNOSTIC_CODES = {
   REMOTE_ACTION_UNAVAILABLE: 'REMOTE_ACTION_UNAVAILABLE',
   /** The authority could not be reached. Authoritative state was not loaded. */
   AUTHORITY_UNREACHABLE: 'AUTHORITY_UNREACHABLE',
+  /** No host capable of executing an integration query is configured. */
+  INTEGRATION_UNAVAILABLE: 'INTEGRATION_UNAVAILABLE',
+  /** An integration query did not answer within its declared timeout. */
+  INTEGRATION_TIMEOUT: 'INTEGRATION_TIMEOUT',
+  /** A provider's response did not conform to the operation's declared result type. */
+  INTEGRATION_RESULT_INVALID: 'INTEGRATION_RESULT_INVALID',
+  /** An integration query failed. Never carries a provider secret. */
+  INTEGRATION_QUERY_FAILED: 'INTEGRATION_QUERY_FAILED',
 } as const;
 
 export type RuntimeDiagnosticCode =
@@ -103,6 +111,25 @@ export interface RuntimeDiagnostic {
   transactionId?: string;
   /** Structured context, so an agent never has to read the message. */
   details?: Record<string, unknown>;
+}
+
+/**
+ * Recorded intent to perform an external effect — appended when an `integration-effect`
+ * operation is reached, and discarded on rollback exactly like a mutation log entry is.
+ * Distinct from `MutationLogEntry`: an effect is not a state mutation (spec §73), and
+ * `outcome` here means whether the **intent was committed**, not whether the external
+ * effect itself succeeded — that is a separate, later question a host answers.
+ */
+export interface EffectIntentRecord {
+  id: string;
+  transactionId?: string;
+  actionId?: NodeId;
+  operationId: NodeId;
+  arguments: Record<string, unknown>;
+  idempotencyKey?: string;
+  succeededEventId?: NodeId;
+  failedEventId?: NodeId;
+  outcome?: 'committed' | 'rolled-back';
 }
 
 export interface ActionResult {
@@ -231,6 +258,12 @@ export interface AxiomRuntime {
   getActionOutcome(id: NodeId): ActionOutcome | undefined;
   /** Every mutation this runtime has applied, in order, with its semantic location. */
   getMutationLog(): MutationLogEntry[];
+  /**
+   * Every `integration-effect` intent recorded so far, in order — a log distinct from the
+   * mutation log because an effect is not a state mutation. `outcome` reflects whether the
+   * *intent* was committed, not whether the external effect itself has run yet.
+   */
+  getEffectIntents(): EffectIntentRecord[];
   registerNativeOperation(implementationId: string, implementation: NativeImplementation): void;
   /**
    * Invokes an action and waits for its outcome. For a remote action this awaits the
@@ -257,6 +290,15 @@ export interface AxiomRuntime {
    * An authority uses it to evaluate an authorization rule before opening a transaction.
    */
   evaluate(expression: Expression): { ok: true; value: unknown } | { ok: false; diagnostic: RuntimeDiagnostic };
+  /**
+   * Evaluates an expression with extra ids bound in scope, keyed by id — how a trigger's
+   * `arguments`/`enabledWhen` resolve `ref()` of the trigger's own id to read an event
+   * payload, the same way a `for-each` body resolves its scope id.
+   */
+  evaluateWithBindings(
+    expression: Expression,
+    bindings: Record<string, unknown>,
+  ): { ok: true; value: unknown } | { ok: false; diagnostic: RuntimeDiagnostic };
 }
 
 interface Scope {
@@ -359,6 +401,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   let started = false;
   let transactionCounter = 0;
   const mutationLog: MutationLogEntry[] = [];
+  const effectIntentLog: EffectIntentRecord[] = [];
   const inputValidation = options.inputValidation ?? 'immediate';
   const remote = options.remote;
   const remoteActionIds = new Set<string>(ir.remoteActionIds ?? []);
@@ -697,6 +740,11 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       return;
     }
     for (const entry of mutationLog) {
+      if (entry.transactionId === transaction.id && entry.outcome === undefined) {
+        entry.outcome = outcome;
+      }
+    }
+    for (const entry of effectIntentLog) {
       if (entry.transactionId === transaction.id && entry.outcome === undefined) {
         entry.outcome = outcome;
       }
@@ -1438,6 +1486,33 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         }
         return;
       }
+      case 'integration-query':
+        // The result was already resolved and bound into the action's scope before this
+        // transaction opened — see `runActionAsync`. Nothing to do here; this case exists
+        // only so the kind is recognized rather than falling to `default`.
+        return;
+      case 'integration-effect': {
+        // Never calls an adapter here: reaching this operation only records intent, in the
+        // same log a mutation is recorded in, discarded on rollback the same way. Dispatch
+        // to the adapter happens only after the surrounding transaction commits.
+        const args: Record<string, unknown> = {};
+        for (const [key, argument] of Object.entries(operation.arguments ?? {})) {
+          args[key] = cloneValue(evaluate(argument, scope));
+        }
+        effectIntentLog.push({
+          id: host.uuid(),
+          transactionId: context.transactionId,
+          ...(context.sourceNodeId ? { actionId: context.sourceNodeId } : {}),
+          operationId: operation.operationId,
+          arguments: args,
+          ...(operation.idempotencyKey
+            ? { idempotencyKey: toText(evaluate(operation.idempotencyKey, scope)) }
+            : {}),
+          ...(operation.succeededEventId ? { succeededEventId: operation.succeededEventId } : {}),
+          ...(operation.failedEventId ? { failedEventId: operation.failedEventId } : {}),
+        });
+        return;
+      }
       default:
         result.push({
           code: RUNTIME_DIAGNOSTIC_CODES.UNSUPPORTED_OPERATION,
@@ -1580,14 +1655,18 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     renderApplication();
   }
 
-  function runAction(actionId: string, args: Record<string, unknown> = {}): ActionResult {
+  function runAction(
+    actionId: string,
+    args: Record<string, unknown> = {},
+    presetBindings?: Map<NodeId, unknown>,
+  ): ActionResult {
     const remoteAction = remoteActionIds.has(actionId) ? ir.actions[actionId as NodeId] : undefined;
     if (remoteAction) {
       return runRemoteAction(remoteAction, args);
     }
     return collecting((collected) => {
       const started = collected.length;
-      const result = runActionCollecting(actionId, args, collected);
+      const result = runActionCollecting(actionId, args, collected, presetBindings);
       if (ir.actions[actionId as NodeId]) {
         // The record is this invocation's own diagnostics, so a later invocation of another
         // action can never appear to belong to this one.
@@ -1607,6 +1686,86 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     });
   }
 
+  function actionHasIntegrationQuery(action: ActionDef): boolean {
+    return (action.operations ?? []).some((operation) => operation.kind === 'integration-query');
+  }
+
+  /**
+   * Resolves every top-level `integration-query` operation before the transaction opens,
+   * then runs the action exactly as `runAction` would with the results bound into scope.
+   *
+   * Queries are awaited here, ahead of guards and the transaction — the same "none of this
+   * mutates anything" phase preconditions already occupy — because a query's own validation
+   * scope proves guards can never reference `ref(bindAs)`. `integration-effect` operations
+   * need no async pre-step: they only record intent, synchronously, during the ordinary
+   * operation loop.
+   */
+  async function runActionAsync(actionId: string, args: Record<string, unknown> = {}): Promise<ActionResult> {
+    const action = ir.actions[actionId as NodeId];
+    if (!action || !actionHasIntegrationQuery(action) || remoteActionIds.has(actionId)) {
+      return runAction(actionId, args);
+    }
+
+    const scope = rootScope();
+    for (const parameter of action.parameters ?? []) {
+      scope.values.set(parameter.id, args[parameter.id] ?? null);
+    }
+    const presetBindings = new Map<NodeId, unknown>();
+    for (const operation of action.operations ?? []) {
+      if (operation.kind !== 'integration-query') {
+        continue;
+      }
+      const queryArgs: Record<string, unknown> = {};
+      for (const [key, argument] of Object.entries(operation.arguments ?? {})) {
+        queryArgs[key] = evaluate(argument, scope);
+      }
+      let outcome: Awaited<ReturnType<NonNullable<HostEnvironment['queryIntegration']>>> | undefined;
+      try {
+        outcome = await host.queryIntegration?.(operation.operationId, queryArgs, {
+          ...(operation.timeoutMs !== undefined ? { timeoutMs: operation.timeoutMs } : {}),
+        });
+      } catch (error) {
+        outcome = {
+          ok: false,
+          code: RUNTIME_DIAGNOSTIC_CODES.INTEGRATION_QUERY_FAILED,
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+      if (!outcome) {
+        const diagnostic: RuntimeDiagnostic = {
+          code: RUNTIME_DIAGNOSTIC_CODES.INTEGRATION_UNAVAILABLE,
+          message: `${action.name ?? action.id} calls an integration query, but this host cannot perform one`,
+          severity: 'error',
+          nodeId: action.id,
+          actionId: action.id,
+        };
+        report(diagnostic);
+        recordOutcome(actionId, 'failed', [diagnostic]);
+        renderApplication();
+        return { ok: false, diagnostics: [diagnostic] };
+      }
+      if (!outcome.ok) {
+        const diagnostic: RuntimeDiagnostic = {
+          code: (RUNTIME_DIAGNOSTIC_CODES as Record<string, string>)[outcome.code]
+            ? (outcome.code as RuntimeDiagnosticCode)
+            : RUNTIME_DIAGNOSTIC_CODES.INTEGRATION_QUERY_FAILED,
+          message: outcome.message,
+          severity: 'error',
+          nodeId: action.id,
+          actionId: action.id,
+          details: { operationId: String(operation.operationId), retryable: outcome.retryable === true },
+        };
+        report(diagnostic);
+        recordOutcome(actionId, 'failed', [diagnostic]);
+        renderApplication();
+        return { ok: false, diagnostics: [diagnostic] };
+      }
+      scope.values.set(operation.bindAs, outcome.value);
+      presetBindings.set(operation.bindAs, outcome.value);
+    }
+    return runAction(actionId, args, presetBindings);
+  }
+
   /** Set when the most recent invocation stopped because a confirmation was declined. */
   let cancelled = false;
 
@@ -1614,6 +1773,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     actionId: string,
     args: Record<string, unknown>,
     collected: RuntimeDiagnostic[],
+    presetBindings?: Map<NodeId, unknown>,
   ): ActionResult {
     const action: ActionDef | undefined = ir.actions[actionId as NodeId];
     if (!action) {
@@ -1629,6 +1789,11 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     const scope = rootScope();
     for (const parameter of action.parameters ?? []) {
       scope.values.set(parameter.id, args[parameter.id] ?? null);
+    }
+    // Integration query results resolved before this transaction opened (see
+    // `runActionAsync`) — bound the same way a parameter is, so `ref(bindAs)` resolves.
+    for (const [id, value] of presetBindings ?? []) {
+      scope.values.set(id, value);
     }
 
     const failures: RuntimeDiagnostic[] = [];
@@ -2810,10 +2975,17 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     getMutationLog(): MutationLogEntry[] {
       return mutationLog.map((entry) => ({ ...entry }));
     },
+    getEffectIntents(): EffectIntentRecord[] {
+      return effectIntentLog.map((entry) => ({ ...entry }));
+    },
     registerNativeOperation(implementationId: string, implementation: NativeImplementation): void {
       natives.set(implementationId, implementation);
     },
     async invokeActionAsync(id: NodeId, args: Record<string, unknown> = {}): Promise<ActionResult> {
+      const action = ir.actions[id];
+      if (action && actionHasIntegrationQuery(action) && !remoteActionIds.has(id)) {
+        return runActionAsync(id, args);
+      }
       const result = runAction(id, args);
       if (!result.pending) {
         return result;
@@ -2828,6 +3000,14 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     },
     evaluate(expression: Expression) {
       const outcome = tryEvaluate(expression, rootScope(), {});
+      return outcome.ok ? { ok: true as const, value: outcome.value } : { ok: false as const, diagnostic: outcome.diagnostic };
+    },
+    evaluateWithBindings(expression: Expression, bindings: Record<string, unknown>) {
+      let scope = rootScope();
+      for (const [id, value] of Object.entries(bindings)) {
+        scope = childScope(scope, id, value);
+      }
+      const outcome = tryEvaluate(expression, scope, {});
       return outcome.ok ? { ok: true as const, value: outcome.value } : { ok: false as const, diagnostic: outcome.diagnostic };
     },
   };

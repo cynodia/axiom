@@ -12,15 +12,19 @@ import type {
   ConstraintDef,
   EdgeKind,
   EntityDef,
+  EventDef,
   Expression,
   ExpressionDef,
   FieldId,
   FormNode,
   GraphEdge,
+  IntegrationDef,
+  IntegrationOperationDef,
   Location,
   NodeId,
   StateDef,
   TransitionConstraintDef,
+  TriggerDef,
   UINode,
   ViewNode,
 } from '@cynodia/axiom-core';
@@ -460,6 +464,80 @@ export class GraphQueries {
       frontier = next;
     }
     return found;
+  }
+
+  // ------------------------------------------- integrations, effects, triggers, events
+
+  /** Every external capability domain the application declares. */
+  listIntegrations(): IntegrationDef[] {
+    return this.graph.getNodesByKind('integration');
+  }
+
+  /** The typed operations an integration exposes, or every operation of every integration. */
+  listIntegrationOperations(integrationId?: NodeId): IntegrationOperationDef[] {
+    const all = this.graph.getNodesByKind('integration-operation');
+    return integrationId ? all.filter((operation) => operation.integrationId === integrationId) : all;
+  }
+
+  getIntegrationOperation(id: NodeId): IntegrationOperationDef | undefined {
+    const node = this.graph.getNode(id);
+    return node?.kind === 'integration-operation' ? node : undefined;
+  }
+
+  /** Actions that call an operation of this integration, directly. */
+  getActionsUsingIntegration(integrationId: NodeId): ActionDef[] {
+    const operationIds = new Set(this.listIntegrationOperations(integrationId).map((operation) => operation.id));
+    return this.graph
+      .getNodesByKind('action')
+      .filter((action) =>
+        this.graph.getOutgoingEdges(action.id, { kinds: ['references'] }).some((edge) => operationIds.has(edge.to)),
+      );
+  }
+
+  /** The effect-mode operations an action calls — what it can do to an external system. */
+  getEffectsForAction(actionId: NodeId): IntegrationOperationDef[] {
+    return this.graph
+      .getOutgoingEdges(actionId, { kinds: ['references'] })
+      .map((edge) => this.getIntegrationOperation(edge.to))
+      .filter((operation): operation is IntegrationOperationDef => operation?.mode === 'effect');
+  }
+
+  /** Triggers that invoke this action. */
+  getTriggersForAction(actionId: NodeId): TriggerDef[] {
+    return this.graph.getNodesByKind('trigger').filter((trigger) => trigger.actionId === actionId);
+  }
+
+  /** The actions an event, once dispatched, invokes — following every trigger bound to it. */
+  getActionsTriggeredByEvent(eventId: NodeId): ActionDef[] {
+    const triggers = this.graph
+      .getNodesByKind('trigger')
+      .filter((trigger) => trigger.when.kind === 'event' && trigger.when.eventId === eventId);
+    return this.resolve(triggers.map((trigger) => trigger.actionId)).filter(
+      (node): node is ActionDef => node.kind === 'action',
+    );
+  }
+
+  /** Every external capability this application can reach, and what it can do with each. */
+  getExternalDependencies(): { integrations: IntegrationDef[]; operations: IntegrationOperationDef[] } {
+    return { integrations: this.listIntegrations(), operations: this.graph.getNodesByKind('integration-operation') };
+  }
+
+  /** Triggers that fire on a schedule rather than on an event or a lifecycle moment. */
+  getTimedTriggers(): TriggerDef[] {
+    return this.graph
+      .getNodesByKind('trigger')
+      .filter((trigger) => trigger.when.kind === 'interval' || trigger.when.kind === 'delay');
+  }
+
+  /** Events at least one trigger reacts to — the external/internal facts this application listens for. */
+  getWebhookEvents(): EventDef[] {
+    const referenced = new Set(
+      this.graph
+        .getNodesByKind('trigger')
+        .filter((trigger) => trigger.when.kind === 'event')
+        .map((trigger) => (trigger.when as { kind: 'event'; eventId: NodeId }).eventId),
+    );
+    return this.graph.getNodesByKind('event').filter((event) => referenced.has(event.id));
   }
 
   protected enclosingViews(id: NodeId): ViewNode[] {

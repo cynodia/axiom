@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.7.0-alpha.2. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.8.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -31,7 +31,7 @@ One canonical term per concept. These are not interchangeable.
 ## Graph construction
 
 ```ts
-const graph = new ApplicationGraph(id, name);      // version defaults to '0.7.0'
+const graph = new ApplicationGraph(id, name);      // version defaults to '0.8.0'
 graph.addNode<StateDef>({ id, kind: 'state', ... }); // returns NodeId; throws if id exists
 graph.getNode<StateDef>(id);                        // deep clone, or undefined
 graph.updateNode(node);                             // write a modified node back
@@ -477,7 +477,7 @@ reads nothing from globals.
 
 ## Diagnostics
 
-23 runtime codes, all in `RUNTIME_DIAGNOSTIC_CODES`. Match on `code`, never on the message.
+30 runtime codes, all in `RUNTIME_DIAGNOSTIC_CODES`. Match on `code`, never on the message.
 Full table with `details` fields: [`RUNTIME.md`](RUNTIME.md#diagnostic-codes).
 
 ```ts
@@ -493,7 +493,7 @@ if (!result.ok) {
 ## Validation
 
 `validateGraph(graph)` → `{ valid, errors, warnings }`. `valid` is `errors.length === 0`;
-warnings never make a graph invalid. 49 codes in `VALIDATION_CODES`, grouped in
+warnings never make a graph invalid. 72 codes in `VALIDATION_CODES`, grouped in
 [`VALIDATION.md`](VALIDATION.md).
 
 ## Agent API
@@ -529,6 +529,13 @@ authoring an application that crosses the trust boundary.
 11. **IDEMPOTENCY** — a generated request id is unique across runtime instances; records are scoped by principal.
 12. **CHANGES** — `changes` names every observable state whose value moved, and no others.
 13. **PORTABILITY** — `axiom.server.v1` is frozen and language-independent.
+14. **INTEGRATION** — external systems are accessed through typed integration operations.
+15. **QUERY** — an external query is explicit action/trigger execution, never a pure `Expression`.
+16. **EFFECT** — external effects are not rollback-capable state mutations.
+17. **OUTBOX** — effect intent is committed before external execution, atomically with the state write that requested it.
+18. **TRIGGER** — triggers invoke ordinary actions, under the same guards, constraints and authorization.
+19. **EVENT** — events are typed facts; actions perform work.
+20. **SECRET** — credentials never live in graph semantics.
 
 ```ts
 { id: STATE_PRODUCTS, kind: 'state', authority: 'server' }                  // the authority owns it
@@ -589,6 +596,50 @@ A remote invocation returns `{ ok: false, pending: true }` and its outcome arriv
 through the same action-outcome lifecycle a local refusal uses — so a `diagnostic` node
 presents a server refusal exactly as it presents a local one, and the control that started it
 renders `aria-busy` and refuses a second press until it settles.
+
+## INTEGRATIONS, EFFECTS, TRIGGERS
+
+Full model: [`INTEGRATIONS.md`](INTEGRATIONS.md), [`EFFECTS.md`](EFFECTS.md),
+[`TRIGGERS.md`](TRIGGERS.md), [`EVENTS.md`](EVENTS.md). These are the invariants to know
+before authoring an application that reaches an external system or reacts to time or an
+event.
+
+1. **INTEGRATION INVARIANT** — external systems are accessed through typed integration operations; the graph never carries an SDK, a host name or a secret.
+2. **QUERY INVARIANT** — external queries are explicit execution, resolved before the transaction they feed opens — never a pure `Expression`.
+3. **EFFECT INVARIANT** — external effects are not rollback-capable state mutations. Reaching `integration-effect` only records intent; the adapter runs only after commit.
+4. **OUTBOX INVARIANT** — effect intent is committed atomically with the state write that requested it, before external execution, so a crash between the two does not lose it.
+5. **TRIGGER INVARIANT** — a trigger invokes an ordinary action, under exactly the guards, constraints, transition constraints and authorization any other caller is subject to.
+6. **EVENT INVARIANT** — an event is a typed fact, validated against its declared payload type before any action sees it; an action is where work happens.
+7. **SECRET INVARIANT** — integration credentials live in host configuration (`AxiomServerOptions.integrations`), never in `ApplicationGraph`.
+
+```ts
+{ kind: 'integration', id: INTEGRATION_DEVICE_PROVIDER }
+{
+  kind: 'integration-operation', id: OP_FETCH_STATUS, integrationId: INTEGRATION_DEVICE_PROVIDER,
+  mode: 'query', resultType: primitiveType('string'),
+}
+{
+  kind: 'action', id: ACTION_REFRESH,
+  operations: [
+    { kind: 'integration-query', operationId: OP_FETCH_STATUS, bindAs: SCOPE_STATUS },
+    { kind: 'set', target: stateLocation(STATE_STATUS), value: ref(SCOPE_STATUS) },
+  ],
+}
+{ kind: 'trigger', id: TRIGGER_POLL, actionId: ACTION_REFRESH, when: { kind: 'interval', everyMs: 5000 } }
+```
+
+- `mode: 'query'` may bind its result into scope (`bindAs`) for later operations in the same action; `mode: 'effect'` never runs synchronously and its outcome reaches an action only through a dispatched `succeededEventId`/`failedEventId`.
+- A trigger's target action runs where the action itself runs — server if it writes server state or calls an integration, client only for `route-enter`/`route-leave`. Derived, never declared, exactly like ordinary action authority.
+- A triggered/event-originated invocation runs with `principal: null`, `source: 'system'` — the same as an anonymous client request, never an impersonated user. Authorization still evaluates.
+- `createDeterministicServerHost().advance(ms)` fires due timers deterministically; no trigger test waits on a real clock.
+
+```ts
+agent.listIntegrations() / agent.listIntegrationOperations(id?);
+agent.getActionsUsingIntegration(id) / agent.getEffectsForAction(actionId);
+agent.getTriggersForAction(actionId) / agent.getTimedTriggers();
+agent.getActionsTriggeredByEvent(eventId) / agent.getWebhookEvents();
+agent.getExternalDependencies();   // { integrations, operations } — the deployment manifest
+```
 
 Portable artifacts, for a runtime written in another language:
 
