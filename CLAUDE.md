@@ -54,8 +54,17 @@ turn it into a working browser application whose generated JavaScript nobody rea
   conformance suite expanded to 24 fixtures with a public `runConformanceFixture`/
   `runConformanceSuite` reference runner. No new IR vocabulary; `axiom.server.v4` remains
   latest.
+* `specs/spec9.md` — the **0.9 external I/O & streaming release**: `SubscriptionDef` as the
+  third external-interaction direction (the world → Axiom) delivering into the existing
+  `EventDef` → `TriggerDef` → `ActionDef` pipeline, a six-state subscription lifecycle with
+  runtime-owned reconnect policy, at-least-once delivery with restart-durable deduplication,
+  bounded queues and four explicit backpressure policies, `StorageDef` + `BlobRef` for
+  portable binary object storage with declared read/upload authorization and a
+  staged-then-committed lifecycle, the `blob-metadata`/`blob-commit`/`blob-delete`
+  operations, and `axiom.server.v5`. Reports:
+  `AXIOM_0_9_IMPLEMENTATION_REPORT.md` and `AXIOM_0_9_IO_RESEARCH.md`.
 
-Together, spec2–spec8.2 are the authority on design decisions — **except where the
+Together, spec2–spec9 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 
@@ -90,6 +99,13 @@ A handful of rules govern almost every decision:
 > **Presentation does not authorize behaviour** (spec5 §75) — hidden is not prohibited. A
 > rule belongs in a precondition or a transition constraint; no UX metadata may stand in
 > for one.
+
+> **OS I/O primitives are not graph vocabulary** (spec9 §40-42) — no path, socket, stream,
+> file descriptor or subprocess, ever. `readFile(path)`, `openSocket(host, port)` and
+> `exec(command)` do not exist and will not be added. Low-level I/O belongs *inside* an
+> adapter, which is exactly what lets a Rust runtime execute the same graph with different
+> primitives. The graph says "receive device status updates" and "store this attachment";
+> the adapter decides whether that is MQTT or a WebSocket, a directory or S3.
 
 These are enforced by tests, not convention: `packages/core/test/architecture.test.ts`
 scans framework sources for application vocabulary, `packages/runtime/test/store.test.ts`
@@ -271,7 +287,7 @@ and tests resolve to source. Directory names stay short; npm names are scoped.
 | `ui-toolkit` | `@cynodia/axiom-ui` | **Semantic UI authoring**: the five patterns, expansion, provenance, ownership, drift, diff and the machine-readable catalogue. Depends on `core` **only**, and is build-time: nothing it produces reaches a runtime. The directory keeps its research-era name; the npm name is what ships. |
 | `axiom`     | `@cynodia/axiom` | The published facade: re-exports the four packages above. It deliberately does **not** re-export `@cynodia/axiom-ui` — an authoring dependency every application carried forever would make materialization untestable. |
 | `cli`       | *(private)* | Graph loading, `inspect` / `validate` / `build` / `serve`. |
-| `server`    | `@cynodia/axiom-server` | The authoritative runtime: Server IR execution, persistence adapters, the semantic protocol, transports and the Node host. Depends on `core` and `runtime`. |
+| `server`    | `@cynodia/axiom-server` | The authoritative runtime: Server IR execution, persistence adapters, integration/subscription/blob adapters, the semantic protocol, transports and the Node host. Depends on `core` and `runtime`. |
 | `demo`      | *(private)* | Four applications: `issue-tracker.ts`, `inventory.ts`, `order-system.ts` and `order-server.ts` — plus the real-browser conformance tests, which is why Playwright is a devDependency here and nowhere else. |
 
 Dependency direction is `core ← runtime ← compiler ← cli/demo`, with `agent-api` on `core`
@@ -363,8 +379,8 @@ kinds, because a role on an existing node is more inspectable than a new one —
 **Behaviour is data.** An `ActionDef` has parameters, guards (a condition paired with the
 failure it reports — prefer these to the older positional `preconditions`/`failureModes`
 arrays, which the compiler normalizes into), operations, postconditions and failure modes. Operations are `set`, `insert`, `remove` (the three
-mutations, each addressing a `Location`), `for-each`, plus `invoke`, `navigate` and
-`native`. An action runs as a transaction: mutations apply, constraints are then evaluated
+mutations, each addressing a `Location`), `for-each`, plus `invoke`, `navigate`,
+`native`, the two integration operations and the three blob operations. An action runs as a transaction: mutations apply, constraints are then evaluated
 against the **proposed state**, and **every mutation rolls back together** if anything
 fails. That is public contract now (spec4 §36), not incidental behaviour.
 
@@ -609,6 +625,58 @@ runtime `UNSUPPORTED_UI_NODE` on a blank element. `packages/compiler/test/render
 renders one node of every published kind and fails if the renderer does not handle it, so the
 capability list cannot drift from the renderer.
 
+## The external world
+
+Three directions, and no more. Everything Axiom can do to or with the outside world is one
+of them wearing a familiar name.
+
+| Direction | Shape | Vocabulary |
+| --- | --- | --- |
+| Query | Ask; wait for a finite answer. | `integration-query`, `blob-metadata` |
+| Effect | Tell; no answer joins the transaction. | `integration-effect`, `blob-commit`, `blob-delete` |
+| Subscription | The world tells you, while you are listening. | `SubscriptionDef` → `EventDef` |
+
+Storage looked like a fourth direction and is not: a metadata lookup *is* a query and a
+commit or a delete *is* an effect. What it needed was a byte transport separate from the
+semantic path, not a fourth direction.
+
+**A subscription is a node, not a third `IntegrationOperationMode`.** It has lifecycle,
+delivery and backpressure policy that a query and an effect have no concept of, and no
+`resultType`, which they both require. `packages/core/src/subscriptions.ts` holds the
+vocabulary, `packages/server/src/subscriptions.ts` the runtime,
+`packages/server/src/subscription.ts` the adapter contract and the deterministic fake.
+
+**There is exactly one inbound event pipeline.** A subscription delivery is validated against
+`EventDef.payloadType` and dispatched through the same `fireEvent` a webhook and an effect
+outcome use — `packages/server/src/subscriptions.ts` contains no dispatch logic of its own.
+Do not add a second one.
+
+**Delivery is at-least-once and never silently lossy.** The queue is always bounded; the
+default policy (`block`) cannot lose an event; the two dropping policies are declared in the
+graph and report every drop. Ordering is per subscription and is deliberately *nothing*
+across subscriptions. `delivery.deduplicateBy` names a **payload** field carrying the
+provider's identity — an Axiom-generated id would differ between an original and its
+redelivery, which is the case deduplication exists for.
+
+**Reconnect policy is Axiom's; reconnect mechanics are the adapter's.** An adapter reports a
+lost transport and nothing else. Resist any change that lets an adapter choose a delay.
+
+**Bytes never enter the graph, the Server IR or canonical state.** State holds a `BlobRef`
+of five scalars (`packages/core/src/storage.ts`); bytes move through the host's own
+`POST/GET /axiom/blob/…`. `blobRef()` in `packages/server/src/blobs.ts` is the single
+whitelisting projection, in the same spirit as `DISCLOSABLE_DETAIL_KEYS` — a field added to
+`StoredBlob` later does not reach a client until somebody decides it may.
+
+**An object store does not join a transaction, and nothing pretends it does.** An upload
+lands `staged`; `blob-commit` promotes it post-commit. A refused transaction leaves a
+sweepable staged object rather than state referencing bytes nothing claimed; a failed
+`blob-delete` leaves state correct and the orphan visible in `blobLog()`. Storage effects
+ride the existing outbox — there is no second durability system.
+
+**A store with no access rule serves nothing.** The safe default for a missing
+`readAuthorization`/`uploadAuthorization` is refusal, and a key that names nothing is
+answered identically to one the caller may not read, so the endpoint is not an oracle.
+
 **`dialog` is the first interaction primitive.** The graph declares what is open, the
 accessible name, the content, what closes it and whether it is modal; the runtime performs
 focus movement, containment, `Escape`, focus return and the ARIA relationships. Dismissal
@@ -731,6 +799,18 @@ a `HostEnvironment`, so it can be driven headlessly without a browser or jsdom.
   leaving validity to the next action. `'immediate'` is the default.
 - **Warning-severity constraints never block a write.** Only error severity — the default
   — is treated as a hard invariant.
+- **Backpressure is not conformance-fixture-expressible.** All four policies are implemented,
+  documented normatively and covered by tests, but the fixture format cannot say "hold this
+  delivery unresolved while asserting the queue depth". It is the one 0.9 rule whose
+  *verification* stays TypeScript-only — see `AXIOM_0_9_IO_RESEARCH.md` §4.1.
+- **Deduplication without a durable persistence adapter is in-process only** and does not
+  survive a restart. `createMemoryPersistence` implements the durable pair; an adapter that
+  does not leaves a bounded in-memory window.
+- **No filesystem or object-store blob adapter ships** — the interface and
+  `createMemoryBlobStore` do. Staged-orphan sweeping is exposed (`listStaged`), not scheduled.
+- **No browser file-input node kind.** Blob upload and download are host HTTP endpoints; 0.9
+  adds no browser behaviour for them. Adding one needs a renderer, a `RendererCapabilities`
+  entry and real-Chromium tests, or it is exactly the inert-kind failure that gate prevents.
 - **Remote persistence is declared but not executed** (`StatePersistence.kind: 'remote'`
   validates and does nothing). `memory` and `local-storage` work.
 - **Type inference is deliberately partial** (spec3 §22): it rejects obvious mismatches and

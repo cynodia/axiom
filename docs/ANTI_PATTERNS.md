@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.8.2-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.9.0-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -405,3 +405,97 @@ a side effect nothing can roll back. See [`INTEGRATIONS.md`](INTEGRATIONS.md) an
 
 // RIGHT — declare `required: true` on the FieldDef and let the renderer mark it.
 ```
+
+## 32. OS I/O primitives are not graph vocabulary
+
+```ts
+// WRONG — every one of these. None exists, and none will.
+readFile(path); writeFile(path); openSocket(host, port); exec(command); spawn(process);
+openSerialPort(device);
+{ kind: 'native', implementationId: 'app.readAttachment', inputs: { path: literal('/var/uploads/x') } }
+```
+
+An `ApplicationGraph` exposes no filesystem path, no socket, no stream, no file descriptor
+and no subprocess. That is not squeamishness about I/O — the Node host uses all of them
+freely. It is that a graph naming one stops being:
+
+| | Why |
+| --- | --- |
+| **portable** | A Rust runtime, or a browser, has different primitives — or none. |
+| **analyzable for authority** | "What can this action reach?" has no answer once `exec` is in the vocabulary. |
+| **secure** | A path is a capability the graph hands out; a key checked against a declared rule is not. |
+| **deterministically testable** | A conformance fixture cannot script a real socket. |
+| **introspectable** | `getExternalDependencies()` can enumerate typed operations. It cannot enumerate what a shell command does. |
+
+Low-level I/O is permitted, and expected, **inside an adapter**:
+
+```
+PrinterIntegration.print()   → adapter implementation → TCP
+VideoIntegration.transcode() → adapter implementation → ffmpeg subprocess
+DeviceStream subscription    → adapter implementation → serial port, MQTT, WebSocket
+DiagnosticLogs storage       → adapter implementation → local directory, or S3
+```
+
+The graph says *what the interaction means*; the adapter decides *how*. Replace Node with
+Rust, MQTT with a WebSocket, or a local directory with S3, and the graph does not change —
+which is the test that the abstraction is at the right level.
+
+Use [`INTEGRATIONS.md`](INTEGRATIONS.md), [`SUBSCRIPTIONS.md`](SUBSCRIPTIONS.md) or
+[`STORAGE.md`](STORAGE.md) instead.
+
+## 33. `setInterval` + `fetch` for polling, or a client in application code
+
+```ts
+// WRONG — all four, in application code.
+setInterval(() => fetch('/api/devices').then(apply), 5000);
+const socket = new WebSocket('wss://…');
+const client = mqtt.connect('mqtt://…');
+socket.onmessage = (event) => applyStatus(JSON.parse(event.data));
+```
+
+Each of these puts scheduling, transport and a callback-driven mutation path into the
+application, where nothing can analyze, test or authorize them.
+
+| Instead of | Declare |
+| --- | --- |
+| `setInterval` + `fetch` | `TriggerDef{when:{kind:'interval'}}` → `integration-query` |
+| `new WebSocket` / an MQTT client | `SubscriptionDef` → `EventDef` → `TriggerDef` |
+| `socket.onmessage = handler` | The trigger's target action. Deliveries never invoke a callback. |
+| A hand-rolled webhook route | The host's `webhooks` option → `EventRequest` |
+
+## 34. A client-authored subscription event
+
+```ts
+// WRONG — an action a subscription's trigger invokes, left open to clients.
+{ kind: 'action', id: ACTION_APPLY_STATUS, /* no `invocation` */ operations: [ … ] }
+```
+
+Any anonymous client that guesses the id can then assert whatever the live feed asserts.
+Declare `invocation: { allowedSources: ['system'] }`: a client-sourced call is refused with
+`INVOCATION_SOURCE_NOT_ALLOWED` before identity is even consulted.
+
+## 35. base64 bytes in canonical state
+
+```ts
+// WRONG — the attachment's contents in the record, in the Server IR, in every snapshot.
+{ id: F_DOCUMENT_ATTACHMENT, valueType: primitiveType('string') }  // "data:application/pdf;base64,…"
+```
+
+Every read, every snapshot, every persisted write and every `changes` map then carries the
+whole object. Store a `BlobRef` (`blobRefEntity()`) and let the bytes move through the
+host's own upload and download transport — see [`STORAGE.md`](STORAGE.md). A 5MB attachment
+leaves the record exactly as large as a 5-byte one.
+
+## 36. An application-authored upload or download route
+
+```ts
+// WRONG — a route the graph does not know about, guarding data the graph does own.
+express.post('/upload', (request, response) => { /* … */ });
+express.get('/files/:key', (request, response) => response.sendFile(`/var/uploads/${request.params.key}`));
+```
+
+The second is also a path traversal waiting to happen, and neither can be reached by
+`validateGraph`, by `AgentAPI`, or by a conformance fixture. `POST /axiom/blob/<storageId>`
+and `GET /axiom/blob/<storageId>/<key>` already exist, for every Axiom application, with
+`StorageDef.uploadAuthorization` and `StorageDef.readAuthorization` enforced by the
+authority. Application-authored upload/download routes: zero.

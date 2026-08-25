@@ -215,6 +215,37 @@ export function validateAuthority(
     }
   }
 
+  // A subscription is an authority-side construct with no client half at all: the browser
+  // runtime maintains no long-lived external source, and 0.9 deliberately declines to
+  // invent a portable client lifecycle for one (spec 0.9 §62-64). Both of the ways a
+  // subscription could validate and then do nothing are rejected here rather than
+  // discovered as silence at run time.
+  const boundEventIds = new Set(
+    nodes
+      .filter((node) => node.kind === 'trigger' && node.when.kind === 'event')
+      .map((node) => (node as { when: { eventId: NodeId } }).when.eventId),
+  );
+  for (const node of nodes) {
+    if (node.kind !== 'subscription') {
+      continue;
+    }
+    if (!hasServerState) {
+      errors.push({
+        code: VALIDATION_CODES.subscriptionWithoutAuthority,
+        message: `Subscription ${node.name ?? node.id} declares an external event source, but this graph has no server-authoritative state, so no authority would ever activate it`,
+        nodeId: node.id,
+      });
+    }
+    if (!boundEventIds.has(node.eventId)) {
+      errors.push({
+        code: VALIDATION_CODES.subscriptionEventUnreachable,
+        message: `Subscription ${node.name ?? node.id} delivers ${node.eventId}, which no trigger is bound to, so every delivery would be validated and then discarded`,
+        nodeId: node.id,
+        details: { eventId: node.eventId },
+      });
+    }
+  }
+
   // The principal exists only where an authority evaluates. Reading it anywhere a client
   // evaluates would be a rule the client could simply not apply.
   reportPrincipalOnClient(nodes, context, errors);

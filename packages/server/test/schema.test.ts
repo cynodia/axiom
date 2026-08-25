@@ -9,6 +9,7 @@ import {
   OPERATION_KINDS,
   SERVER_IR_CONTRACTS,
   SERVER_IR_V2_EXPRESSION_KINDS,
+  SERVER_IR_V5_OPERATION_KINDS,
 } from '@cynodia/axiom-core';
 import {
   PROTOCOL_VERSION,
@@ -180,7 +181,10 @@ test('the schema names exactly the vocabulary the runtime implements', () => {
   );
   assert.deepEqual(
     [...operationKindsOf(irSchema)].sort(),
-    [...OPERATION_KINDS].filter((kind) => !V3_OPERATION_KINDS.includes(kind)).sort(),
+    [...OPERATION_KINDS]
+      .filter((kind) => !V3_OPERATION_KINDS.includes(kind))
+      .filter((kind) => !SERVER_IR_V5_OPERATION_KINDS.includes(kind))
+      .sort(),
     'axiom.server.v1 gained no operation vocabulary',
   );
 

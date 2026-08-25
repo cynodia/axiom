@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.8.2-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.9.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -668,7 +668,8 @@ Portable artifacts, for a runtime written in another language:
 @cynodia/axiom-server/schema/server-ir.v1.schema.json JSON Schema for axiom.server.v1 (frozen)
 @cynodia/axiom-server/schema/server-ir.v2.schema.json JSON Schema for axiom.server.v2
 @cynodia/axiom-server/schema/server-ir.v3.schema.json JSON Schema for axiom.server.v3
-@cynodia/axiom-server/schema/server-ir.v4.schema.json JSON Schema for axiom.server.v4 (latest)
+@cynodia/axiom-server/schema/server-ir.v4.schema.json JSON Schema for axiom.server.v4
+@cynodia/axiom-server/schema/server-ir.v5.schema.json JSON Schema for axiom.server.v5 (latest)
 @cynodia/axiom-server/schema/protocol.v1.schema.json  JSON Schema for the protocol
 ```
 
@@ -685,6 +686,82 @@ Boundary diagnostics: `UNKNOWN_SERVER_ACTION` `ARGUMENT_TYPE_MISMATCH` `AUTHORIZ
 `INVOCATION_SOURCE_NOT_ALLOWED` `CONCURRENCY_CONFLICT` `MALFORMED_REQUEST`
 `AUTHORITY_UNREACHABLE`, plus `SERVER_STATE_WRITE` and `REMOTE_ACTION_UNAVAILABLE` on the
 client.
+
+## SUBSCRIPTIONS AND STORAGE
+
+Full model: [`SUBSCRIPTIONS.md`](SUBSCRIPTIONS.md), [`STORAGE.md`](STORAGE.md). The external
+world reaching *in*, and binary data, which 0.8 had no vocabulary for.
+
+The external-interaction model is exactly three directions. Anything else is one of them
+wearing a different name.
+
+| Direction | Shape | Vocabulary |
+| --- | --- | --- |
+| Query | Ask; wait for a finite answer. | `integration-query`, `blob-metadata` |
+| Effect | Tell; no answer joins the transaction. | `integration-effect`, `blob-commit`, `blob-delete` |
+| Subscription | The world tells you, while you are listening. | `SubscriptionDef` → `EventDef` |
+
+1. **SUBSCRIPTION INVARIANT** — a long-lived external source is a `SubscriptionDef`, never a client, a socket or a callback in the graph. A delivery becomes an `EventDef` payload and enters the existing `EventDef → TriggerDef → ActionDef` pipeline; there is no second event system.
+2. **RAW-I/O INVARIANT** — OS I/O primitives are not graph vocabulary. No `readFile(path)`, `openSocket(host, port)`, `exec(command)`, `spawn(process)`, file descriptor, Node stream or POSIX path exists or will. They live inside an adapter, which is exactly what lets a Rust runtime implement the same graph with different primitives.
+3. **DELIVERY INVARIANT** — at-least-once; effectively-once where `delivery.deduplicateBy` names an external identity, and that deduplication survives a restart when the persistence adapter is durable. Per-subscription ordering is guaranteed; cross-subscription ordering is guaranteed to be **nothing**.
+4. **BACKPRESSURE INVARIANT** — the queue is always bounded (`maxQueued`, default 64) and the default policy (`block`) cannot lose an event. A policy that may discard one (`drop-oldest`/`drop-newest`) is declared in the graph and reports `SUBSCRIPTION_DELIVERY_DROPPED` every time. Loss is never silent and never a default.
+5. **SHUTDOWN INVARIANT** — after `server.stop()`, no delivery reaches application state. A stopped subscription answers `stopped` to everything, including deliveries already in flight.
+6. **BLOB INVARIANT** — bytes never enter the graph, the Server IR or canonical state. A `BlobRef` (`blobRefEntity()` — key, media type, size, filename?, checksum?) is what state holds, and it discloses nothing about the provider.
+7. **BLOB AUTHORIZATION INVARIANT** — possession of a key is not permission. `StorageDef.readAuthorization` is evaluated with the caller bound to `PRINCIPAL` and the `BlobRef` bound to `ref(<storageId>)`; a store with no rule serves nothing. A key that names nothing is refused identically to one the caller may not read.
+8. **STAGED-COMMIT INVARIANT** — an object store does not join an Axiom transaction, and nothing pretends it does. An upload lands `staged`; `blob-commit` promotes it post-commit. A refused transaction leaves a sweepable staged object, never a state referencing bytes that were never claimed. A failed `blob-delete` leaves state correct and the orphan visible in `blobLog()`.
+
+```ts
+{ kind: 'subscription', id: SUB_STATUS, integrationId: INTEGRATION, source: 'device-status',
+  eventId: EVENT_STATUS_CHANGED,
+  lifecycle: { autoStart: true, required: false, reconnect: { policy: 'exponential', maxAttempts: 5, delayMs: 1000 } },
+  delivery: { maxQueued: 32, backpressure: 'block', deduplicateBy: F_DELIVERY_ID, maxAttempts: 1, onFailure: 'report' } }
+
+{ kind: 'storage', id: STORAGE_LOGS, blobEntityId: ENTITY_BLOB,
+  readAuthorization: <Expression>, uploadAuthorization: <Expression>,
+  acceptedMediaTypes: ['text/plain'], maxSizeBytes: 8388608 }
+
+{ kind: 'blob-metadata', storageId: STORAGE_LOGS, blobKey: <Expression>, bindAs: SCOPE_BLOB }
+{ kind: 'blob-commit',   storageId: STORAGE_LOGS, blobKey: <Expression> }
+{ kind: 'blob-delete',   storageId: STORAGE_LOGS, blobKey: <Expression> }
+```
+
+Lifecycle: `inactive → starting → active → reconnecting → failed`, plus `stopped`. Startup
+decides what activates; application code never calls `start()`. A failed source leaves the
+application running unless `lifecycle.required`.
+
+Subscription vs. webhook vs. polling — three different things, do not conflate them:
+
+| | What it is | Vocabulary |
+| --- | --- | --- |
+| Webhook | Externally initiated finite request; each delivery enters independently. | host `webhooks` → `EventRequest` |
+| Subscription | Standing semantic interest in a long-lived source. | `SubscriptionDef` |
+| Polling | You ask, repeatedly, on a schedule. | `interval` `TriggerDef` → `integration-query` |
+
+Upload is `POST /axiom/blob/<storageId>` and download is `GET /axiom/blob/<storageId>/<key>`
+— one host transport for every Axiom application. Application-authored upload/download
+routes: zero.
+
+```ts
+agent.listSubscriptions() / agent.getSubscriptionsForIntegration(id);
+agent.getEventForSubscription(id) / agent.getActionsReachableFromSubscription(id);
+agent.getExternalEventSources();   // { subscriptions, events, integrations }
+agent.listStorages() / agent.getActionsUsingStorage(id) / agent.getStoragesWithoutAccessRules();
+
+server.subscriptionLog() / server.subscriptionStatus(id);   // state, counters, last delivery, last failure
+server.blobLog();                                           // storage effects and their outcomes
+server.stageBlob(storageId, principal, upload);
+server.authorizeBlobRead(storageId, key, principal);
+server.authorizeBlobUpload(storageId, principal, { mediaType, size });
+```
+
+Adapters: `SubscriptionAdapter` (`createScriptedSubscriptionAdapter` is the deterministic
+fake) and `BlobStorageAdapter` (`createMemoryBlobStore`). A declared subscription or store
+with no registered adapter fails `start()` rather than staying silently inert.
+
+Diagnostics: `SUBSCRIPTION_ADAPTER_MISSING` `SUBSCRIPTION_START_FAILED`
+`SUBSCRIPTION_DELIVERY_DROPPED` `SUBSCRIPTION_DELIVERY_FAILED` `BLOB_STORE_MISSING`
+`BLOB_NOT_FOUND` `BLOB_ACCESS_DENIED` `BLOB_TOO_LARGE` `BLOB_MEDIA_TYPE_REJECTED`
+`BLOB_OPERATION_FAILED` `BLOB_STORAGE_UNAVAILABLE` `BLOB_METADATA_FAILED`.
 
 ## Metadata classes
 

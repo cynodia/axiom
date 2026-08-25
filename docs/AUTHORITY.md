@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.8.2-alpha.1. How an application crosses the trust boundary.
+Axiom 0.9.0-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -477,6 +477,16 @@ does for a local failure.
 | `INTEGRATION_ADAPTER_MISSING` | The Server IR requires an integration with no registered adapter — refused at `start()`, never deferred to first invocation. |
 | `EVENT_DISPATCH_DEPTH_EXCEEDED` | An event → action → effect → event chain was stopped before it could recurse unboundedly. |
 | `WEBHOOK_VERIFICATION_FAILED` | A webhook delivery failed provider signature verification and was refused before an event was ever constructed. |
+| `SUBSCRIPTION_ADAPTER_MISSING` | The Server IR declares a subscription whose integration has no registered `SubscriptionAdapter`. Startup refuses, rather than leaving a declared live source permanently inactive. |
+| `SUBSCRIPTION_START_FAILED` | A subscription's source could not be established, after every attempt its declared reconnect policy allows. |
+| `SUBSCRIPTION_DELIVERY_DROPPED` | A delivery was discarded by a declared lossy backpressure policy. Loss is always declared and never silent. |
+| `SUBSCRIPTION_DELIVERY_FAILED` | A delivery's triggered action failed after every permitted attempt. |
+| `BLOB_STORE_MISSING` | The Server IR declares a `StorageDef` with no registered `BlobStorageAdapter`. |
+| `BLOB_NOT_FOUND` | No object with that key, or the key names a still-staged upload. |
+| `BLOB_ACCESS_DENIED` | The caller may not read, download or upload this object. Also the answer for a key that names nothing at all, so the endpoint is not an oracle for enumerating keys. |
+| `BLOB_TOO_LARGE` | An upload exceeded the store's declared `maxSizeBytes`. |
+| `BLOB_MEDIA_TYPE_REJECTED` | An upload's media type is not in the store's declared `acceptedMediaTypes`. |
+| `BLOB_OPERATION_FAILED` | A `blob-commit` or `blob-delete` failed at the store, after its retry policy. |
 | `INVOCATION_SOURCE_NOT_ALLOWED` | The action's `invocation.allowedSources` does not include this invocation's source (spec 8.1 §3-9) — refused before `authorization` is even evaluated, because no caller reaching the authority this way may invoke the action at all. |
 
 Two client-side codes belong to the boundary as well:
@@ -626,8 +636,9 @@ page plus the conformance fixtures.
 | `axiom.server.v2` | the expression kinds `group` and `expression-ref`, and the `expressionDefs` they resolve against | 0.7.0 |
 | `axiom.server.v3` | integrations, integration operations, events, triggers, and the `integration-query`/`integration-effect` operation kinds | 0.8.0 |
 | `axiom.server.v4` | `ActionDef.invocation.allowedSources` invocation-source restriction, and the structured effect-outcome envelope (`effectOutcomeEntity`, `EFFECT_ID_FIELD` and its sibling reserved fields) that every effect dispatch uses from 8.1 onward | 0.8.1 |
+| `axiom.server.v5` | `SubscriptionDef` and `StorageDef`, and the `blob-metadata`/`blob-commit`/`blob-delete` operation kinds — the inbound external-I/O direction and binary object storage | 0.9.0 |
 
-`SERVER_IR_CONTRACTS` enumerates all four, and is the single source of truth this table is
+`SERVER_IR_CONTRACTS` enumerates all five, and is the single source of truth this table is
 tested against — `packages/demo/test/documentation.test.ts` fails if a contract in
 `SERVER_IR_CONTRACTS` has no row here, or a row here names a contract the code does not
 declare (spec 8.2 §7-8). The rules:
@@ -635,11 +646,20 @@ declare (spec 8.2 §7-8). The rules:
 - **A document declares the oldest contract that can carry it.** `compileToServerIR` computes the label from the vocabulary the document actually uses, so an application that uses nothing from 0.7 or 0.8 produces a byte-identical `axiom.server.v1` document, and the committed v1 conformance fixtures are unchanged. `usesV4Semantics` computes the v4 case specifically: an action's `invocation.allowedSources` genuinely restricting the default two-source set, or any `integration-operation` with `mode: 'effect'` (since every effect dispatch uses the structured v4 envelope) — a document that merely mentions `invocation` without restricting it only needs `axiom.server.v2`, the same tier `group`/`expression-ref` occupy.
 - **A runtime MUST refuse a contract it does not implement**, and MUST refuse a document whose vocabulary exceeds its declared contract. A v2 runtime executing a v1-labelled document that uses `group` would accept what a conforming v1 runtime elsewhere refuses, and the two would then disagree about the same file. `createAxiomServer` raises rather than executing one — including refusing a document that **understates** its own contract (`understatedContract`).
 - **A frozen contract gains nothing.** `axiom.server.v1` does not contain `group`, `expression-ref`, `expressionDefs`, an integration, a trigger, an event, the `integration-query`/`integration-effect` operation kinds, `invocation`, or the structured effect-outcome envelope, and `server-ir.v1.schema.json` is byte-frozen. Vocabulary arrives under a new identifier or not at all.
-- **`axiom.server.v4` is the latest contract as of 0.8.2** (`SERVER_IR_LATEST_CONTRACT`). 0.8.2 is polish-only — documentation, effect observability timing, fixture coverage and AgentAPI aliasing — and introduces no incompatible IR vocabulary change, so no `axiom.server.v5` was created (spec 8.2 §55-56).
+- **`axiom.server.v5` is the latest contract as of 0.9.0** (`SERVER_IR_LATEST_CONTRACT`). `usesExternalIOVocabulary` computes it from the document: any `subscriptions`, any `storages`, or any of the three blob operation kinds. The reason it is an incompatible change rather than an additive one is exact — a v4 runtime that ignored `subscriptions` would start an application whose declared live event source never activates, and one that ignored a `blob-commit` would leave state referencing an object that stays staged forever. Both are silent divergence, which is what a contract label exists to prevent.
 
 There is one JSON Schema per contract, each generated from the runtime's own vocabulary and
 each shipped: `server-ir.v1.schema.json`, `server-ir.v2.schema.json`, `server-ir.v3.schema.json`,
-`server-ir.v4.schema.json`.
+`server-ir.v4.schema.json`, `server-ir.v5.schema.json`.
+
+**`SubscriptionDef`, `StorageDef` and the blob operations.** Their normative semantics —
+lifecycle states and transitions, at-least-once delivery, per-subscription ordering and the
+explicit absence of cross-subscription ordering, bounded queues and every backpressure policy,
+deduplication and its restart durability, poison-delivery bounds, staged-then-committed object
+lifecycle, and the authorization rule a store evaluates before serving a byte — are documented
+in [`SUBSCRIPTIONS.md`](SUBSCRIPTIONS.md) and [`STORAGE.md`](STORAGE.md), and are executable in
+the `subscription-*` and `blob-*` conformance fixtures. An independent implementer needs those
+two documents, the v5 schema and those fixtures, and no TypeScript.
 
 **`group`.** Partitions a collection: `Collection<A>` → `Collection<Group<K, A>>`. Groups appear
 in the order their key was **first seen** in the source; members keep source order; two keys are

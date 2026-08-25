@@ -1,6 +1,6 @@
 # Actions and transactions
 
-Axiom 0.8.2-alpha.1. An action is behavior expressed as data, executed as a transaction.
+Axiom 0.9.0-alpha.1. An action is behavior expressed as data, executed as a transaction.
 
 ```ts
 {
@@ -209,6 +209,40 @@ transaction**: reaching this operation only records intent, discarded on rollbac
 like a mutation is. The adapter runs only after the transaction commits, and the response
 this action's caller gets back never waits for it — "committed, effect pending." Never legal
 inside `for-each`. Full model: [`EFFECTS.md`](EFFECTS.md).
+
+### `blob-metadata`
+
+```ts
+{ kind: 'blob-metadata', storageId: NodeId, blobKey: Expression, bindAs: NodeId }
+```
+
+Reads a stored object's metadata from a `StorageDef` and binds the `BlobRef` into scope —
+query-like in exactly the sense `integration-query` is, and resolved in the same
+pre-transaction phase. It returns the reference, never the bytes. A key that names nothing,
+or names a still-staged upload, **fails the invocation** rather than binding a plausible
+empty record. Never legal inside `for-each`. Full model: [`STORAGE.md`](STORAGE.md).
+
+### `blob-commit`
+
+```ts
+{ kind: 'blob-commit', storageId: NodeId, blobKey: Expression, succeededEventId?: NodeId, failedEventId?: NodeId }
+```
+
+Promotes a staged upload to a stored object. Effect-like, and for the same reason every
+effect is: an object store cannot join an Axiom transaction. Reaching it records intent,
+committed atomically with the state that references the object and dispatched only once that
+state is durable. A rolled-back transaction dispatches nothing and leaves the upload staged.
+Never legal inside `for-each`.
+
+### `blob-delete`
+
+```ts
+{ kind: 'blob-delete', storageId: NodeId, blobKey: Expression, succeededEventId?: NodeId, failedEventId?: NodeId }
+```
+
+Removes a stored object, post-commit. The state that stopped referencing it commits first; if
+the external deletion then fails, state is still correct and the orphan is visible in
+`server.blobLog()`. Never legal inside `for-each`.
 
 ## Authorization
 

@@ -6,13 +6,20 @@ import { createDeterministicServerHost } from './host.js';
 import { createFakeIntegrationAdapter } from './integration.js';
 import type { IntegrationResult } from './integration.js';
 import { createMemoryPersistence } from './persistence.js';
+import { createScriptedSubscriptionAdapter } from './subscription.js';
+import type { SubscriptionAdapter } from './subscription.js';
+import { createMemoryBlobStore } from './blobs.js';
+import type { BlobStorageAdapter } from './blobs.js';
 import type {
+  ConformanceBlobStore,
   ConformanceExpectation,
   ConformanceFailure,
   ConformanceFixture,
   ConformanceInvocation,
   ConformanceRunResult,
   ConformanceScriptedAdapter,
+  ConformanceSubscriptionExpectation,
+  ConformanceSubscriptionScript,
 } from './conformance-types.js';
 
 /**
@@ -28,7 +35,74 @@ import type {
  * internal test suite does — it is what the internal test suite calls.
  */
 
-const CONFORMANCE_VERSIONS = ['axiom.conformance.v1', 'axiom.conformance.v2'];
+const CONFORMANCE_VERSIONS = ['axiom.conformance.v1', 'axiom.conformance.v2', 'axiom.conformance.v3'];
+
+/**
+ * Scripted long-lived sources, keyed by the integration whose adapter maintains them.
+ *
+ * A fixture scripts per *subscription*, because that is the semantic unit; the runtime
+ * resolves an adapter per *integration*, because that is the deployment unit. One adapter
+ * therefore carries every script belonging to its integration — which is also what a real
+ * multiplexing adapter does.
+ */
+function buildSubscriptionAdapters(
+  fixture: ConformanceFixture,
+  host: ReturnType<typeof createDeterministicServerHost>,
+): Record<string, SubscriptionAdapter> {
+  const scripts = fixture.externalSubscriptions ?? {};
+  const byIntegration: Record<string, Record<string, ConformanceSubscriptionScript>> = {};
+  for (const subscription of fixture.serverIR.subscriptions ?? []) {
+    const integrationId = String(subscription.integrationId);
+    byIntegration[integrationId] = {
+      ...byIntegration[integrationId],
+      [String(subscription.id)]: scripts[String(subscription.id)] ?? { entries: [] },
+    };
+  }
+  return Object.fromEntries(
+    Object.entries(byIntegration).map(([integrationId, script]) => [
+      integrationId,
+      createScriptedSubscriptionAdapter(script, host),
+    ]),
+  );
+}
+
+function buildBlobStores(fixture: ConformanceFixture): Record<string, BlobStorageAdapter> {
+  const stores: Record<string, BlobStorageAdapter> = {};
+  for (const storage of fixture.serverIR.storages ?? []) {
+    const spec: ConformanceBlobStore = fixture.blobStores?.[String(storage.id)] ?? {};
+    stores[String(storage.id)] = createMemoryBlobStore({
+      ...(spec.objects ? { seed: spec.objects } : {}),
+      ...(spec.failOn
+        ? {
+            failOn: Object.fromEntries(
+              Object.entries(spec.failOn).map(([name, failure]) => [name, { ok: false as const, ...failure }]),
+            ),
+          }
+        : {}),
+    });
+  }
+  return stores;
+}
+
+function checkSubscription(
+  server: AxiomServer,
+  subscriptionId: string,
+  expected: ConformanceSubscriptionExpectation,
+  where: string,
+  failures: ConformanceFailure[],
+): void {
+  const status = server.subscriptionStatus(subscriptionId as never);
+  if (!status) {
+    failures.push({ where, message: `no subscription ${subscriptionId}` });
+    return;
+  }
+  for (const [key, wanted] of Object.entries(expected)) {
+    const actual = (status as unknown as Record<string, unknown>)[key];
+    if (actual !== wanted) {
+      failures.push({ where, message: `subscription ${subscriptionId}.${key}: expected ${String(wanted)}, got ${String(actual)}` });
+    }
+  }
+}
 
 function buildScriptedAdapter(
   spec: ConformanceScriptedAdapter,
@@ -153,8 +227,61 @@ export async function runConformanceFixture(fixture: ConformanceFixture): Promis
   const integrations = Object.fromEntries(
     Object.entries(fixture.externalAdapters ?? {}).map(([id, spec]) => [id, buildScriptedAdapter(spec, host)]),
   );
-  const server = createAxiomServer({ ir: fixture.serverIR, persistence, host, integrations });
+  const subscriptions = buildSubscriptionAdapters(fixture, host);
+  const blobStores = buildBlobStores(fixture);
+  const server = createAxiomServer({ ir: fixture.serverIR, persistence, host, integrations, subscriptions, blobStores });
   await server.start();
+
+  /** The blob steps, which are answered immediately rather than queued like invocations. */
+  async function runBlobStep(step: Extract<ConformanceFixture['steps'], object>[number], where: string): Promise<void> {
+    if (step.kind === 'upload-blob') {
+      const principal = step.credential ? (fixture.principals[step.credential] ?? null) : null;
+      const staged = await server.stageBlob(step.storageId as never, principal, {
+        data: new TextEncoder().encode(step.text),
+        mediaType: step.mediaType,
+        ...(step.filename !== undefined ? { filename: step.filename } : {}),
+      });
+      if (step.expect?.ok !== undefined && staged.ok !== step.expect.ok) {
+        failures.push({ where, message: `expected upload ok=${step.expect.ok}, got ok=${staged.ok}` });
+      }
+      for (const code of step.expect?.diagnosticCodes ?? []) {
+        if (staged.ok || staged.diagnostic.code !== code) {
+          failures.push({ where, message: `expected upload diagnostic ${code}` });
+        }
+      }
+      if (step.expectKey !== undefined && staged.ok) {
+        const key = staged.ref['field_blob_key'];
+        if (key !== step.expectKey) {
+          failures.push({ where, message: `expected key ${step.expectKey}, got ${String(key)}` });
+        }
+      }
+      return;
+    }
+    if (step.kind === 'read-blob') {
+      const principal = step.credential ? (fixture.principals[step.credential] ?? null) : null;
+      const allowed = await server.authorizeBlobRead(step.storageId as never, step.blobKey, principal);
+      if (step.expect?.ok !== undefined && allowed.ok !== step.expect.ok) {
+        failures.push({ where, message: `expected read ok=${step.expect.ok}, got ok=${allowed.ok}` });
+      }
+      for (const code of step.expect?.diagnosticCodes ?? []) {
+        if (allowed.ok || allowed.diagnostic.code !== code) {
+          failures.push({ where, message: `expected read diagnostic ${code}` });
+        }
+      }
+      return;
+    }
+    if (step.kind === 'expect-blob') {
+      const store = blobStores[step.storageId];
+      const found = store ? await store.metadata(step.blobKey) : undefined;
+      const present = found?.ok === true;
+      if (present !== step.expect.present) {
+        failures.push({ where, message: `expected object ${step.blobKey} present=${step.expect.present}, got ${present}` });
+      }
+      if (step.expect.lifecycle !== undefined && found?.ok && found.value.lifecycle !== step.expect.lifecycle) {
+        failures.push({ where, message: `expected ${step.blobKey} to be ${step.expect.lifecycle}, it is ${found.value.lifecycle}` });
+      }
+    }
+  }
 
   if (fixture.steps) {
     const pending: Array<{ promise: Promise<InvokeResponse | EventResponse>; expect: ConformanceExpectation | undefined; where: string }> = [];
@@ -163,6 +290,24 @@ export async function runConformanceFixture(fixture: ConformanceFixture): Promis
       if (step.kind === 'advance') {
         await settle();
         host.advance(step.ms);
+        continue;
+      }
+      if (step.kind === 'expect-subscription') {
+        // Assertions are point-in-time, so everything queued before them has to have been
+        // answered first — otherwise the counters would be read mid-flight.
+        await settle();
+        for (const { promise, expect, where: earlier } of pending.splice(0)) {
+          checkExpectation(await promise, expect, earlier, failures);
+        }
+        checkSubscription(server, step.subscriptionId, step.expect, where, failures);
+        continue;
+      }
+      if (step.kind === 'upload-blob' || step.kind === 'read-blob' || step.kind === 'expect-blob') {
+        await settle();
+        for (const { promise, expect, where: earlier } of pending.splice(0)) {
+          checkExpectation(await promise, expect, earlier, failures);
+        }
+        await runBlobStep(step, where);
         continue;
       }
       const request =
@@ -236,7 +381,16 @@ export async function runConformanceFixture(fixture: ConformanceFixture): Promis
   await server.stop();
 
   if (fixture.restartAndReassert) {
-    const restarted = createAxiomServer({ ir: fixture.serverIR, persistence, host });
+    // The same adapters: a restart is a new process against the same durable state, not a
+    // process with a different external world.
+    const restarted = createAxiomServer({
+      ir: fixture.serverIR,
+      persistence,
+      host,
+      integrations,
+      subscriptions: buildSubscriptionAdapters(fixture, host),
+      blobStores,
+    });
     await restarted.start();
     checkFinalState(restarted, fixture, `${fixture.name} after restart`, failures);
     await restarted.stop();

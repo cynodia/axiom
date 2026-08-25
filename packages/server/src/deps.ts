@@ -22,6 +22,10 @@ export type {
   NodeId,
   ServerIR,
   StateDef,
+  StorageDef,
+  SubscriptionDef,
+  SubscriptionBackpressurePolicy,
+  SubscriptionLifecycleState,
   TransitionConstraintDef,
   TriggerDef,
   TriggerSpec,
@@ -37,3 +41,19 @@ export type {
 } from '@cynodia/axiom-runtime';
 
 export { PRINCIPAL, RUNTIME_DIAGNOSTIC_CODES, SERVER_IR_CONTRACT } from './runtime-deps.js';
+export {
+  BLOB_CHECKSUM_FIELD,
+  BLOB_FILENAME_FIELD,
+  BLOB_KEY_FIELD,
+  BLOB_MEDIA_TYPE_FIELD,
+  BLOB_SIZE_FIELD,
+  subscriptionAutoStart,
+  subscriptionBackpressure,
+  subscriptionDeduplicationWindow,
+  subscriptionFailurePolicy,
+  subscriptionIsRequired,
+  subscriptionMaxAttempts,
+  subscriptionQueueLimit,
+  subscriptionReconnectPolicy,
+  subscriptionSourceName,
+} from '@cynodia/axiom-core';

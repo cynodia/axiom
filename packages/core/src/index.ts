@@ -11,6 +11,8 @@ export * from './integrations.js';
 export * from './effect-outcome.js';
 export * from './events.js';
 export * from './triggers.js';
+export * from './subscriptions.js';
+export * from './storage.js';
 export * from './renderer-capabilities.js';
 export * from './trigger-capabilities.js';
 export * from './authoring-metadata.js';

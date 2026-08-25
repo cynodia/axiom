@@ -1,21 +1,27 @@
 import {
   ApplicationGraph,
+  BLOB_FILENAME_FIELD,
+  BLOB_KEY_FIELD,
   EFFECT_MESSAGE_FIELD,
   EFFECT_RESULT_FIELD,
   PRINCIPAL,
   binary,
+  blobRefEntity,
   call,
   collectionType,
   effectOutcomeEntity,
   entityType,
   field,
   fieldId,
+  find,
   forEach,
   itemFieldLocation,
   literal,
   nodeId,
+  optionalType,
   primitiveType,
   ref,
+  some,
   stateLocation,
 } from '@cynodia/axiom-core';
 import type {
@@ -31,25 +37,38 @@ import type {
   RepeatNode,
   RouteDef,
   StateDef,
+  StorageDef,
+  SubscriptionDef,
   TextNode,
   TriggerDef,
   ViewNode,
 } from '@cynodia/axiom-core';
 
 /**
- * The 0.8 reference application: spec §89's recommended domain. It exercises every
- * primitive spec 0.8 adds — an integration query on a timer, an integration effect a user
- * requests, and an external event a webhook delivers — with:
+ * The reference application for external I/O: spec 0.8 §89's recommended domain, extended
+ * by spec 0.9 §68 to cover all three interaction directions plus binary data.
+ *
+ *     QUERY        poll each device's status on a timer   → integration-query
+ *     EFFECT       reboot a device                        → integration-effect
+ *     SUBSCRIPTION receive live status changes            → SubscriptionDef
+ *     BLOB         attach and retrieve a diagnostic log   → StorageDef + blob operations
+ *
+ * with, in this file:
  *
  *     application fetch usage ............ 0
  *     application setInterval usage ...... 0
  *     application setTimeout usage ....... 0
+ *     application WebSocket/MQTT client .. 0
+ *     application fs.* / socket APIs ..... 0
  *     application webhook routes ......... 0
+ *     application upload/download routes . 0
  *     application SDK calls .............. 0
- *     NativeOperation ..................... 0
+ *     NativeOperation .................... 0
  *
- * Every one of those is infrastructure, supplied by an `IntegrationAdapter` and the Node
- * host's `webhooks` option — never by this graph.
+ * Every one of those is infrastructure, supplied by an `IntegrationAdapter`, a
+ * `SubscriptionAdapter`, a `BlobStorageAdapter` and the Node host — never by this graph.
+ * The graph says "receive device status updates", "reboot this device" and "store this
+ * diagnostic log"; it never says "open a socket" or "call fs.writeFile".
  */
 
 // ------------------------------------------------------------------- entities
@@ -63,6 +82,7 @@ const F_DEVICE_EXTERNAL_ID = fieldId('field_device_external_id');
 const F_DEVICE_NAME = fieldId('field_device_name');
 const F_DEVICE_STATUS = fieldId('field_device_status');
 const F_DEVICE_LAST_CHECKED = fieldId('field_device_last_checked');
+const F_DEVICE_LOG = fieldId('field_device_log');
 
 const ENTITY_STATUS_RESULT = nodeId('entity_status_result');
 const F_RESULT_EXTERNAL_ID = fieldId('field_result_external_id');
@@ -71,6 +91,11 @@ const F_RESULT_STATUS = fieldId('field_result_status');
 const ENTITY_STATUS_CHANGE = nodeId('entity_status_change');
 const F_CHANGE_EXTERNAL_ID = fieldId('field_change_external_id');
 const F_CHANGE_STATUS = fieldId('field_change_status');
+// The provider's own identity for a delivery. It is what makes a redelivered status change
+// one event rather than two — see the subscription's `delivery.deduplicateBy` below.
+const F_CHANGE_DELIVERY_ID = fieldId('field_change_delivery_id');
+
+const ENTITY_BLOB = nodeId('entity_blob_ref');
 
 // ---------------------------------------------------------------------- state
 
@@ -91,6 +116,17 @@ const EVENT_DEVICE_REBOOT_FAILED = nodeId('event_device_reboot_failed');
 const EVENT_DEVICE_STATUS_CHANGED = nodeId('event_device_status_changed');
 const ENTITY_EFFECT_OUTCOME = nodeId('entity_effect_outcome');
 
+// ---------------------------------------------------------------- subscriptions
+
+const SUBSCRIPTION_DEVICE_STATUS = nodeId('subscription_device_status');
+
+// -------------------------------------------------------------- object storage
+
+const STORAGE_DIAGNOSTICS = nodeId('storage_diagnostics');
+const SCOPE_LOG_DEVICE = nodeId('scope_log_device');
+const SCOPE_ATTACHED_LOG = nodeId('scope_attached_log');
+const SCOPE_DETACHED_BLOB = nodeId('scope_detached_blob');
+
 // ---------------------------------------------------------------------- actions
 
 const ACTION_REFRESH_STATUSES = nodeId('action_refresh_statuses');
@@ -106,6 +142,13 @@ const PARAM_MESSAGE = nodeId('param_message');
 const ACTION_APPLY_STATUS_CHANGE = nodeId('action_apply_status_change');
 const PARAM_CHANGE_EXTERNAL_ID = nodeId('param_change_external_id');
 const PARAM_CHANGE_STATUS = nodeId('param_change_status');
+
+const ACTION_ATTACH_DIAGNOSTIC_LOG = nodeId('action_attach_diagnostic_log');
+const PARAM_LOG_DEVICE_ID = nodeId('param_log_device_id');
+const PARAM_LOG_BLOB = nodeId('param_log_blob');
+
+const ACTION_DETACH_DIAGNOSTIC_LOG = nodeId('action_detach_diagnostic_log');
+const PARAM_DETACH_DEVICE_ID = nodeId('param_detach_device_id');
 
 // --------------------------------------------------------------------- triggers
 
@@ -125,6 +168,8 @@ const UI_DEVICE_NAME = nodeId('ui_device_name');
 const UI_DEVICE_STATUS = nodeId('ui_device_status');
 const UI_DEVICE_LAST_CHECKED = nodeId('ui_device_last_checked');
 const UI_DEVICE_REBOOT = nodeId('ui_device_reboot');
+const UI_DEVICE_LOG = nodeId('ui_device_log');
+const UI_DEVICE_DETACH_LOG = nodeId('ui_device_detach_log');
 const UI_DEVICE_ROW = nodeId('ui_device_row');
 const UI_DEVICES_EMPTY = nodeId('ui_devices_empty');
 const UI_DEVICES = nodeId('ui_devices');
@@ -157,8 +202,12 @@ export function createDeviceMonitorGraph(): ApplicationGraph {
       { id: F_DEVICE_NAME, name: 'Name', valueType: primitiveType('string'), required: true },
       { id: F_DEVICE_STATUS, name: 'Status', valueType: primitiveType('string'), required: true },
       { id: F_DEVICE_LAST_CHECKED, name: 'Last checked', valueType: primitiveType('string'), required: true },
+      // The attachment is a reference, never the bytes. A megabyte log file changes
+      // nothing about the size of this record, this state or the Server IR.
+      { id: F_DEVICE_LOG, name: 'Diagnostic log', valueType: optionalType(entityType(ENTITY_BLOB)) },
     ],
   });
+  graph.addNode<EntityDef>(blobRefEntity(ENTITY_BLOB));
   graph.addNode<EntityDef>({
     id: ENTITY_STATUS_RESULT,
     kind: 'entity',
@@ -174,6 +223,7 @@ export function createDeviceMonitorGraph(): ApplicationGraph {
     fields: [
       { id: F_CHANGE_EXTERNAL_ID, valueType: primitiveType('string'), required: true },
       { id: F_CHANGE_STATUS, valueType: primitiveType('string'), required: true },
+      { id: F_CHANGE_DELIVERY_ID, valueType: primitiveType('string') },
     ],
   });
 
@@ -186,8 +236,8 @@ export function createDeviceMonitorGraph(): ApplicationGraph {
     authority: 'server',
     valueType: collectionType(entityType(ENTITY_DEVICE)),
     initialValue: [
-      { [F_DEVICE_EXTERNAL_ID]: 'dev-1', [F_DEVICE_NAME]: 'Lobby sensor', [F_DEVICE_STATUS]: 'unknown', [F_DEVICE_LAST_CHECKED]: '' },
-      { [F_DEVICE_EXTERNAL_ID]: 'dev-2', [F_DEVICE_NAME]: 'Loading dock camera', [F_DEVICE_STATUS]: 'unknown', [F_DEVICE_LAST_CHECKED]: '' },
+      { [F_DEVICE_EXTERNAL_ID]: 'dev-1', [F_DEVICE_NAME]: 'Lobby sensor', [F_DEVICE_STATUS]: 'unknown', [F_DEVICE_LAST_CHECKED]: '', [F_DEVICE_LOG]: null },
+      { [F_DEVICE_EXTERNAL_ID]: 'dev-2', [F_DEVICE_NAME]: 'Loading dock camera', [F_DEVICE_STATUS]: 'unknown', [F_DEVICE_LAST_CHECKED]: '', [F_DEVICE_LOG]: null },
     ],
   });
   graph.addNode<StateDef>({
@@ -220,6 +270,34 @@ export function createDeviceMonitorGraph(): ApplicationGraph {
     resultType: primitiveType('string'),
     idempotent: true,
     retry: { policy: 'fixed', maxAttempts: 2, delayMs: 1000 },
+  });
+
+  // -------------------------------------------------------------- object storage
+
+  graph.addNode<StorageDef>({
+    id: STORAGE_DIAGNOSTICS,
+    kind: 'storage',
+    name: 'Diagnostic logs',
+    blobEntityId: ENTITY_BLOB,
+    // Possession of a key is not permission. A caller may read an object only while some
+    // device actually references it — so a guessed key, or one observed before the log was
+    // detached, is refused by a rule written over authoritative state rather than by a
+    // route somebody remembered to guard.
+    readAuthorization: some(
+      ref(STATE_DEVICES),
+      SCOPE_LOG_DEVICE,
+      binary(
+        'eq',
+        field(field(ref(SCOPE_LOG_DEVICE), F_DEVICE_LOG), BLOB_KEY_FIELD),
+        field(ref(STORAGE_DIAGNOSTICS), BLOB_KEY_FIELD),
+      ),
+    ),
+    // Only an operator may upload one. The rule reads the caller, exactly as an action's
+    // `authorization` does, because it is the same mechanism.
+    uploadAuthorization: binary('eq', field(ref(PRINCIPAL), F_OPERATOR_ROLE), literal('operator')),
+    acceptedMediaTypes: ['text/plain', 'application/gzip'],
+    maxSizeBytes: 8 * 1024 * 1024,
+    retry: { policy: 'fixed', maxAttempts: 3, delayMs: 500 },
   });
 
   // ----------------------------------------------------------------------- events
@@ -343,6 +421,106 @@ export function createDeviceMonitorGraph(): ApplicationGraph {
     ],
   });
 
+  graph.addNode<ActionDef>({
+    id: ACTION_ATTACH_DIAGNOSTIC_LOG,
+    kind: 'action',
+    name: 'attach diagnostic log',
+    authorization: binary('eq', field(ref(PRINCIPAL), F_OPERATOR_ROLE), literal('operator')),
+    parameters: [
+      { id: PARAM_LOG_DEVICE_ID, valueType: primitiveType('string'), required: true },
+      // The upload already happened, out of band, and produced this reference. No byte of
+      // the log ever passes through an action argument, canonical state or the Server IR.
+      { id: PARAM_LOG_BLOB, valueType: entityType(ENTITY_BLOB), required: true },
+    ],
+    operations: [
+      {
+        kind: 'set',
+        target: itemFieldLocation(STATE_DEVICES, F_DEVICE_EXTERNAL_ID, ref(PARAM_LOG_DEVICE_ID), F_DEVICE_LOG),
+        value: ref(PARAM_LOG_BLOB),
+      },
+      // Committing the staged upload is post-commit intent, not part of the transaction: an
+      // object store cannot roll back with one. If this transaction is refused, nothing is
+      // committed and the upload stays staged for the host to sweep.
+      {
+        kind: 'blob-commit',
+        storageId: STORAGE_DIAGNOSTICS,
+        blobKey: field(ref(PARAM_LOG_BLOB), BLOB_KEY_FIELD),
+      },
+    ],
+  });
+
+  graph.addNode<ActionDef>({
+    id: ACTION_DETACH_DIAGNOSTIC_LOG,
+    kind: 'action',
+    name: 'detach diagnostic log',
+    destructive: true,
+    authorization: binary('eq', field(ref(PRINCIPAL), F_OPERATOR_ROLE), literal('operator')),
+    parameters: [{ id: PARAM_DETACH_DEVICE_ID, valueType: primitiveType('string'), required: true }],
+    operations: [
+      // The metadata lookup runs before the transaction opens: it proves the object exists
+      // and is committed, and binds its reference for the deletion below.
+      {
+        kind: 'blob-metadata',
+        storageId: STORAGE_DIAGNOSTICS,
+        blobKey: field(
+          field(
+            find(
+              ref(STATE_DEVICES),
+              SCOPE_ATTACHED_LOG,
+              binary('eq', field(ref(SCOPE_ATTACHED_LOG), F_DEVICE_EXTERNAL_ID), ref(PARAM_DETACH_DEVICE_ID)),
+            ),
+            F_DEVICE_LOG,
+          ),
+          BLOB_KEY_FIELD,
+        ),
+        bindAs: SCOPE_DETACHED_BLOB,
+      },
+      {
+        kind: 'set',
+        target: itemFieldLocation(STATE_DEVICES, F_DEVICE_EXTERNAL_ID, ref(PARAM_DETACH_DEVICE_ID), F_DEVICE_LOG),
+        value: literal(null),
+      },
+      // State first, external cleanup after. If the store's deletion fails, the device is
+      // still correctly unattached and the orphan is visible in `blobLog()` — the two
+      // stay separately observable rather than falsely coupled.
+      {
+        kind: 'blob-delete',
+        storageId: STORAGE_DIAGNOSTICS,
+        blobKey: field(ref(SCOPE_DETACHED_BLOB), BLOB_KEY_FIELD),
+      },
+    ],
+  });
+
+  // ---------------------------------------------------------------- subscriptions
+
+  // The live half of the device feed. The graph says *which capability domain* and *which
+  // semantic source*; whether the adapter behind it speaks MQTT, a WebSocket, AMQP, an
+  // `fs.watch` or a serial port is host configuration this file cannot see and does not
+  // constrain. Swapping one for another changes nothing here.
+  graph.addNode<SubscriptionDef>({
+    id: SUBSCRIPTION_DEVICE_STATUS,
+    kind: 'subscription',
+    name: 'live device status',
+    integrationId: INTEGRATION_DEVICE_PROVIDER,
+    source: 'device-status',
+    eventId: EVENT_DEVICE_STATUS_CHANGED,
+    lifecycle: {
+      // The application is useful without the live feed — the interval poll still runs — so
+      // an unreachable source leaves it running and the subscription observably
+      // reconnecting, rather than refusing to start.
+      required: false,
+      reconnect: { policy: 'exponential', maxAttempts: 4, delayMs: 500 },
+    },
+    delivery: {
+      // The provider's own delivery id, so a redelivery after a reconnect is one event.
+      deduplicateBy: F_CHANGE_DELIVERY_ID,
+      maxQueued: 32,
+      // The default, stated: a device status change is authoritative and may not be
+      // silently dropped when the queue fills.
+      backpressure: 'block',
+    },
+  });
+
   // --------------------------------------------------------------------- triggers
 
   graph.addNode<TriggerDef>({
@@ -432,11 +610,37 @@ export function createDeviceMonitorGraph(): ApplicationGraph {
     arguments: { [String(PARAM_EXTERNAL_ID)]: field(ref(UI_DEVICES), F_DEVICE_EXTERNAL_ID) },
     presentation: { uxRole: 'destructive-action' },
   });
+  graph.addNode<FieldDisplayNode>({
+    id: UI_DEVICE_LOG,
+    kind: 'field-display',
+    source: field(ref(UI_DEVICES), F_DEVICE_LOG),
+    fieldId: BLOB_FILENAME_FIELD,
+    label: 'Diagnostic log',
+    // Only where one is attached. The reference is what the UI shows; the bytes are fetched
+    // by the host's download transport, under the store's own access rule.
+    visibleWhen: call('required', field(ref(UI_DEVICES), F_DEVICE_LOG)),
+  });
+  graph.addNode<ButtonNode>({
+    id: UI_DEVICE_DETACH_LOG,
+    kind: 'button',
+    label: 'Detach log',
+    actionId: ACTION_DETACH_DIAGNOSTIC_LOG,
+    arguments: { [String(PARAM_DETACH_DEVICE_ID)]: field(ref(UI_DEVICES), F_DEVICE_EXTERNAL_ID) },
+    visibleWhen: call('required', field(ref(UI_DEVICES), F_DEVICE_LOG)),
+    presentation: { uxRole: 'destructive-action' },
+  });
   graph.addNode<ContainerNode>({
     id: UI_DEVICE_ROW,
     kind: 'container',
     name: 'DeviceRow',
-    children: [UI_DEVICE_NAME, UI_DEVICE_STATUS, UI_DEVICE_LAST_CHECKED, UI_DEVICE_REBOOT],
+    children: [
+      UI_DEVICE_NAME,
+      UI_DEVICE_STATUS,
+      UI_DEVICE_LAST_CHECKED,
+      UI_DEVICE_LOG,
+      UI_DEVICE_DETACH_LOG,
+      UI_DEVICE_REBOOT,
+    ],
     presentation: {
       layout: { kind: 'horizontal', gap: 'medium', align: 'center', justify: 'between' },
       surface: 'base',
@@ -489,6 +693,16 @@ export const deviceMonitorIds = {
   ENTITY_STATUS_CHANGE,
   F_CHANGE_EXTERNAL_ID,
   F_CHANGE_STATUS,
+  F_CHANGE_DELIVERY_ID,
+  ENTITY_BLOB,
+  F_DEVICE_LOG,
+  STORAGE_DIAGNOSTICS,
+  SUBSCRIPTION_DEVICE_STATUS,
+  ACTION_ATTACH_DIAGNOSTIC_LOG,
+  PARAM_LOG_DEVICE_ID,
+  PARAM_LOG_BLOB,
+  ACTION_DETACH_DIAGNOSTIC_LOG,
+  PARAM_DETACH_DEVICE_ID,
   STATE_DEVICES,
   STATE_LAST_EFFECT_MESSAGE,
   INTEGRATION_DEVICE_PROVIDER,

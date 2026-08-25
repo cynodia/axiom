@@ -1,6 +1,6 @@
 # Agent API
 
-Axiom 0.8.2-alpha.1. The machine-facing interface. Agents query semantics and apply
+Axiom 0.9.0-alpha.1. The machine-facing interface. Agents query semantics and apply
 structural transformations; they never edit generated code.
 
 ```ts
@@ -159,6 +159,33 @@ agent.getPersistenceForState(stateId)
 
 Authority is derived from what an action writes, so these answers cannot disagree with what
 the graph does. See [`AUTHORITY.md`](AUTHORITY.md).
+
+## External-world queries
+
+```ts
+agent.listIntegrations() / agent.listIntegrationOperations(integrationId?)
+agent.getActionsUsingIntegration(integrationId) / agent.getEffectsForAction(actionId)
+agent.getTriggersForAction(actionId) / agent.getTimedTriggers()
+agent.getActionsTriggeredByEvent(eventId) / agent.getTriggeredEvents()
+agent.getExternalDependencies()              // { integrations, operations }
+
+agent.listSubscriptions()
+agent.getSubscriptionsForIntegration(integrationId)
+agent.getEventForSubscription(subscriptionId)
+agent.getActionsReachableFromSubscription(subscriptionId)
+agent.getExternalEventSources()              // { subscriptions, events, integrations }
+
+agent.listStorages()
+agent.getActionsUsingStorage(storageId)
+agent.getStoragesWithoutAccessRules()        // stores that serve and accept nothing
+```
+
+All of these are **graph-static**: they answer what the application *can* reach, not what a
+running authority has done. `getActionsReachableFromSubscription` is the one to reach for
+before changing a live feed — it follows the subscription's event through every bound
+trigger, so "what can this feed actually change" needs no traversal by the consumer. Runtime
+answers come from `AxiomServer.subscriptionLog()` and `blobLog()` instead; see
+[`SUBSCRIPTIONS.md`](SUBSCRIPTIONS.md) and [`STORAGE.md`](STORAGE.md).
 
 ## Transactions
 

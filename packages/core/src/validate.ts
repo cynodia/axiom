@@ -20,6 +20,14 @@ import type {
 import type { EventDef } from './events.js';
 import type { IntegrationDef, IntegrationOperationDef } from './integrations.js';
 import type { TriggerDef } from './triggers.js';
+import {
+  SUBSCRIPTION_BACKPRESSURE_POLICIES,
+  subscriptionBackpressure,
+  subscriptionQueueLimit,
+} from './subscriptions.js';
+import type { SubscriptionDef } from './subscriptions.js';
+import { BLOB_REF_FIELDS } from './storage.js';
+import type { StorageDef } from './storage.js';
 import { entityType } from './type-ref.js';
 import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD, isGroupFieldId } from './group.js';
 import type { TypeRef } from './type-ref.js';
@@ -225,6 +233,12 @@ function validateNode(node: AnyNode, context: Context): void {
       return;
     case 'trigger':
       validateTrigger(node, context);
+      return;
+    case 'subscription':
+      validateSubscription(node, context);
+      return;
+    case 'storage':
+      validateStorage(node, context);
       return;
     default:
       context.errors.push({
@@ -509,6 +523,26 @@ function validateOperation(
       if (operation.idempotencyKey) {
         validateExpression(operation.idempotencyKey, action.id, context, local);
       }
+      if (operation.succeededEventId) {
+        requireKind(operation.succeededEventId, 'event', action.id, context, VALIDATION_CODES.unknownEvent);
+      }
+      if (operation.failedEventId) {
+        requireKind(operation.failedEventId, 'event', action.id, context, VALIDATION_CODES.unknownEvent);
+      }
+      return local;
+    }
+    case 'blob-metadata': {
+      requireKind(operation.storageId, 'storage', action.id, context, VALIDATION_CODES.unknownStorage);
+      validateExpression(operation.blobKey, action.id, context, local);
+      const storage = context.nodes.get(operation.storageId);
+      const resultType =
+        storage?.kind === 'storage' ? entityType(storage.blobEntityId) : undefined;
+      return resultScope(local, operation.bindAs, resultType, context, action.id);
+    }
+    case 'blob-commit':
+    case 'blob-delete': {
+      requireKind(operation.storageId, 'storage', action.id, context, VALIDATION_CODES.unknownStorage);
+      validateExpression(operation.blobKey, action.id, context, local);
       if (operation.succeededEventId) {
         requireKind(operation.succeededEventId, 'event', action.id, context, VALIDATION_CODES.unknownEvent);
       }
@@ -829,6 +863,102 @@ function validateTrigger(trigger: TriggerDef, context: Context): void {
 }
 
 /** Missing required arguments, and arguments the operation declares no parameter for. */
+/**
+ * A subscription's own declaration. Whether it can actually reach an action — and whether
+ * this graph even has an authority to activate it — is decided in `validate-authority.ts`,
+ * with the rest of the authority boundary.
+ */
+function validateSubscription(subscription: SubscriptionDef, context: Context): void {
+  requireKind(
+    subscription.integrationId,
+    'integration',
+    subscription.id,
+    context,
+    VALIDATION_CODES.unknownIntegration,
+  );
+  requireKind(subscription.eventId, 'event', subscription.id, context, VALIDATION_CODES.unknownEvent);
+
+  // Configuration is evaluated once, at activation, in the root scope: there is no delivery
+  // to read yet, so nothing beyond state can be in scope.
+  for (const argument of Object.values(subscription.arguments ?? {})) {
+    validateExpression(argument, subscription.id, context, emptyScope());
+  }
+
+  if (subscriptionQueueLimit(subscription) < 1) {
+    context.errors.push({
+      code: VALIDATION_CODES.subscriptionInvalidPolicy,
+      message: `Subscription ${subscription.name ?? subscription.id} declares a queue depth below one, which could hold no delivery at all`,
+      nodeId: subscription.id,
+      details: { maxQueued: subscription.delivery?.maxQueued },
+    });
+  }
+  const backpressure = subscriptionBackpressure(subscription);
+  if (!SUBSCRIPTION_BACKPRESSURE_POLICIES.includes(backpressure)) {
+    context.errors.push({
+      code: VALIDATION_CODES.subscriptionInvalidPolicy,
+      message: `Subscription ${subscription.name ?? subscription.id} declares an unknown backpressure policy "${String(backpressure)}"`,
+      nodeId: subscription.id,
+      details: { known: [...SUBSCRIPTION_BACKPRESSURE_POLICIES] },
+    });
+  }
+  if ((subscription.delivery?.maxAttempts ?? 1) < 1) {
+    context.errors.push({
+      code: VALIDATION_CODES.subscriptionInvalidPolicy,
+      message: `Subscription ${subscription.name ?? subscription.id} declares fewer than one delivery attempt, so no delivery could ever be processed`,
+      nodeId: subscription.id,
+    });
+  }
+
+  // A deduplication key names a field of the payload, so it has to be one. A key that
+  // resolved to nothing would silently deduplicate every delivery against `undefined`.
+  const deduplicateBy = subscription.delivery?.deduplicateBy;
+  if (deduplicateBy !== undefined) {
+    const event = context.nodes.get(subscription.eventId);
+    const payloadType = event?.kind === 'event' ? event.payloadType : undefined;
+    const resolved = payloadType ? resolveKnownType(payloadType) : undefined;
+    const entity = resolved?.kind === 'entity' ? context.nodes.get(resolved.entityId) : undefined;
+    const declared = entity?.kind === 'entity' && entity.fields.some((field) => field.id === deduplicateBy);
+    if (!declared) {
+      context.errors.push({
+        code: VALIDATION_CODES.subscriptionInvalidPolicy,
+        message: `Subscription ${subscription.name ?? subscription.id} deduplicates on ${deduplicateBy}, which is not a field of ${subscription.eventId}'s payload entity`,
+        nodeId: subscription.id,
+        fieldId: deduplicateBy,
+      });
+    }
+  }
+}
+
+/** A store's own declaration: a canonical blob entity, and rules written over real state. */
+function validateStorage(storage: StorageDef, context: Context): void {
+  requireKind(storage.blobEntityId, 'entity', storage.id, context, VALIDATION_CODES.unknownStorage);
+  const entity = context.nodes.get(storage.blobEntityId);
+  if (entity?.kind === 'entity') {
+    const declared = new Set(entity.fields.map((field) => field.id));
+    const missing = BLOB_REF_FIELDS.filter((field) => !declared.has(field));
+    if (missing.length > 0) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidBlobEntity,
+        message: `Storage ${storage.name ?? storage.id} names ${storage.blobEntityId} as its BlobRef entity, but it does not declare ${missing.join(', ')}; build it with blobRefEntity()`,
+        nodeId: storage.id,
+        details: { missing: missing.map(String) },
+      });
+    }
+  }
+  // The requested blob is bound to the store's own id, the way an event trigger binds its
+  // payload to the trigger's id.
+  const scope = emptyScope(new Set([storage.id]));
+  if (entity?.kind === 'entity') {
+    scope.types.set(storage.id, entityType(storage.blobEntityId));
+  }
+  if (storage.readAuthorization) {
+    validateExpression(storage.readAuthorization, storage.id, context, scope);
+  }
+  if (storage.uploadAuthorization) {
+    validateExpression(storage.uploadAuthorization, storage.id, context, emptyScope());
+  }
+}
+
 function checkIntegrationArguments(
   operation: IntegrationOperationDef,
   args: Record<string, Expression>,

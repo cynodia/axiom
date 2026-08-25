@@ -12,7 +12,7 @@ mutations and persists them. Neither is written by hand: there is no route, cont
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
 **Status: experimental / alpha.** The API may change between alpha releases. This
-documentation describes 0.8.2-alpha.1.
+documentation describes 0.9.0-alpha.1.
 
 ## Who this is for
 
@@ -133,6 +133,10 @@ full in the linked contract.
 31. **A trigger invokes an ordinary action**, under exactly the guards, constraints, transition constraints and authorization any other caller is subject to — never a weaker path. Full model: [`docs/TRIGGERS.md`](docs/TRIGGERS.md).
 32. **A triggered or event-originated action runs under a system context, never an impersonated user.** `principal: null`, exactly like an anonymous client request; authorization still evaluates.
 33. **An event is a typed fact, validated before any action sees it; an action is where work happens.** Full model: [`docs/EVENTS.md`](docs/EVENTS.md).
+34. **The external world reaches Axiom through a `SubscriptionDef`, never a callback.** A delivery becomes an `EventDef` payload and enters the same `EventDef → TriggerDef → ActionDef` pipeline everything else does. Full model: [`docs/SUBSCRIPTIONS.md`](docs/SUBSCRIPTIONS.md).
+35. **Subscription delivery is at-least-once, per-subscription ordered, and never silently lossy.** The queue is always bounded, and a policy that may discard an event says so in the graph. Two subscriptions have no ordering relationship at all.
+36. **OS I/O primitives are not graph vocabulary.** No path, socket, stream, file descriptor or subprocess. They live inside an adapter, where a Node runtime and a future Rust one may implement the same graph with entirely different primitives. Full model: [`docs/ANTI_PATTERNS.md`](docs/ANTI_PATTERNS.md).
+37. **Binary data is a `BlobRef` in state and bytes out of band.** Upload and download are one host transport for every application; possession of a key is never permission. Full model: [`docs/STORAGE.md`](docs/STORAGE.md).
 
 ## Installation
 
@@ -484,6 +488,8 @@ the published package — no repository access is needed to obtain the contract.
 | External effects: the outbox, retries, delivery guarantees | [`docs/EFFECTS.md`](docs/EFFECTS.md) |
 | Timed and lifecycle execution, event-invoked actions | [`docs/TRIGGERS.md`](docs/TRIGGERS.md) |
 | Typed facts, webhooks, event dispatch | [`docs/EVENTS.md`](docs/EVENTS.md) |
+| **Live external event streams: lifecycle, delivery, backpressure** | [`docs/SUBSCRIPTIONS.md`](docs/SUBSCRIPTIONS.md) |
+| **Binary data: BlobRef, upload, download, authorization, orphans** | [`docs/STORAGE.md`](docs/STORAGE.md) |
 | Runtime API, startup lifecycle and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
 | Machine queries and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 | Validation codes and what rejects a graph | [`docs/VALIDATION.md`](docs/VALIDATION.md) |

@@ -226,6 +226,22 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
           reads(node.id, node.enabledWhen, rootScope);
         }
         break;
+      case 'subscription':
+        link(node.id, node.integrationId, 'references');
+        link(node.id, node.eventId, 'references');
+        for (const argument of Object.values(node.arguments ?? {})) {
+          reads(node.id, argument, rootScope);
+        }
+        break;
+      case 'storage':
+        link(node.id, node.blobEntityId, 'references');
+        if (node.readAuthorization) {
+          reads(node.id, node.readAuthorization, new Map([...rootScope, [node.id, []]]));
+        }
+        if (node.uploadAuthorization) {
+          reads(node.id, node.uploadAuthorization, rootScope);
+        }
+        break;
       case 'integration':
       case 'event':
         break;
@@ -586,6 +602,21 @@ function linkOperations(
         if (operation.idempotencyKey) {
           linker.reads(actionId, operation.idempotencyKey, scope);
         }
+        if (operation.succeededEventId) {
+          linker.link(actionId, operation.succeededEventId, 'references');
+        }
+        if (operation.failedEventId) {
+          linker.link(actionId, operation.failedEventId, 'references');
+        }
+        break;
+      case 'blob-metadata':
+        linker.link(actionId, operation.storageId, 'references');
+        linker.reads(actionId, operation.blobKey, scope);
+        break;
+      case 'blob-commit':
+      case 'blob-delete':
+        linker.link(actionId, operation.storageId, 'references');
+        linker.reads(actionId, operation.blobKey, scope);
         if (operation.succeededEventId) {
           linker.link(actionId, operation.succeededEventId, 'references');
         }

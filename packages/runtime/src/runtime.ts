@@ -89,6 +89,10 @@ export const RUNTIME_DIAGNOSTIC_CODES = {
   INTEGRATION_RESULT_INVALID: 'INTEGRATION_RESULT_INVALID',
   /** An integration query failed. Never carries a provider secret. */
   INTEGRATION_QUERY_FAILED: 'INTEGRATION_QUERY_FAILED',
+  /** No host capable of reaching an object store is configured. */
+  BLOB_STORAGE_UNAVAILABLE: 'BLOB_STORAGE_UNAVAILABLE',
+  /** A `blob-metadata` lookup failed: no such key, a staged object, or the store refused. */
+  BLOB_METADATA_FAILED: 'BLOB_METADATA_FAILED',
 } as const;
 
 export type RuntimeDiagnosticCode =
@@ -130,6 +134,15 @@ export interface EffectIntentRecord {
   succeededEventId?: NodeId;
   failedEventId?: NodeId;
   outcome?: 'committed' | 'rolled-back';
+  /**
+   * Set instead of an integration operation when the intent is a storage effect — a
+   * `blob-commit` or a `blob-delete`. It rides the same outbox for the same reason: an
+   * object store cannot join an Axiom transaction, so the intent commits with the state
+   * that references the object and dispatches only afterwards. `operationId` then carries
+   * the store's id, so one log and one dispatcher serve both kinds of effect rather than
+   * a second, parallel durability system (spec 0.9 §57).
+   */
+  storage?: { storageId: NodeId; operation: 'commit' | 'delete'; key: string };
 }
 
 export interface ActionResult {
@@ -1487,6 +1500,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return;
       }
       case 'integration-query':
+      case 'blob-metadata':
         // The result was already resolved and bound into the action's scope before this
         // transaction opened — see `runActionAsync`. Nothing to do here; this case exists
         // only so the kind is recognized rather than falling to `default`.
@@ -1508,6 +1522,27 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
           ...(operation.idempotencyKey
             ? { idempotencyKey: toText(evaluate(operation.idempotencyKey, scope)) }
             : {}),
+          ...(operation.succeededEventId ? { succeededEventId: operation.succeededEventId } : {}),
+          ...(operation.failedEventId ? { failedEventId: operation.failedEventId } : {}),
+        });
+        return;
+      }
+      case 'blob-commit':
+      case 'blob-delete': {
+        // Identical discipline to `integration-effect`: no store is called here. Reaching
+        // the operation records intent in the same log, discarded on rollback the same way,
+        // and dispatched only once the surrounding transaction has committed.
+        effectIntentLog.push({
+          id: host.uuid(),
+          transactionId: context.transactionId,
+          ...(context.sourceNodeId ? { actionId: context.sourceNodeId } : {}),
+          operationId: operation.storageId,
+          arguments: {},
+          storage: {
+            storageId: operation.storageId,
+            operation: operation.kind === 'blob-commit' ? 'commit' : 'delete',
+            key: toText(evaluate(operation.blobKey, scope)),
+          },
           ...(operation.succeededEventId ? { succeededEventId: operation.succeededEventId } : {}),
           ...(operation.failedEventId ? { failedEventId: operation.failedEventId } : {}),
         });
@@ -1686,8 +1721,10 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     });
   }
 
-  function actionHasIntegrationQuery(action: ActionDef): boolean {
-    return (action.operations ?? []).some((operation) => operation.kind === 'integration-query');
+  function actionHasAsyncQuery(action: ActionDef): boolean {
+    return (action.operations ?? []).some(
+      (operation) => operation.kind === 'integration-query' || operation.kind === 'blob-metadata',
+    );
   }
 
   /**
@@ -1702,7 +1739,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
    */
   async function runActionAsync(actionId: string, args: Record<string, unknown> = {}): Promise<ActionResult> {
     const action = ir.actions[actionId as NodeId];
-    if (!action || !actionHasIntegrationQuery(action) || remoteActionIds.has(actionId)) {
+    if (!action || !actionHasAsyncQuery(action) || remoteActionIds.has(actionId)) {
       return runAction(actionId, args);
     }
 
@@ -1711,7 +1748,54 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       scope.values.set(parameter.id, args[parameter.id] ?? null);
     }
     const presetBindings = new Map<NodeId, unknown>();
+    const failWith = (diagnostic: RuntimeDiagnostic): ActionResult => {
+      report(diagnostic);
+      recordOutcome(actionId, 'failed', [diagnostic]);
+      renderApplication();
+      return { ok: false, diagnostics: [diagnostic] };
+    };
     for (const operation of action.operations ?? []) {
+      if (operation.kind === 'blob-metadata') {
+        // A metadata lookup is the storage half of the same pre-transaction phase: a finite
+        // question, answered before anything is mutated, whose result later operations read.
+        const key = toText(evaluate(operation.blobKey, scope));
+        let blobOutcome: Awaited<ReturnType<NonNullable<HostEnvironment['readBlobMetadata']>>> | undefined;
+        try {
+          blobOutcome = await host.readBlobMetadata?.(String(operation.storageId), key);
+        } catch (error) {
+          blobOutcome = {
+            ok: false,
+            code: RUNTIME_DIAGNOSTIC_CODES.BLOB_METADATA_FAILED,
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
+        if (!blobOutcome) {
+          return failWith({
+            code: RUNTIME_DIAGNOSTIC_CODES.BLOB_STORAGE_UNAVAILABLE,
+            message: `${action.name ?? action.id} reads object storage, but this host provides none`,
+            severity: 'error',
+            nodeId: action.id,
+            actionId: action.id,
+            details: { storageId: String(operation.storageId) },
+          });
+        }
+        if (!blobOutcome.ok) {
+          // The store's own code travels in `details.code` rather than replacing the
+          // diagnostic code: a provider's vocabulary is not Axiom's, and a caller matching
+          // on `code` must see a code this runtime actually declares.
+          return failWith({
+            code: RUNTIME_DIAGNOSTIC_CODES.BLOB_METADATA_FAILED,
+            message: blobOutcome.message,
+            severity: 'error',
+            nodeId: action.id,
+            actionId: action.id,
+            details: { storageId: String(operation.storageId), code: blobOutcome.code },
+          });
+        }
+        scope.values.set(operation.bindAs, blobOutcome.value);
+        presetBindings.set(operation.bindAs, blobOutcome.value);
+        continue;
+      }
       if (operation.kind !== 'integration-query') {
         continue;
       }
@@ -2983,7 +3067,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     },
     async invokeActionAsync(id: NodeId, args: Record<string, unknown> = {}): Promise<ActionResult> {
       const action = ir.actions[id];
-      if (action && actionHasIntegrationQuery(action) && !remoteActionIds.has(id)) {
+      if (action && actionHasAsyncQuery(action) && !remoteActionIds.has(id)) {
         return runActionAsync(id, args);
       }
       const result = runAction(id, args);

@@ -58,8 +58,15 @@ export interface TriggerRuntimeOptions {
 export interface TriggerRuntime {
   /** Runs `application-start` then `runtime-ready` triggers, then schedules the rest. */
   start(): Promise<void>;
-  /** Dispatches an event to every trigger bound to it. `depth` guards against event cycles. */
-  fireEvent(eventId: NodeId, payload: unknown, depth?: number): Promise<void>;
+  /**
+   * Dispatches an event to every trigger bound to it. `depth` guards against event cycles.
+   *
+   * `ok` is false when any bound trigger's action refused, its arguments could not be
+   * evaluated, or the depth guard stopped the chain — the answer a subscription needs in
+   * order to decide whether the delivery was applied, retried or dead-lettered. An event
+   * with no trigger bound to it is vacuously `ok`.
+   */
+  fireEvent(eventId: NodeId, payload: unknown, depth?: number): Promise<{ ok: boolean }>;
   stop(): void;
 }
 
@@ -94,19 +101,21 @@ export function createTriggerRuntime(options: TriggerRuntimeOptions): TriggerRun
     return args;
   }
 
-  async function fire(trigger: TriggerDef, bindings?: Record<string, unknown>, depth = 0): Promise<void> {
+  async function fire(trigger: TriggerDef, bindings?: Record<string, unknown>, depth = 0): Promise<boolean> {
     if (!enabled(trigger)) {
-      return;
+      // Not firing is not failing: `enabledWhen` said this tick does not apply.
+      return true;
     }
     const args = buildArguments(trigger, bindings);
     if (args === undefined) {
-      return;
+      return false;
     }
     report?.({ kind: 'fired', triggerId: trigger.id, actionId: trigger.actionId });
     const result = await invoke(trigger.actionId, args, depth);
     if (!result.ok) {
       report?.({ kind: 'invocation-failed', triggerId: trigger.id, actionId: trigger.actionId });
     }
+    return result.ok;
   }
 
   async function tick(trigger: TriggerDef, overlap: 'skip' | 'queue'): Promise<void> {
@@ -157,20 +166,22 @@ export function createTriggerRuntime(options: TriggerRuntimeOptions): TriggerRun
         }
       }
     },
-    async fireEvent(eventId: NodeId, payload: unknown, depth = 0): Promise<void> {
+    async fireEvent(eventId: NodeId, payload: unknown, depth = 0): Promise<{ ok: boolean }> {
       const bound = triggers.filter((trigger) => trigger.when.kind === 'event' && trigger.when.eventId === eventId);
       if (bound.length === 0) {
-        return;
+        return { ok: true };
       }
       if (depth >= MAX_EVENT_DISPATCH_DEPTH) {
         for (const trigger of bound) {
           report?.({ kind: 'depth-exceeded', triggerId: trigger.id, actionId: trigger.actionId });
         }
-        return;
+        return { ok: false };
       }
+      let ok = true;
       for (const trigger of bound) {
-        await fire(trigger, { [String(trigger.id)]: payload }, depth);
+        ok = (await fire(trigger, { [String(trigger.id)]: payload }, depth)) && ok;
       }
+      return { ok };
     },
     stop(): void {
       for (const task of tasks) {

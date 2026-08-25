@@ -13,6 +13,8 @@ import { walkExpression } from './expressions.js';
 import type { EventDef } from './events.js';
 import type { IntegrationDef, IntegrationOperationDef } from './integrations.js';
 import type { TriggerDef } from './triggers.js';
+import type { SubscriptionDef } from './subscriptions.js';
+import type { StorageDef } from './storage.js';
 
 /**
  * The contracts a Server IR may declare. A runtime that does not recognize the value MUST
@@ -34,6 +36,7 @@ export const SERVER_IR_CONTRACTS = [
   'axiom.server.v2',
   'axiom.server.v3',
   'axiom.server.v4',
+  'axiom.server.v5',
 ] as const;
 
 export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
@@ -42,7 +45,14 @@ export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
 export const SERVER_IR_CONTRACT: ServerIRContract = 'axiom.server.v1';
 
 /** The newest contract this implementation produces and executes. */
-export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v4';
+export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v5';
+
+/** Operation kinds no contract before `axiom.server.v5` contains. */
+export const SERVER_IR_V5_OPERATION_KINDS: readonly string[] = [
+  'blob-metadata',
+  'blob-commit',
+  'blob-delete',
+];
 
 /** Expression kinds that `axiom.server.v1` does not contain. */
 export const SERVER_IR_V2_EXPRESSION_KINDS: readonly string[] = ['group', 'expression-ref'];
@@ -117,6 +127,29 @@ export function usesV4Semantics(ir: {
   return restrictsInvocation || usesEffects;
 }
 
+/**
+ * Whether a document uses 0.9's external-I/O vocabulary — subscriptions, object stores, or
+ * any of the three blob operations. A v4 runtime knows none of it: it would start an
+ * application with a declared live event source it never activates, or execute an action
+ * whose `blob-commit` it silently skips, leaving state referencing an object that stays
+ * staged forever. Both are exactly the silent divergence a contract label exists to
+ * prevent, so any of it present is enough to require `axiom.server.v5`.
+ */
+export function usesExternalIOVocabulary(ir: {
+  subscriptions?: readonly unknown[];
+  storages?: readonly unknown[];
+  actions: Record<string, ActionDef>;
+}): boolean {
+  if ((ir.subscriptions?.length ?? 0) > 0 || (ir.storages?.length ?? 0) > 0) {
+    return true;
+  }
+  return Object.values(ir.actions).some((action) =>
+    (action.operations ?? []).some((operation) =>
+      SERVER_IR_V5_OPERATION_KINDS.includes(operation.kind),
+    ),
+  );
+}
+
 /** The higher of two contracts, ordered by `SERVER_IR_CONTRACTS`. */
 export function maxContract(a: ServerIRContract, b: ServerIRContract): ServerIRContract {
   return SERVER_IR_CONTRACTS.indexOf(b) > SERVER_IR_CONTRACTS.indexOf(a) ? b : a;
@@ -130,6 +163,8 @@ export function serverIRExpressions(ir: {
   transitionConstraints: readonly TransitionConstraintDef[];
   expressionDefs?: Record<NodeId, ExpressionDef>;
   triggers?: readonly TriggerDef[];
+  subscriptions?: readonly SubscriptionDef[];
+  storages?: readonly StorageDef[];
 }): Expression[] {
   const found: Expression[] = [];
   for (const state of ir.states) {
@@ -153,6 +188,17 @@ export function serverIRExpressions(ir: {
     found.push(...Object.values(trigger.arguments ?? {}));
     if (trigger.enabledWhen) {
       found.push(trigger.enabledWhen);
+    }
+  }
+  for (const subscription of ir.subscriptions ?? []) {
+    found.push(...Object.values(subscription.arguments ?? {}));
+  }
+  for (const storage of ir.storages ?? []) {
+    if (storage.readAuthorization) {
+      found.push(storage.readAuthorization);
+    }
+    if (storage.uploadAuthorization) {
+      found.push(storage.uploadAuthorization);
     }
   }
   return found;
@@ -193,6 +239,11 @@ function actionExpressions(action: ActionDef): Expression[] {
           if (operation.idempotencyKey) {
             found.push(operation.idempotencyKey);
           }
+          break;
+        case 'blob-metadata':
+        case 'blob-commit':
+        case 'blob-delete':
+          found.push(operation.blobKey);
           break;
         default:
       }
@@ -255,4 +306,16 @@ export interface ServerIR {
   events?: EventDef[];
   /** Server-authority triggers only — interval, delay, lifecycle and event triggers whose target action executes here. */
   triggers?: TriggerDef[];
+  /**
+   * Long-lived external event sources this authority maintains. Absent below
+   * `axiom.server.v5`, which has no way to describe one. Names a capability domain and a
+   * semantic source, never a broker, a topic, a URL or a socket.
+   */
+  subscriptions?: SubscriptionDef[];
+  /**
+   * Object stores this document reads, commits into or deletes from. Carries the
+   * authorization rules a host evaluates before serving a byte, and nothing about the
+   * provider that holds the bytes.
+   */
+  storages?: StorageDef[];
 }

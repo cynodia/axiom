@@ -82,6 +82,19 @@ export interface PersistenceAdapter {
   loadPendingEffects?(): Promise<EffectRecord[]>;
   /** Records an attempted (or terminal) status for a previously committed effect intent. */
   recordEffectAttempt?(id: string, update: Partial<EffectRecord>): Promise<void>;
+  /**
+   * Whether this external delivery identity has already been accepted for this
+   * subscription.
+   *
+   * Deduplication that lives only in process memory is not deduplication for an
+   * authoritative server: a restart would reprocess every redelivered event a provider
+   * still holds. An adapter that implements this pair makes deduplication survive a
+   * restart; one that does not leaves the runtime with a bounded in-memory window, which
+   * is documented rather than assumed away.
+   */
+  hasDelivery?(subscriptionId: NodeId, deliveryKey: string): Promise<boolean>;
+  /** Remembers a delivery identity, keeping at most `window` of them per subscription. */
+  recordDelivery?(subscriptionId: NodeId, deliveryKey: string, window: number): Promise<void>;
   close?(): Promise<void>;
 }
 
@@ -97,6 +110,10 @@ export function createMemoryPersistence(seed: PersistedState[] = []): Persistenc
   }
   let revision = seed.reduce((highest, entry) => Math.max(highest, entry.revision), 0);
   const effects = new Map<string, EffectRecord>();
+  // Keyed by subscription; the value is a bounded most-recent-last window of delivery ids.
+  // It lives in the persistence adapter rather than the subscription runtime precisely so
+  // that a restarted authority reading the same adapter still recognizes a redelivery.
+  const seenDeliveries = new Map<string, string[]>();
 
   return {
     async load(): Promise<PersistedState[]> {
@@ -138,6 +155,18 @@ export function createMemoryPersistence(seed: PersistedState[] = []): Persistenc
       if (existing) {
         effects.set(id, { ...existing, ...update });
       }
+    },
+    async hasDelivery(subscriptionId: NodeId, deliveryKey: string): Promise<boolean> {
+      return (seenDeliveries.get(String(subscriptionId)) ?? []).includes(deliveryKey);
+    },
+    async recordDelivery(subscriptionId: NodeId, deliveryKey: string, window: number): Promise<void> {
+      const key = String(subscriptionId);
+      const seen = seenDeliveries.get(key) ?? [];
+      seen.push(deliveryKey);
+      while (seen.length > window) {
+        seen.shift();
+      }
+      seenDeliveries.set(key, seen);
     },
   };
 }

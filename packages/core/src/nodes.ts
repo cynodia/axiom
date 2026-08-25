@@ -289,7 +289,10 @@ export type Operation =
   | NavigateOperation
   | NativeOperation
   | IntegrationQueryOperation
-  | IntegrationEffectOperation;
+  | IntegrationEffectOperation
+  | BlobMetadataOperation
+  | BlobCommitOperation
+  | BlobDeleteOperation;
 
 export type OperationKind = Operation['kind'];
 
@@ -304,6 +307,16 @@ export const OPERATION_KINDS: readonly OperationKind[] = [
   'native',
   'integration-query',
   'integration-effect',
+  'blob-metadata',
+  'blob-commit',
+  'blob-delete',
+];
+
+/** The storage operations, which address a `StorageDef` rather than an integration. */
+export const BLOB_OPERATION_KINDS: readonly OperationKind[] = [
+  'blob-metadata',
+  'blob-commit',
+  'blob-delete',
 ];
 
 /** Every mutation is a set, an insert or a remove against an addressed Location. */
@@ -429,6 +442,58 @@ export interface IntegrationEffectOperation {
   operationId: NodeId;
   arguments?: Record<string, Expression>;
   idempotencyKey?: Expression;
+  succeededEventId?: NodeId;
+  failedEventId?: NodeId;
+}
+
+/**
+ * Reads a stored object's metadata and binds it into scope, exactly as an
+ * `integration-query` binds a query result.
+ *
+ * It is query-like because it is: a finite question with a finite answer, resolved before
+ * the transaction opens, whose result may inform the mutations that follow. It returns the
+ * `BlobRef` — key, media type, size, filename, checksum — and never the bytes. A key that
+ * names nothing, or names a `staged` object, fails the invocation rather than binding a
+ * plausible-looking empty record. Never legal inside `for-each`.
+ */
+export interface BlobMetadataOperation {
+  kind: 'blob-metadata';
+  storageId: NodeId;
+  /** The opaque key. Usually `field(ref(…), BLOB_KEY_FIELD)` of a stored `BlobRef`. */
+  blobKey: Expression;
+  bindAs: NodeId;
+}
+
+/**
+ * Promotes a staged upload to a stored object, post-commit.
+ *
+ * It is effect-like for the reason every effect is: external object storage cannot join an
+ * Axiom transaction, so the promotion is recorded as intent, committed atomically with the
+ * state that references the object, and dispatched only once that state is durable. A
+ * transaction that rolls back dispatches nothing and leaves the upload `staged`, where the
+ * host's sweep reclaims it. Never legal inside `for-each`.
+ */
+export interface BlobCommitOperation {
+  kind: 'blob-commit';
+  storageId: NodeId;
+  blobKey: Expression;
+  succeededEventId?: NodeId;
+  failedEventId?: NodeId;
+}
+
+/**
+ * Removes a stored object, post-commit.
+ *
+ * The inverse asymmetry to `blob-commit`, and just as deliberate: the authoritative state
+ * that stopped referencing the object is committed first, and the external deletion follows.
+ * If the deletion fails, state is still correct and the orphan is visible in
+ * `AxiomServer.blobLog()` — state correctness and external cleanup stay separately
+ * observable rather than being falsely coupled. Never legal inside `for-each`.
+ */
+export interface BlobDeleteOperation {
+  kind: 'blob-delete';
+  storageId: NodeId;
+  blobKey: Expression;
   succeededEventId?: NodeId;
   failedEventId?: NodeId;
 }

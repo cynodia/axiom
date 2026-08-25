@@ -1,6 +1,6 @@
 # Runtime
 
-Axiom 0.8.2-alpha.1. The runtime executes an `ApplicationIR`. It is domain-independent: it
+Axiom 0.9.0-alpha.1. The runtime executes an `ApplicationIR`. It is domain-independent: it
 contains no knowledge of any application.
 
 ## Constructing
@@ -226,6 +226,8 @@ interface RuntimeDiagnostic {
 | `INTEGRATION_TIMEOUT` | An integration query did not answer within its declared `timeoutMs`. | `integration-query` | `operationId` |
 | `INTEGRATION_RESULT_INVALID` | A provider's response did not conform to the operation's declared `resultType`. | `integration-query` | `operationId` |
 | `INTEGRATION_QUERY_FAILED` | An integration query failed for any other reason. Never carries a provider secret. | `integration-query` | `operationId`, `retryable` |
+| `BLOB_STORAGE_UNAVAILABLE` | No host capable of reaching an object store is configured. Only the authoritative runtime ever reaches one. | `blob-metadata` | `storageId` |
+| `BLOB_METADATA_FAILED` | A `blob-metadata` lookup failed: no such key, a still-staged object, or the store refused. The store's own code is in `details.code` rather than replacing the diagnostic code — a provider's vocabulary is not Axiom's. | `blob-metadata` | `storageId`, `code` |
 | `UI_NODE_MISSING` | A child id that is not a UI node in the IR. | render | — |
 | `UNSUPPORTED_UI_NODE` | An unknown UI node kind. | render | — |
 | `PERSISTED_STATE_UNREADABLE` | **Warning.** A stored value could not be parsed; the initial value was used. | startup | — |

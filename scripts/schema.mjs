@@ -17,6 +17,9 @@ const {
   OPERATION_KINDS,
   SERVER_IR_CONTRACTS,
   SERVER_IR_V2_EXPRESSION_KINDS,
+  SERVER_IR_V5_OPERATION_KINDS,
+  SUBSCRIPTION_BACKPRESSURE_POLICIES,
+  SUBSCRIPTION_FAILURE_POLICIES,
 } = core;
 
 /** Operation kinds `axiom.server.v1`/`v2` do not contain — integrations are 0.8/v3 vocabulary. */
@@ -98,6 +101,12 @@ const buildServerIR = (contract) => ({
           integrationOperations: { type: 'object', additionalProperties: ref('IntegrationOperationDef') },
           events: { type: 'array', items: ref('EventDef') },
           triggers: { type: 'array', items: ref('TriggerDef') },
+        }
+      : {}),
+    ...(atLeast(contract, 'axiom.server.v5')
+      ? {
+          subscriptions: { type: 'array', items: ref('SubscriptionDef') },
+          storages: { type: 'array', items: ref('StorageDef') },
         }
       : {}),
   },
@@ -246,6 +255,25 @@ const buildServerIR = (contract) => ({
           resultTarget: location,
           declaredEffects: { type: 'array', items: { type: 'object' } },
         }, ['implementationId']),
+        ...(!atLeast(contract, 'axiom.server.v5')
+          ? []
+          : [
+              variant('blob-metadata', { storageId: id, blobKey: expression, bindAs: id }, [
+                'storageId', 'blobKey', 'bindAs',
+              ]),
+              variant('blob-commit', {
+                storageId: id,
+                blobKey: expression,
+                succeededEventId: id,
+                failedEventId: id,
+              }, ['storageId', 'blobKey']),
+              variant('blob-delete', {
+                storageId: id,
+                blobKey: expression,
+                succeededEventId: id,
+                failedEventId: id,
+              }, ['storageId', 'blobKey']),
+            ]),
         ...(atLeast(contract, 'axiom.server.v3')
           ? [
               variant('integration-query', {
@@ -417,6 +445,59 @@ const buildServerIR = (contract) => ({
             ['id', 'kind', 'actionId', 'when'],
           ),
         }),
+
+    ...(!atLeast(contract, 'axiom.server.v5')
+      ? {}
+      : {
+          SubscriptionDeliveryPolicy: object({
+            maxQueued: { type: 'number', exclusiveMinimum: 0 },
+            backpressure: { enum: [...SUBSCRIPTION_BACKPRESSURE_POLICIES] },
+            deduplicateBy: id,
+            deduplicationWindow: { type: 'number' },
+            maxAttempts: { type: 'number' },
+            onFailure: { enum: [...SUBSCRIPTION_FAILURE_POLICIES] },
+          }),
+          SubscriptionLifecyclePolicy: object({
+            autoStart: { type: 'boolean' },
+            required: { type: 'boolean' },
+            reconnect: ref('RetryPolicy'),
+          }),
+          SubscriptionDef: object(
+            {
+              id,
+              kind: { const: 'subscription' },
+              name: { type: 'string' },
+              metadata: { type: 'object' },
+              integrationId: id,
+              source: {
+                type: 'string',
+                description:
+                  'A semantic source name the adapter maps to a topic, URL, queue or device. ' +
+                  'Never a broker address, a socket or a path.',
+              },
+              arguments: { type: 'object', additionalProperties: expression },
+              eventId: id,
+              lifecycle: ref('SubscriptionLifecyclePolicy'),
+              delivery: ref('SubscriptionDeliveryPolicy'),
+            },
+            ['id', 'kind', 'integrationId', 'eventId'],
+          ),
+          StorageDef: object(
+            {
+              id,
+              kind: { const: 'storage' },
+              name: { type: 'string' },
+              metadata: { type: 'object' },
+              blobEntityId: id,
+              readAuthorization: expression,
+              uploadAuthorization: expression,
+              acceptedMediaTypes: { type: 'array', items: { type: 'string' } },
+              maxSizeBytes: { type: 'number' },
+              retry: ref('RetryPolicy'),
+            },
+            ['id', 'kind', 'blobEntityId'],
+          ),
+        }),
   },
 });
 
@@ -432,9 +513,12 @@ function expressionKindsFor(contract) {
 }
 
 function operationKindsFor(contract) {
-  return atLeast(contract, 'axiom.server.v3')
-    ? [...OPERATION_KINDS]
-    : OPERATION_KINDS.filter((kind) => !SERVER_IR_V3_OPERATION_KINDS.includes(kind));
+  return OPERATION_KINDS.filter((kind) => {
+    if (!atLeast(contract, 'axiom.server.v3') && SERVER_IR_V3_OPERATION_KINDS.includes(kind)) {
+      return false;
+    }
+    return atLeast(contract, 'axiom.server.v5') || !SERVER_IR_V5_OPERATION_KINDS.includes(kind);
+  });
 }
 
 const PROTOCOL_VERSION = 'axiom.protocol.v1';

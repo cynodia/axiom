@@ -38,7 +38,16 @@ export interface ServerEvent {
     | 'effect-succeeded'
     | 'effect-failed'
     | 'event-received'
-    | 'event-dispatched';
+    | 'event-dispatched'
+    | 'subscription-starting'
+    | 'subscription-active'
+    | 'subscription-reconnecting'
+    | 'subscription-failed'
+    | 'subscription-stopped'
+    | 'subscription-delivery'
+    | 'subscription-delivery-rejected'
+    | 'subscription-delivery-dropped'
+    | 'subscription-delivery-duplicate';
   actionId?: NodeId;
   /** The principal's identity field, when the graph declares one. Never the whole record. */
   principal?: LiteralValue;
@@ -58,6 +67,8 @@ export interface ServerEvent {
   attempt?: number;
   /** Set for `event-*` events. */
   eventId?: NodeId;
+  /** Set for `subscription-*` events. */
+  subscriptionId?: NodeId;
 }
 
 /**

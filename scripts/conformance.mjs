@@ -16,9 +16,10 @@ const compiler = await import(path.join(repoRoot, 'packages/compiler/dist/index.
 const {
   ApplicationGraph, PRINCIPAL, binary, call, collectionType, effectOutcomeEntity, entityType,
   field, fieldId, fieldLocation, find, forEach, identitySelector, itemLocation, literal,
-  nodeId, object, primitiveType, ref, stateLocation, validateGraph,
+  nodeId, object, optionalType, primitiveType, ref, some, stateLocation, validateGraph,
   EFFECT_ID_FIELD, EFFECT_INTEGRATION_ID_FIELD, EFFECT_MESSAGE_FIELD, EFFECT_OPERATION_ID_FIELD,
   EFFECT_RESULT_FIELD,
+  BLOB_KEY_FIELD, blobRefEntity, itemFieldLocation,
 } = core;
 
 const E_USER = nodeId('entity_user');
@@ -720,6 +721,556 @@ const integrationFixtures = [
   },
 ];
 
+// ============================================================ 0.9: external I/O
+//
+// A dedicated graph for the subscription and blob fixtures. It is deliberately separate
+// from the integration graph above: that one carries a 1000ms poll trigger, and a fixture
+// advancing virtual time to drive a reconnect would fire it incidentally.
+
+const IO_E_USER = nodeId('entity_io_user');
+const IO_F_USER_ID = fieldId('field_io_user_id');
+const IO_F_USER_ROLE = fieldId('field_io_user_role');
+const IO_E_DEVICE = nodeId('entity_io_device');
+const IO_F_DEVICE_ID = fieldId('field_io_device_id');
+const IO_F_DEVICE_STATUS = fieldId('field_io_device_status');
+const IO_F_DEVICE_LOG = fieldId('field_io_device_log');
+const IO_E_BLOB = nodeId('entity_io_blob');
+const IO_E_CHANGE = nodeId('entity_io_change');
+const IO_F_CHANGE_DEVICE = fieldId('field_io_change_device');
+const IO_F_CHANGE_STATUS = fieldId('field_io_change_status');
+const IO_F_CHANGE_DELIVERY = fieldId('field_io_change_delivery');
+
+const IO_STATE_DEVICES = nodeId('state_io_devices');
+const IO_INTEGRATION = nodeId('integration_io_devices');
+const IO_STORAGE = nodeId('storage_io_logs');
+const IO_EVENT_STATUS = nodeId('event_io_status');
+const IO_SUBSCRIPTION = nodeId('subscription_io_status');
+const IO_ACTION_APPLY = nodeId('action_io_apply_status');
+const IO_PARAM_DEVICE = nodeId('param_io_device');
+const IO_PARAM_STATUS = nodeId('param_io_status');
+const IO_TRIGGER_STATUS = nodeId('trigger_io_status');
+const IO_ACTION_ATTACH = nodeId('action_io_attach');
+const IO_PARAM_ATTACH_DEVICE = nodeId('param_io_attach_device');
+const IO_PARAM_ATTACH_BLOB = nodeId('param_io_attach_blob');
+const IO_ACTION_DETACH = nodeId('action_io_detach');
+const IO_PARAM_DETACH_DEVICE = nodeId('param_io_detach_device');
+const IO_SCOPE_METADATA = nodeId('scope_io_metadata');
+const IO_SCOPE_DEVICE = nodeId('scope_io_device');
+const IO_SCOPE_REF = nodeId('scope_io_ref');
+const IO_CONSTRAINT_STATUS = nodeId('constraint_io_status');
+
+function buildIoGraph() {
+  const graph = new ApplicationGraph('external-io', 'External IO', '0.9.0');
+  graph.setPrincipalEntity(IO_E_USER);
+
+  graph.addNode({ id: IO_E_USER, kind: 'entity', identityFieldId: IO_F_USER_ID, fields: [
+    { id: IO_F_USER_ID, valueType: primitiveType('string'), required: true },
+    { id: IO_F_USER_ROLE, valueType: primitiveType('string'), required: true }] });
+  graph.addNode(blobRefEntity(IO_E_BLOB));
+  graph.addNode({ id: IO_E_DEVICE, kind: 'entity', identityFieldId: IO_F_DEVICE_ID, fields: [
+    { id: IO_F_DEVICE_ID, valueType: primitiveType('string'), required: true },
+    { id: IO_F_DEVICE_STATUS, valueType: primitiveType('string'), required: true },
+    { id: IO_F_DEVICE_LOG, valueType: optionalType(entityType(IO_E_BLOB)) }] });
+  graph.addNode({ id: IO_E_CHANGE, kind: 'entity', fields: [
+    { id: IO_F_CHANGE_DEVICE, valueType: primitiveType('string'), required: true },
+    { id: IO_F_CHANGE_STATUS, valueType: primitiveType('string'), required: true },
+    { id: IO_F_CHANGE_DELIVERY, valueType: primitiveType('string') }] });
+
+  graph.addNode({ id: IO_STATE_DEVICES, kind: 'state', name: 'devices', authority: 'server',
+    valueType: collectionType(entityType(IO_E_DEVICE)),
+    initialValue: [{ [IO_F_DEVICE_ID]: 'd1', [IO_F_DEVICE_STATUS]: 'unknown', [IO_F_DEVICE_LOG]: null }] });
+
+  graph.addNode({ id: IO_INTEGRATION, kind: 'integration', name: 'Devices' });
+  graph.addNode({ id: IO_EVENT_STATUS, kind: 'event', payloadType: entityType(IO_E_CHANGE) });
+
+  // A status the graph refuses. It is what makes the poison-delivery fixture a *semantic*
+  // failure — the payload conforms, the action runs, and the invariant rejects the result.
+  graph.addNode({ id: IO_CONSTRAINT_STATUS, kind: 'constraint', entityId: IO_E_DEVICE,
+    message: 'Device status must be unknown, online or offline.',
+    expression: call('one-of', field(ref(IO_E_DEVICE), IO_F_DEVICE_STATUS),
+      literal('unknown'), literal('online'), literal('offline')) });
+
+  graph.addNode({ id: IO_ACTION_APPLY, kind: 'action', name: 'applyStatus',
+    invocation: { allowedSources: ['system'] },
+    parameters: [
+      { id: IO_PARAM_DEVICE, valueType: primitiveType('string'), required: true },
+      { id: IO_PARAM_STATUS, valueType: primitiveType('string'), required: true }],
+    operations: [
+      { kind: 'set',
+        target: itemFieldLocation(IO_STATE_DEVICES, IO_F_DEVICE_ID, ref(IO_PARAM_DEVICE), IO_F_DEVICE_STATUS),
+        value: ref(IO_PARAM_STATUS) }] });
+  graph.addNode({ id: IO_TRIGGER_STATUS, kind: 'trigger', actionId: IO_ACTION_APPLY,
+    when: { kind: 'event', eventId: IO_EVENT_STATUS },
+    arguments: {
+      [IO_PARAM_DEVICE]: field(ref(IO_TRIGGER_STATUS), IO_F_CHANGE_DEVICE),
+      [IO_PARAM_STATUS]: field(ref(IO_TRIGGER_STATUS), IO_F_CHANGE_STATUS) } });
+
+  graph.addNode({ id: IO_SUBSCRIPTION, kind: 'subscription', name: 'live status',
+    integrationId: IO_INTEGRATION, source: 'device-status', eventId: IO_EVENT_STATUS,
+    lifecycle: { reconnect: { policy: 'fixed', maxAttempts: 3, delayMs: 100 } },
+    delivery: { deduplicateBy: IO_F_CHANGE_DELIVERY, maxQueued: 8, backpressure: 'block' } });
+
+  graph.addNode({ id: IO_STORAGE, kind: 'storage', name: 'Logs', blobEntityId: IO_E_BLOB,
+    // Referenced-by-a-device, so possession of a key is never permission on its own.
+    readAuthorization: some(ref(IO_STATE_DEVICES), IO_SCOPE_REF,
+      binary('eq', field(field(ref(IO_SCOPE_REF), IO_F_DEVICE_LOG), BLOB_KEY_FIELD),
+        field(ref(IO_STORAGE), BLOB_KEY_FIELD))),
+    uploadAuthorization: binary('eq', field(ref(PRINCIPAL), IO_F_USER_ROLE), literal('operator')) });
+
+  graph.addNode({ id: IO_ACTION_ATTACH, kind: 'action', name: 'attachLog',
+    authorization: binary('eq', field(ref(PRINCIPAL), IO_F_USER_ROLE), literal('operator')),
+    parameters: [
+      { id: IO_PARAM_ATTACH_DEVICE, valueType: primitiveType('string'), required: true },
+      { id: IO_PARAM_ATTACH_BLOB, valueType: entityType(IO_E_BLOB), required: true }],
+    operations: [
+      { kind: 'set',
+        target: itemFieldLocation(IO_STATE_DEVICES, IO_F_DEVICE_ID, ref(IO_PARAM_ATTACH_DEVICE), IO_F_DEVICE_LOG),
+        value: ref(IO_PARAM_ATTACH_BLOB) },
+      { kind: 'blob-commit', storageId: IO_STORAGE,
+        blobKey: field(ref(IO_PARAM_ATTACH_BLOB), BLOB_KEY_FIELD) }] });
+
+  graph.addNode({ id: IO_ACTION_DETACH, kind: 'action', name: 'detachLog',
+    authorization: binary('eq', field(ref(PRINCIPAL), IO_F_USER_ROLE), literal('operator')),
+    parameters: [{ id: IO_PARAM_DETACH_DEVICE, valueType: primitiveType('string'), required: true }],
+    operations: [
+      { kind: 'blob-metadata', storageId: IO_STORAGE, bindAs: IO_SCOPE_METADATA,
+        blobKey: field(field(find(ref(IO_STATE_DEVICES), IO_SCOPE_DEVICE,
+          binary('eq', field(ref(IO_SCOPE_DEVICE), IO_F_DEVICE_ID), ref(IO_PARAM_DETACH_DEVICE))),
+          IO_F_DEVICE_LOG), BLOB_KEY_FIELD) },
+      { kind: 'set',
+        target: itemFieldLocation(IO_STATE_DEVICES, IO_F_DEVICE_ID, ref(IO_PARAM_DETACH_DEVICE), IO_F_DEVICE_LOG),
+        value: literal(null) },
+      { kind: 'blob-delete', storageId: IO_STORAGE,
+        blobKey: field(ref(IO_SCOPE_METADATA), BLOB_KEY_FIELD) }] });
+
+  return graph;
+}
+
+const ioGraph = buildIoGraph();
+const ioValidation = validateGraph(ioGraph);
+if (!ioValidation.valid) {
+  console.error(ioValidation.errors.map((e) => `[${e.code}] ${e.message}`).join('\n'));
+  process.exit(1);
+}
+const ioServerIR = compiler.compileToServerIR(ioGraph);
+
+const ioPrincipals = {
+  operator: { [IO_F_USER_ID]: 'op-1', [IO_F_USER_ROLE]: 'operator' },
+  viewer: { [IO_F_USER_ID]: 'v-1', [IO_F_USER_ROLE]: 'viewer' },
+};
+const ioDevice = (status, log = null) => [{ [IO_F_DEVICE_ID]: 'd1', [IO_F_DEVICE_STATUS]: status, [IO_F_DEVICE_LOG]: log }];
+const ioChange = (status, delivery) => ({
+  [IO_F_CHANGE_DEVICE]: 'd1',
+  [IO_F_CHANGE_STATUS]: status,
+  ...(delivery === undefined ? {} : { [IO_F_CHANGE_DELIVERY]: delivery }),
+});
+const STORED_LOG = {
+  [BLOB_KEY_FIELD]: 'log-1',
+  field_blob_media_type: 'text/plain',
+  field_blob_size: 8,
+  field_blob_filename: 'd1.log',
+  field_blob_checksum: '5f2e1a7f',
+};
+
+const externalIoFixtures = [
+  {
+    name: 'subscription-becomes-active-at-startup',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['subscriptions', 'lifecycle'],
+    description:
+      'Startup activates every auto-start subscription, with no application code calling start(). The lifecycle state is observable before any delivery arrives.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    steps: [
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION,
+        expect: { state: 'active', received: 0, applied: 0 } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown') },
+  },
+  {
+    name: 'subscription-delivery-applies',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['subscriptions', 'events', 'invocation source'],
+    description:
+      'An external delivery is validated against the EventDef payload type, dispatched through the ordinary EventDef → TriggerDef → ActionDef pipeline, and commits under the system principal.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: {
+      [IO_SUBSCRIPTION]: { entries: [{ kind: 'deliver', afterMs: 1, payload: ioChange('online', 'm-1') }] },
+    },
+    steps: [
+      { kind: 'advance', ms: 5 },
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION, expect: { received: 1, applied: 1, rejected: 0 } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('online') },
+  },
+  {
+    name: 'subscription-sequential-delivery',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['subscriptions', 'ordering'],
+    description:
+      'Deliveries of one subscription are dispatched one at a time in accepted order, each in its own transaction — so the last delivery is the last applied.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: {
+      [IO_SUBSCRIPTION]: {
+        entries: [
+          { kind: 'deliver', afterMs: 1, payload: ioChange('online', 'm-1') },
+          { kind: 'deliver', afterMs: 2, payload: ioChange('offline', 'm-2') },
+        ],
+      },
+    },
+    steps: [
+      { kind: 'advance', ms: 5 },
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION, expect: { applied: 2 } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('offline') },
+  },
+  {
+    name: 'subscription-duplicate-delivery',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['subscriptions', 'deduplication'],
+    description:
+      'The same external delivery identity presented twice mutates state once. The second carries a different status, so only deduplication — not ordering — can produce this result.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: {
+      [IO_SUBSCRIPTION]: {
+        entries: [
+          { kind: 'deliver', afterMs: 1, payload: ioChange('online', 'm-7') },
+          { kind: 'deliver', afterMs: 2, payload: ioChange('offline', 'm-7') },
+        ],
+      },
+    },
+    steps: [
+      { kind: 'advance', ms: 5 },
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION, expect: { applied: 1, rejected: 1 } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('online') },
+  },
+  {
+    name: 'subscription-invalid-payload',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['subscriptions', 'events'],
+    description:
+      'A delivery whose payload does not conform to the EventDef is refused before any action runs, and the valid delivery that follows still applies.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: {
+      [IO_SUBSCRIPTION]: {
+        entries: [
+          { kind: 'deliver', afterMs: 1, payload: 'not-a-record' },
+          { kind: 'deliver', afterMs: 2, payload: ioChange('online', 'm-2') },
+        ],
+      },
+    },
+    steps: [
+      { kind: 'advance', ms: 5 },
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION, expect: { applied: 1, rejected: 1 } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('online') },
+  },
+  {
+    name: 'subscription-poison-delivery',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['subscriptions', 'constraints', 'rollback'],
+    description:
+      'A conforming payload whose action violates an invariant rolls that transaction back and is counted as failed, not applied — and the subscription keeps running under the default report policy.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: {
+      [IO_SUBSCRIPTION]: { entries: [{ kind: 'deliver', afterMs: 1, payload: ioChange('melted', 'm-1') }] },
+    },
+    steps: [
+      { kind: 'advance', ms: 5 },
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION, expect: { state: 'active', applied: 0, failed: 1 } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown') },
+  },
+  {
+    name: 'subscription-reconnects-after-transport-loss',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['subscriptions', 'lifecycle', 'reconnect'],
+    description:
+      'A lost transport moves the subscription to reconnecting and back to active on the graph-declared fixed 100ms policy — reconnect policy is the runtime’s, the adapter only reports the loss.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: {
+      [IO_SUBSCRIPTION]: {
+        entries: [
+          { kind: 'disconnect', afterMs: 1, attempt: 1 },
+          { kind: 'deliver', afterMs: 5, attempt: 2, payload: ioChange('online', 'm-after') },
+        ],
+      },
+    },
+    steps: [
+      { kind: 'advance', ms: 2 },
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION, expect: { state: 'reconnecting' } },
+      { kind: 'advance', ms: 100 },
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION, expect: { state: 'active', attempts: 2 } },
+      { kind: 'advance', ms: 10 },
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION, expect: { applied: 1 } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('online') },
+  },
+  {
+    name: 'subscription-permanent-failure-leaves-application-running',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['subscriptions', 'lifecycle', 'startup'],
+    description:
+      'A source that never connects exhausts the declared reconnect budget and settles in failed. Startup succeeded and the rest of the application is unaffected, because the subscription is not declared required.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: {
+      [IO_SUBSCRIPTION]: {
+        entries: [
+          { kind: 'connect-failure', message: 'no route to broker' },
+          { kind: 'connect-failure', message: 'no route to broker' },
+          { kind: 'connect-failure', message: 'no route to broker' },
+        ],
+      },
+    },
+    steps: [
+      { kind: 'advance', ms: 100 },
+      { kind: 'advance', ms: 100 },
+      { kind: 'advance', ms: 100 },
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION, expect: { state: 'failed' } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown') },
+  },
+  {
+    name: 'subscription-delivery-after-shutdown',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['subscriptions', 'shutdown'],
+    description:
+      'A delivery scheduled for after the fixture ends never reaches application state: the runner stops the server, and a stopped subscription accepts nothing. The final state is the one the pre-shutdown delivery produced.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: {
+      [IO_SUBSCRIPTION]: {
+        entries: [
+          { kind: 'deliver', afterMs: 1, payload: ioChange('online', 'm-before') },
+          { kind: 'deliver', afterMs: 100000, payload: ioChange('offline', 'm-after') },
+        ],
+      },
+    },
+    steps: [
+      { kind: 'advance', ms: 5 },
+      { kind: 'expect-subscription', subscriptionId: IO_SUBSCRIPTION, expect: { applied: 1 } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('online') },
+  },
+  {
+    name: 'subscription-client-cannot-forge-a-delivery',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['subscriptions', 'invocation source', 'authorization'],
+    description:
+      'A client that knows the subscription-only action id cannot invoke it: invocation.allowedSources refuses a client-sourced call before identity is even consulted, so no delivery can be forged.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    steps: [
+      { kind: 'invoke', actionId: IO_ACTION_APPLY, credential: 'operator',
+        arguments: { [IO_PARAM_DEVICE]: 'd1', [IO_PARAM_STATUS]: 'online' },
+        expect: { ok: false, diagnosticCodes: ['INVOCATION_SOURCE_NOT_ALLOWED'], changedStates: [] } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown') },
+  },
+
+  // ------------------------------------------------------------------------ blobs
+
+  {
+    name: 'blob-upload-and-commit',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['blob storage', 'authorization'],
+    description:
+      'An authorized upload is staged and returns the public BlobRef; the action that stores the reference also commits the object, and the commit dispatches only after the transaction commits.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    blobStores: { [IO_STORAGE]: {} },
+    steps: [
+      { kind: 'upload-blob', storageId: IO_STORAGE, credential: 'operator', mediaType: 'text/plain',
+        filename: 'd1.log', text: 'boot ok\n', expectKey: 'blob-1', expect: { ok: true } },
+      { kind: 'expect-blob', storageId: IO_STORAGE, blobKey: 'blob-1', expect: { present: true, lifecycle: 'staged' } },
+      { kind: 'invoke', actionId: IO_ACTION_ATTACH, credential: 'operator',
+        arguments: { [IO_PARAM_ATTACH_DEVICE]: 'd1', [IO_PARAM_ATTACH_BLOB]: {
+          [BLOB_KEY_FIELD]: 'blob-1', field_blob_media_type: 'text/plain', field_blob_size: 8,
+          field_blob_filename: 'd1.log' } },
+        expect: { ok: true } },
+      { kind: 'expect-blob', storageId: IO_STORAGE, blobKey: 'blob-1', expect: { present: true, lifecycle: 'stored' } },
+    ],
+    expectedState: {
+      [IO_STATE_DEVICES]: ioDevice('unknown', {
+        [BLOB_KEY_FIELD]: 'blob-1', field_blob_media_type: 'text/plain', field_blob_size: 8,
+        field_blob_filename: 'd1.log' }),
+    },
+  },
+  {
+    name: 'blob-upload-unauthorized',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['blob storage', 'authorization'],
+    description:
+      'A caller the store’s uploadAuthorization does not admit is refused before a byte is stored, and an anonymous caller likewise.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    blobStores: { [IO_STORAGE]: {} },
+    steps: [
+      { kind: 'upload-blob', storageId: IO_STORAGE, credential: 'viewer', mediaType: 'text/plain',
+        text: 'nope', expect: { ok: false, diagnosticCodes: ['BLOB_ACCESS_DENIED'] } },
+      { kind: 'upload-blob', storageId: IO_STORAGE, mediaType: 'text/plain',
+        text: 'nope', expect: { ok: false, diagnosticCodes: ['BLOB_ACCESS_DENIED'] } },
+      { kind: 'expect-blob', storageId: IO_STORAGE, blobKey: 'blob-1', expect: { present: false } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown') },
+  },
+  {
+    name: 'blob-authorized-read',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['blob storage', 'authorization'],
+    description:
+      'A stored object referenced by a device is readable, because the store’s readAuthorization is a rule over authoritative state rather than a route guard.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown', STORED_LOG), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    blobStores: { [IO_STORAGE]: { objects: [{ key: 'log-1', mediaType: 'text/plain', filename: 'd1.log', text: 'boot ok\n' }] } },
+    steps: [
+      { kind: 'read-blob', storageId: IO_STORAGE, blobKey: 'log-1', credential: 'viewer', expect: { ok: true } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown', STORED_LOG) },
+  },
+  {
+    name: 'blob-unauthorized-read-and-guessed-key',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['blob storage', 'authorization'],
+    description:
+      'Possession of a key is not permission: a real, stored object that nothing references is refused, and a key that names nothing is refused identically — so the endpoint is not an oracle for enumerating keys.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    blobStores: { [IO_STORAGE]: { objects: [{ key: 'log-1', mediaType: 'text/plain', text: 'secret\n' }] } },
+    steps: [
+      { kind: 'read-blob', storageId: IO_STORAGE, blobKey: 'log-1', credential: 'operator',
+        expect: { ok: false, diagnosticCodes: ['BLOB_ACCESS_DENIED'] } },
+      { kind: 'read-blob', storageId: IO_STORAGE, blobKey: 'log-guessed', credential: 'operator',
+        expect: { ok: false, diagnosticCodes: ['BLOB_ACCESS_DENIED'] } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown') },
+  },
+  {
+    name: 'blob-metadata-lookup',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['blob storage', 'integration query'],
+    description:
+      'A blob-metadata operation resolves before the transaction opens, binds the BlobRef into scope, and the deletion that follows addresses the object it named.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown', STORED_LOG), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    blobStores: { [IO_STORAGE]: { objects: [{ key: 'log-1', mediaType: 'text/plain', filename: 'd1.log', text: 'boot ok\n' }] } },
+    steps: [
+      { kind: 'invoke', actionId: IO_ACTION_DETACH, credential: 'operator',
+        arguments: { [IO_PARAM_DETACH_DEVICE]: 'd1' }, expect: { ok: true } },
+      { kind: 'expect-blob', storageId: IO_STORAGE, blobKey: 'log-1', expect: { present: false } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown') },
+  },
+  {
+    name: 'blob-metadata-missing-refuses-the-action',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['blob storage', 'rollback'],
+    description:
+      'A blob-metadata lookup for a key the store does not hold fails the whole invocation rather than binding a plausible empty record — so nothing is mutated on the strength of an object that is not there.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown', STORED_LOG), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    blobStores: { [IO_STORAGE]: {} },
+    steps: [
+      { kind: 'invoke', actionId: IO_ACTION_DETACH, credential: 'operator',
+        arguments: { [IO_PARAM_DETACH_DEVICE]: 'd1' },
+        expect: { ok: false, diagnosticCodes: ['BLOB_METADATA_FAILED'], changedStates: [] } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown', STORED_LOG) },
+  },
+  {
+    name: 'blob-commit-not-dispatched-when-the-transaction-is-refused',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['blob storage', 'rollback', 'authorization'],
+    description:
+      'A refused transaction dispatches no storage effect. The uploaded object stays staged — a sweepable orphan — rather than becoming a committed object nothing references.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown'), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    blobStores: { [IO_STORAGE]: {} },
+    steps: [
+      { kind: 'upload-blob', storageId: IO_STORAGE, credential: 'operator', mediaType: 'text/plain',
+        filename: 'd1.log', text: 'boot ok\n', expectKey: 'blob-1', expect: { ok: true } },
+      { kind: 'invoke', actionId: IO_ACTION_ATTACH, credential: 'viewer',
+        arguments: { [IO_PARAM_ATTACH_DEVICE]: 'd1', [IO_PARAM_ATTACH_BLOB]: {
+          [BLOB_KEY_FIELD]: 'blob-1', field_blob_media_type: 'text/plain', field_blob_size: 8 } },
+        expect: { ok: false, diagnosticCodes: ['AUTHORIZATION_DENIED'], changedStates: [] } },
+      { kind: 'expect-blob', storageId: IO_STORAGE, blobKey: 'blob-1', expect: { present: true, lifecycle: 'staged' } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown') },
+  },
+  {
+    name: 'blob-delete-failure-leaves-state-correct',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['blob storage', 'effects'],
+    description:
+      'A store that refuses the deletion does not undo the committed state change: the device is unattached and correct, and the object remains as an observable orphan. State correctness and external cleanup are separately observable, never falsely coupled.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown', STORED_LOG), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    blobStores: {
+      [IO_STORAGE]: {
+        objects: [{ key: 'log-1', mediaType: 'text/plain', filename: 'd1.log', text: 'boot ok\n' }],
+        failOn: { delete: { code: 'STORE_UNAVAILABLE', message: 'the store is down', retryable: false } },
+      },
+    },
+    steps: [
+      { kind: 'invoke', actionId: IO_ACTION_DETACH, credential: 'operator',
+        arguments: { [IO_PARAM_DETACH_DEVICE]: 'd1' }, expect: { ok: true } },
+      { kind: 'expect-blob', storageId: IO_STORAGE, blobKey: 'log-1', expect: { present: true } },
+    ],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown') },
+  },
+  {
+    name: 'blob-restart-preserves-references',
+    conformance: 'axiom.conformance.v3',
+    serverIR: ioServerIR,
+    principals: ioPrincipals,
+    covers: ['blob storage', 'persistence'],
+    description:
+      'A BlobRef is ordinary authoritative state: it survives a restart exactly as any other committed value does, and nothing about the object had to be reloaded to make that true.',
+    initialState: [{ stateId: IO_STATE_DEVICES, value: ioDevice('unknown', STORED_LOG), revision: 1 }],
+    externalSubscriptions: { [IO_SUBSCRIPTION]: { entries: [] } },
+    blobStores: { [IO_STORAGE]: { objects: [{ key: 'log-1', mediaType: 'text/plain', filename: 'd1.log', text: 'boot ok\n' }] } },
+    restartAndReassert: true,
+    invocations: [],
+    expectedState: { [IO_STATE_DEVICES]: ioDevice('unknown', STORED_LOG) },
+  },
+];
+
 const directory = path.join(repoRoot, 'packages/server/conformance');
 await mkdir(directory, { recursive: true });
 for (const existing of await readdir(directory).catch(() => [])) {
@@ -730,7 +1281,7 @@ for (const existing of await readdir(directory).catch(() => [])) {
 
 const written = [];
 const manifestEntries = [];
-for (const fixture of [...fixtures, ...integrationFixtures]) {
+for (const fixture of [...fixtures, ...integrationFixtures, ...externalIoFixtures]) {
   const document = {
     conformance: fixture.conformance ?? 'axiom.conformance.v1',
     name: fixture.name,
@@ -743,6 +1294,8 @@ for (const fixture of [...fixtures, ...integrationFixtures]) {
     ...(fixture.restartAndReassert ? { restartAndReassert: true } : {}),
     ...(fixture.invocations ? { invocations: fixture.invocations } : {}),
     ...(fixture.externalAdapters ? { externalAdapters: fixture.externalAdapters } : {}),
+    ...(fixture.externalSubscriptions ? { externalSubscriptions: fixture.externalSubscriptions } : {}),
+    ...(fixture.blobStores ? { blobStores: fixture.blobStores } : {}),
     ...(fixture.steps ? { steps: fixture.steps } : {}),
     ...(fixture.expect ? { expect: fixture.expect } : {}),
     expectedState: fixture.expectedState,
@@ -787,7 +1340,7 @@ const manifest = {
     '"conformance" above is the fixture-FORMAT version (axiom.conformance.v1/v2); each ' +
     'fixture entry\'s own "contract" is the Server IR contract THAT fixture requires — the ' +
     'two are independent axes and neither implies the other.',
-  areas: [...new Set([...fixtures, ...integrationFixtures].flatMap((fixture) => fixture.covers))].sort(),
+  areas: [...new Set([...fixtures, ...integrationFixtures, ...externalIoFixtures].flatMap((fixture) => fixture.covers))].sort(),
   fixtures: manifestEntries,
 };
 await writeFile(

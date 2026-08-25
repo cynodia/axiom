@@ -236,6 +236,13 @@ test('every validation code is documented, and every documented code exists', ()
     'EFFECT_IDEMPOTENCY_KEY_FIELD', 'EFFECT_CORRELATION_ID_FIELD', 'EFFECT_RESULT_FIELD',
     // Trigger/renderer capability constants (spec 8.2): exported constants, not codes.
     'BROWSER_TRIGGER_CAPABILITIES',
+    // Subscription and blob vocabulary (0.9): exported constants, not codes.
+    'BLOB_KEY_FIELD', 'BLOB_MEDIA_TYPE_FIELD', 'BLOB_SIZE_FIELD', 'BLOB_FILENAME_FIELD',
+    'BLOB_CHECKSUM_FIELD', 'BLOB_REF_FIELDS', 'BLOB_LIFECYCLES',
+    'SUBSCRIPTION_LIFECYCLE_STATES', 'SUBSCRIPTION_BACKPRESSURE_POLICIES',
+    'SUBSCRIPTION_FAILURE_POLICIES', 'LOSSY_BACKPRESSURE_POLICIES',
+    'DEFAULT_SUBSCRIPTION_QUEUE_LIMIT', 'DEFAULT_SUBSCRIPTION_DEDUPLICATION_WINDOW',
+    'DEFAULT_SUBSCRIPTION_RECONNECT', 'BLOB_OPERATION_KINDS', 'SERVER_IR_V5_OPERATION_KINDS',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });

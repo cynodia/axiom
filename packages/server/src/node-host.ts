@@ -9,6 +9,8 @@ import type { PersistenceAdapter } from './persistence.js';
 import { PROTOCOL_VERSION } from './protocol.js';
 import type { NodeId, ServerIR } from './deps.js';
 import type { IntegrationAdapter } from './integration.js';
+import type { SubscriptionAdapter } from './subscription.js';
+import type { BlobStorageAdapter } from './blobs.js';
 
 /**
  * What a webhook handler gets to verify and decode a delivery: the raw, unparsed request —
@@ -65,6 +67,25 @@ export interface NodeHostOptions {
    * events — the graph never mentions it.
    */
   webhooks?: Record<string, WebhookConfig>;
+  /**
+   * The blob transport's base path. `POST <base>/<storageId>` uploads and returns a
+   * `BlobRef`; `GET <base>/<storageId>/<key>` downloads. Defaults to `/axiom/blob`.
+   *
+   * It is one endpoint pair for every Axiom application there will ever be, exactly as
+   * `POST /axiom` is: an application declares no upload route, no download route and no
+   * handler (spec 0.9 §50, §51). Authorization is the store's declared rule, evaluated by
+   * the authority before a byte moves — never a check written here.
+   */
+  blobPath?: string;
+  /** One store per `StorageDef`, so the blob transport can move bytes. */
+  blobStores?: Record<NodeId, BlobStorageAdapter>;
+  /**
+   * Resolves the credential a blob request carries to a principal, so the store's declared
+   * access rule is evaluated against a real caller. The semantic endpoint authenticates
+   * through `ServerHost.authenticate`; this is the same function, supplied here because the
+   * blob transport does not go through a `ServerRequest`.
+   */
+  authenticate?: (credential: string | null) => PrincipalRecord | null | Promise<PrincipalRecord | null>;
 }
 
 export interface RunningNodeHost {
@@ -112,8 +133,27 @@ async function readRawBody(request: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/** Splits `/axiom/blob/<storageId>[/<key>]` into its two semantic parts. */
+function parseBlobPath(target: string, base: string): { storageId: string; key?: string } | undefined {
+  if (!target.startsWith(`${base}/`)) {
+    return undefined;
+  }
+  const rest = target.slice(base.length + 1).split('/').filter(Boolean).map(decodeURIComponent);
+  const storageId = rest[0];
+  if (storageId === undefined) {
+    return undefined;
+  }
+  return rest.length > 1 ? { storageId, key: rest.slice(1).join('/') } : { storageId };
+}
+
+function blobFailure(response: HttpServerResponse, status: number, diagnostic: unknown): void {
+  response.writeHead(status, { 'content-type': 'application/json' });
+  response.end(JSON.stringify({ kind: 'error', protocol: PROTOCOL_VERSION, diagnostics: [diagnostic] }));
+}
+
 export async function serveOverHttp(options: NodeHostOptions): Promise<RunningNodeHost> {
   const path = options.path ?? '/axiom';
+  const blobPath = options.blobPath ?? '/axiom/blob';
   await options.server.start();
 
   // One bounded, most-recent-first window of delivery ids per webhook route.
@@ -193,6 +233,71 @@ export async function serveOverHttp(options: NodeHostOptions): Promise<RunningNo
           );
         }
         return;
+      }
+      // The blob transport: two endpoints, no application involvement, and every access
+      // decision made by the authority against the store's declared rule.
+      const blob = parseBlobPath(target, blobPath);
+      if (blob && (request.method === 'GET' || request.method === 'POST')) {
+        const credential = readCredential(request);
+        const principal = (await options.authenticate?.(credential)) ?? null;
+        try {
+          if (request.method === 'GET' && blob.key !== undefined) {
+            const allowed = await options.server.authorizeBlobRead(
+              blob.storageId as NodeId,
+              blob.key,
+              principal,
+            );
+            if (!allowed.ok) {
+              blobFailure(response, 403, allowed.diagnostic);
+              return;
+            }
+            const store = options.blobStores?.[blob.storageId as NodeId];
+            const bytes = await store?.read(blob.key);
+            if (!bytes?.ok) {
+              blobFailure(response, 404, {
+                code: 'BLOB_NOT_FOUND',
+                message: `No stored object ${blob.key}`,
+                severity: 'error',
+              });
+              return;
+            }
+            response.writeHead(200, {
+              'content-type': allowed.blob.mediaType,
+              'content-length': String(bytes.value.data.byteLength),
+              // A download the browser saves rather than renders, named as the author
+              // stored it. The key is never offered as a filename: it is opaque.
+              ...(allowed.blob.filename
+                ? { 'content-disposition': `attachment; filename="${allowed.blob.filename.replace(/"/g, '')}"` }
+                : {}),
+            });
+            response.end(Buffer.from(bytes.value.data));
+            return;
+          }
+          if (request.method === 'POST' && blob.key === undefined) {
+            const rawBody = await readRawBody(request);
+            const staged = await options.server.stageBlob(blob.storageId as NodeId, principal, {
+              data: new Uint8Array(rawBody),
+              mediaType: String(request.headers['content-type'] ?? 'application/octet-stream'),
+              ...(typeof request.headers['x-axiom-filename'] === 'string'
+                ? { filename: request.headers['x-axiom-filename'] }
+                : {}),
+            });
+            if (!staged.ok) {
+              blobFailure(response, 403, staged.diagnostic);
+              return;
+            }
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ kind: 'blob', protocol: PROTOCOL_VERSION, ref: staged.ref }));
+            return;
+          }
+        } catch (error) {
+          blobFailure(response, 400, {
+            code: 'MALFORMED_REQUEST',
+            message: error instanceof Error ? error.message : String(error),
+            severity: 'error',
+          });
+          return;
+        }
       }
       if (request.method !== 'POST' || target !== path) {
         response.writeHead(404, { 'content-type': 'application/json' });
@@ -280,6 +385,21 @@ export interface AxiomApplicationOptions {
    * offers should not force that trade-off.
    */
   webhooks?: Record<string, WebhookConfig>;
+  /** One adapter per integration a `SubscriptionDef` names — required if the IR declares any. */
+  subscriptions?: Record<NodeId, SubscriptionAdapter>;
+  /** One store per `StorageDef` the Server IR declares — required if it declares any. */
+  blobStores?: Record<NodeId, BlobStorageAdapter>;
+  /** The blob transport's base path. Defaults to `/axiom/blob`. */
+  blobPath?: string;
+}
+
+/** The credential a blob request carries, from the same header the semantic endpoint uses. */
+function readCredential(request: IncomingMessage): string | null {
+  const header = request.headers.authorization;
+  if (typeof header !== 'string') {
+    return null;
+  }
+  return header.startsWith('Bearer ') ? header.slice('Bearer '.length) : header;
 }
 
 export interface RunningAxiomApplication extends RunningNodeHost {
@@ -299,6 +419,8 @@ export async function serveAxiomApplication(
       ? { host: createServerHost({ authenticate: options.authenticate }) }
       : {}),
     ...(options.integrations ? { integrations: options.integrations } : {}),
+    ...(options.subscriptions ? { subscriptions: options.subscriptions } : {}),
+    ...(options.blobStores ? { blobStores: options.blobStores } : {}),
   });
   const running = await serveOverHttp({
     server,
@@ -306,6 +428,9 @@ export async function serveAxiomApplication(
     ...(options.port === undefined ? {} : { port: options.port }),
     ...(options.path === undefined ? {} : { path: options.path }),
     ...(options.webhooks ? { webhooks: options.webhooks } : {}),
+    ...(options.blobStores ? { blobStores: options.blobStores } : {}),
+    ...(options.blobPath === undefined ? {} : { blobPath: options.blobPath }),
+    ...(options.authenticate ? { authenticate: options.authenticate } : {}),
   });
   return { ...running, pageUrl: `http://127.0.0.1:${running.port}/`, server };
 }

@@ -97,4 +97,17 @@ export interface HostEnvironment {
     args: Record<string, unknown>,
     options: { timeoutMs?: number },
   ): Promise<IntegrationQueryOutcome>;
+  /**
+   * Reads a stored object's metadata by key and returns it as a `BlobRef` record.
+   *
+   * The same shape as `queryIntegration`, and for the same reason: a `blob-metadata`
+   * operation is a finite question resolved before the transaction opens. It returns the
+   * reference, never the bytes — nothing in the runtime ever holds an object's contents.
+   * Only the authoritative runtime calls this; object stores, like integrations, are
+   * server-only.
+   */
+  readBlobMetadata?(
+    storageId: string,
+    key: string,
+  ): Promise<IntegrationQueryOutcome>;
 }

@@ -1,9 +1,15 @@
 # Triggers
 
-Axiom 0.8.2-alpha.1. A `TriggerDef` says **when** an action should be invoked, without
+Axiom 0.9.0-alpha.1. A `TriggerDef` says **when** an action should be invoked, without
 embedding callback code. `docs/AUTHORITY.md`
 [§ Triggers](AUTHORITY.md#triggers) is the load-bearing statement of the execution model;
 this file is the vocabulary.
+
+A trigger covers time (`interval`, `delay`), the application lifecycle, and a dispatched
+event. It does **not** cover a long-lived external source: that is a
+[`SubscriptionDef`](SUBSCRIPTIONS.md), whose deliveries become `EventDef` payloads that
+`event` triggers then react to. Keep the two separate — an interval trigger driving an
+`integration-query` is polling, and polling is not a subscription.
 
 ## The model
 

@@ -8,8 +8,10 @@
     "action guards",
     "argument validation",
     "authorization",
+    "blob storage",
     "concurrent mutation",
     "constraints",
+    "deduplication",
     "derived state",
     "effects",
     "events",
@@ -19,10 +21,16 @@
     "idempotency",
     "integration query",
     "invocation source",
+    "lifecycle",
     "mutation",
+    "ordering",
     "persistence",
+    "reconnect",
     "restart",
     "rollback",
+    "shutdown",
+    "startup",
+    "subscriptions",
     "timeout",
     "transition constraints",
     "triggers"
@@ -360,6 +368,278 @@
       "concurrent": false,
       "restartAndReassert": false,
       "invocations": 1
+    },
+    {
+      "name": "subscription-becomes-active-at-startup",
+      "file": "subscription-becomes-active-at-startup.json",
+      "covers": [
+        "subscriptions",
+        "lifecycle"
+      ],
+      "description": "Startup activates every auto-start subscription, with no application code calling start(). The lifecycle state is observable before any delivery arrives.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "subscription-delivery-applies",
+      "file": "subscription-delivery-applies.json",
+      "covers": [
+        "subscriptions",
+        "events",
+        "invocation source"
+      ],
+      "description": "An external delivery is validated against the EventDef payload type, dispatched through the ordinary EventDef → TriggerDef → ActionDef pipeline, and commits under the system principal.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "subscription-sequential-delivery",
+      "file": "subscription-sequential-delivery.json",
+      "covers": [
+        "subscriptions",
+        "ordering"
+      ],
+      "description": "Deliveries of one subscription are dispatched one at a time in accepted order, each in its own transaction — so the last delivery is the last applied.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "subscription-duplicate-delivery",
+      "file": "subscription-duplicate-delivery.json",
+      "covers": [
+        "subscriptions",
+        "deduplication"
+      ],
+      "description": "The same external delivery identity presented twice mutates state once. The second carries a different status, so only deduplication — not ordering — can produce this result.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "subscription-invalid-payload",
+      "file": "subscription-invalid-payload.json",
+      "covers": [
+        "subscriptions",
+        "events"
+      ],
+      "description": "A delivery whose payload does not conform to the EventDef is refused before any action runs, and the valid delivery that follows still applies.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "subscription-poison-delivery",
+      "file": "subscription-poison-delivery.json",
+      "covers": [
+        "subscriptions",
+        "constraints",
+        "rollback"
+      ],
+      "description": "A conforming payload whose action violates an invariant rolls that transaction back and is counted as failed, not applied — and the subscription keeps running under the default report policy.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "subscription-reconnects-after-transport-loss",
+      "file": "subscription-reconnects-after-transport-loss.json",
+      "covers": [
+        "subscriptions",
+        "lifecycle",
+        "reconnect"
+      ],
+      "description": "A lost transport moves the subscription to reconnecting and back to active on the graph-declared fixed 100ms policy — reconnect policy is the runtime’s, the adapter only reports the loss.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 6
+    },
+    {
+      "name": "subscription-permanent-failure-leaves-application-running",
+      "file": "subscription-permanent-failure-leaves-application-running.json",
+      "covers": [
+        "subscriptions",
+        "lifecycle",
+        "startup"
+      ],
+      "description": "A source that never connects exhausts the declared reconnect budget and settles in failed. Startup succeeded and the rest of the application is unaffected, because the subscription is not declared required.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 4
+    },
+    {
+      "name": "subscription-delivery-after-shutdown",
+      "file": "subscription-delivery-after-shutdown.json",
+      "covers": [
+        "subscriptions",
+        "shutdown"
+      ],
+      "description": "A delivery scheduled for after the fixture ends never reaches application state: the runner stops the server, and a stopped subscription accepts nothing. The final state is the one the pre-shutdown delivery produced.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "subscription-client-cannot-forge-a-delivery",
+      "file": "subscription-client-cannot-forge-a-delivery.json",
+      "covers": [
+        "subscriptions",
+        "invocation source",
+        "authorization"
+      ],
+      "description": "A client that knows the subscription-only action id cannot invoke it: invocation.allowedSources refuses a client-sourced call before identity is even consulted, so no delivery can be forged.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "blob-upload-and-commit",
+      "file": "blob-upload-and-commit.json",
+      "covers": [
+        "blob storage",
+        "authorization"
+      ],
+      "description": "An authorized upload is staged and returns the public BlobRef; the action that stores the reference also commits the object, and the commit dispatches only after the transaction commits.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 4
+    },
+    {
+      "name": "blob-upload-unauthorized",
+      "file": "blob-upload-unauthorized.json",
+      "covers": [
+        "blob storage",
+        "authorization"
+      ],
+      "description": "A caller the store’s uploadAuthorization does not admit is refused before a byte is stored, and an anonymous caller likewise.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 3
+    },
+    {
+      "name": "blob-authorized-read",
+      "file": "blob-authorized-read.json",
+      "covers": [
+        "blob storage",
+        "authorization"
+      ],
+      "description": "A stored object referenced by a device is readable, because the store’s readAuthorization is a rule over authoritative state rather than a route guard.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "blob-unauthorized-read-and-guessed-key",
+      "file": "blob-unauthorized-read-and-guessed-key.json",
+      "covers": [
+        "blob storage",
+        "authorization"
+      ],
+      "description": "Possession of a key is not permission: a real, stored object that nothing references is refused, and a key that names nothing is refused identically — so the endpoint is not an oracle for enumerating keys.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "blob-metadata-lookup",
+      "file": "blob-metadata-lookup.json",
+      "covers": [
+        "blob storage",
+        "integration query"
+      ],
+      "description": "A blob-metadata operation resolves before the transaction opens, binds the BlobRef into scope, and the deletion that follows addresses the object it named.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "blob-metadata-missing-refuses-the-action",
+      "file": "blob-metadata-missing-refuses-the-action.json",
+      "covers": [
+        "blob storage",
+        "rollback"
+      ],
+      "description": "A blob-metadata lookup for a key the store does not hold fails the whole invocation rather than binding a plausible empty record — so nothing is mutated on the strength of an object that is not there.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "blob-commit-not-dispatched-when-the-transaction-is-refused",
+      "file": "blob-commit-not-dispatched-when-the-transaction-is-refused.json",
+      "covers": [
+        "blob storage",
+        "rollback",
+        "authorization"
+      ],
+      "description": "A refused transaction dispatches no storage effect. The uploaded object stays staged — a sweepable orphan — rather than becoming a committed object nothing references.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 3
+    },
+    {
+      "name": "blob-delete-failure-leaves-state-correct",
+      "file": "blob-delete-failure-leaves-state-correct.json",
+      "covers": [
+        "blob storage",
+        "effects"
+      ],
+      "description": "A store that refuses the deletion does not undo the committed state change: the device is unattached and correct, and the object remains as an observable orphan. State correctness and external cleanup are separately observable, never falsely coupled.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "blob-restart-preserves-references",
+      "file": "blob-restart-preserves-references.json",
+      "covers": [
+        "blob storage",
+        "persistence"
+      ],
+      "description": "A BlobRef is ordinary authoritative state: it survives a restart exactly as any other committed value does, and nothing about the object had to be reloaded to make that true.",
+      "conformance": "axiom.conformance.v3",
+      "contract": "axiom.server.v5",
+      "concurrent": false,
+      "restartAndReassert": true,
+      "invocations": 0
     }
   ]
 }

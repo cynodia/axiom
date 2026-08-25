@@ -16,6 +16,7 @@ import {
   fieldId,
   fieldLocation,
   filter,
+  blobRefEntity,
   expressionRef,
   find,
   forEach,
@@ -43,6 +44,7 @@ import type {
   IntegrationOperationDef,
   RouteDef,
   StateDef,
+  StorageDef,
   ViewNode,
 } from '@cynodia/axiom-core';
 import { compileToIR } from '@cynodia/axiom-compiler';
@@ -609,6 +611,11 @@ test('every declared operation kind is executed by the runtime', () => {
   const integrationQueryOp = nodeId('integration_operation_probe_query');
   const integrationEffectOp = nodeId('integration_operation_probe_effect');
   const scopeQuery = nodeId('scope_integration_query');
+  const storage = nodeId('storage_probe');
+  const blobEntity = nodeId('entity_blob_ref');
+  const scopeBlob = nodeId('scope_blob_metadata');
+  graph.addNode<EntityDef>(blobRefEntity(blobEntity));
+  graph.addNode<StorageDef>({ id: storage, kind: 'storage', name: 'probe store', blobEntityId: blobEntity });
   graph.addNode<IntegrationDef>({ id: integration, kind: 'integration', name: 'probe' });
   graph.addNode<IntegrationOperationDef>({
     id: integrationQueryOp,
@@ -658,6 +665,11 @@ test('every declared operation kind is executed by the runtime', () => {
       { kind: 'integration-query', operationId: integrationQueryOp, bindAs: scopeQuery },
     ],
     'integration-effect': [{ kind: 'integration-effect', operationId: integrationEffectOp }],
+    'blob-metadata': [
+      { kind: 'blob-metadata', storageId: storage, blobKey: literal('probe-key'), bindAs: scopeBlob },
+    ],
+    'blob-commit': [{ kind: 'blob-commit', storageId: storage, blobKey: literal('probe-key') }],
+    'blob-delete': [{ kind: 'blob-delete', storageId: storage, blobKey: literal('probe-key') }],
   };
   assert.deepEqual(Object.keys(actions).sort(), [...OPERATION_KINDS].sort());
 

@@ -1,0 +1,810 @@
+{
+  "conformance": "axiom.conformance.v3",
+  "name": "subscription-permanent-failure-leaves-application-running",
+  "covers": [
+    "subscriptions",
+    "lifecycle",
+    "startup"
+  ],
+  "description": "A source that never connects exhausts the declared reconnect budget and settles in failed. Startup succeeded and the rest of the application is unaffected, because the subscription is not declared required.",
+  "principals": {
+    "operator": {
+      "field_io_user_id": "op-1",
+      "field_io_user_role": "operator"
+    },
+    "viewer": {
+      "field_io_user_id": "v-1",
+      "field_io_user_role": "viewer"
+    }
+  },
+  "serverIR": {
+    "contract": "axiom.server.v5",
+    "id": "external-io",
+    "name": "External IO",
+    "version": "0.9.0",
+    "entities": [
+      {
+        "id": "entity_io_user",
+        "kind": "entity",
+        "identityFieldId": "field_io_user_id",
+        "fields": [
+          {
+            "id": "field_io_user_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_io_user_role",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "entity_io_blob",
+        "kind": "entity",
+        "name": "BlobRef",
+        "identityFieldId": "field_blob_key",
+        "fields": [
+          {
+            "id": "field_blob_key",
+            "name": "Key",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_blob_media_type",
+            "name": "Media type",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_blob_size",
+            "name": "Size",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          },
+          {
+            "id": "field_blob_filename",
+            "name": "Filename",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          },
+          {
+            "id": "field_blob_checksum",
+            "name": "Checksum",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          }
+        ]
+      },
+      {
+        "id": "entity_io_device",
+        "kind": "entity",
+        "identityFieldId": "field_io_device_id",
+        "fields": [
+          {
+            "id": "field_io_device_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_io_device_status",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_io_device_log",
+            "valueType": {
+              "kind": "optional",
+              "valueType": {
+                "kind": "entity",
+                "entityId": "entity_io_blob"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "entity_io_change",
+        "kind": "entity",
+        "fields": [
+          {
+            "id": "field_io_change_device",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_io_change_status",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_io_change_delivery",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          }
+        ]
+      }
+    ],
+    "fields": {
+      "field_io_user_id": {
+        "entityId": "entity_io_user",
+        "field": {
+          "id": "field_io_user_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_io_user_role": {
+        "entityId": "entity_io_user",
+        "field": {
+          "id": "field_io_user_role",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_blob_key": {
+        "entityId": "entity_io_blob",
+        "field": {
+          "id": "field_blob_key",
+          "name": "Key",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_blob_media_type": {
+        "entityId": "entity_io_blob",
+        "field": {
+          "id": "field_blob_media_type",
+          "name": "Media type",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_blob_size": {
+        "entityId": "entity_io_blob",
+        "field": {
+          "id": "field_blob_size",
+          "name": "Size",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          },
+          "required": true
+        }
+      },
+      "field_blob_filename": {
+        "entityId": "entity_io_blob",
+        "field": {
+          "id": "field_blob_filename",
+          "name": "Filename",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_blob_checksum": {
+        "entityId": "entity_io_blob",
+        "field": {
+          "id": "field_blob_checksum",
+          "name": "Checksum",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_io_device_id": {
+        "entityId": "entity_io_device",
+        "field": {
+          "id": "field_io_device_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_io_device_status": {
+        "entityId": "entity_io_device",
+        "field": {
+          "id": "field_io_device_status",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_io_device_log": {
+        "entityId": "entity_io_device",
+        "field": {
+          "id": "field_io_device_log",
+          "valueType": {
+            "kind": "optional",
+            "valueType": {
+              "kind": "entity",
+              "entityId": "entity_io_blob"
+            }
+          }
+        }
+      },
+      "field_io_change_device": {
+        "entityId": "entity_io_change",
+        "field": {
+          "id": "field_io_change_device",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_io_change_status": {
+        "entityId": "entity_io_change",
+        "field": {
+          "id": "field_io_change_status",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_io_change_delivery": {
+        "entityId": "entity_io_change",
+        "field": {
+          "id": "field_io_change_delivery",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      }
+    },
+    "states": [
+      {
+        "id": "state_io_devices",
+        "kind": "state",
+        "name": "devices",
+        "authority": "server",
+        "valueType": {
+          "kind": "collection",
+          "itemType": {
+            "kind": "entity",
+            "entityId": "entity_io_device"
+          }
+        },
+        "initialValue": [
+          {
+            "field_io_device_id": "d1",
+            "field_io_device_status": "unknown",
+            "field_io_device_log": null
+          }
+        ]
+      }
+    ],
+    "actions": {
+      "action_io_apply_status": {
+        "id": "action_io_apply_status",
+        "kind": "action",
+        "name": "applyStatus",
+        "invocation": {
+          "allowedSources": [
+            "system"
+          ]
+        },
+        "parameters": [
+          {
+            "id": "param_io_device",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "param_io_status",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "field",
+              "target": {
+                "kind": "collection-item",
+                "collection": {
+                  "kind": "state",
+                  "stateId": "state_io_devices"
+                },
+                "selector": {
+                  "kind": "identity",
+                  "fieldId": "field_io_device_id",
+                  "value": {
+                    "kind": "ref",
+                    "targetId": "param_io_device"
+                  }
+                }
+              },
+              "fieldId": "field_io_device_status"
+            },
+            "value": {
+              "kind": "ref",
+              "targetId": "param_io_status"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_io_attach": {
+        "id": "action_io_attach",
+        "kind": "action",
+        "name": "attachLog",
+        "authorization": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_io_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "operator"
+          }
+        },
+        "parameters": [
+          {
+            "id": "param_io_attach_device",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "param_io_attach_blob",
+            "valueType": {
+              "kind": "entity",
+              "entityId": "entity_io_blob"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "field",
+              "target": {
+                "kind": "collection-item",
+                "collection": {
+                  "kind": "state",
+                  "stateId": "state_io_devices"
+                },
+                "selector": {
+                  "kind": "identity",
+                  "fieldId": "field_io_device_id",
+                  "value": {
+                    "kind": "ref",
+                    "targetId": "param_io_attach_device"
+                  }
+                }
+              },
+              "fieldId": "field_io_device_log"
+            },
+            "value": {
+              "kind": "ref",
+              "targetId": "param_io_attach_blob"
+            }
+          },
+          {
+            "kind": "blob-commit",
+            "storageId": "storage_io_logs",
+            "blobKey": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "param_io_attach_blob"
+              },
+              "fieldId": "field_blob_key"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_io_detach": {
+        "id": "action_io_detach",
+        "kind": "action",
+        "name": "detachLog",
+        "authorization": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_io_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "operator"
+          }
+        },
+        "parameters": [
+          {
+            "id": "param_io_detach_device",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "blob-metadata",
+            "storageId": "storage_io_logs",
+            "bindAs": "scope_io_metadata",
+            "blobKey": {
+              "kind": "field",
+              "source": {
+                "kind": "field",
+                "source": {
+                  "kind": "find",
+                  "source": {
+                    "kind": "ref",
+                    "targetId": "state_io_devices"
+                  },
+                  "scopeId": "scope_io_device",
+                  "predicate": {
+                    "kind": "binary",
+                    "operator": "eq",
+                    "left": {
+                      "kind": "field",
+                      "source": {
+                        "kind": "ref",
+                        "targetId": "scope_io_device"
+                      },
+                      "fieldId": "field_io_device_id"
+                    },
+                    "right": {
+                      "kind": "ref",
+                      "targetId": "param_io_detach_device"
+                    }
+                  }
+                },
+                "fieldId": "field_io_device_log"
+              },
+              "fieldId": "field_blob_key"
+            }
+          },
+          {
+            "kind": "set",
+            "target": {
+              "kind": "field",
+              "target": {
+                "kind": "collection-item",
+                "collection": {
+                  "kind": "state",
+                  "stateId": "state_io_devices"
+                },
+                "selector": {
+                  "kind": "identity",
+                  "fieldId": "field_io_device_id",
+                  "value": {
+                    "kind": "ref",
+                    "targetId": "param_io_detach_device"
+                  }
+                }
+              },
+              "fieldId": "field_io_device_log"
+            },
+            "value": {
+              "kind": "literal",
+              "value": null
+            }
+          },
+          {
+            "kind": "blob-delete",
+            "storageId": "storage_io_logs",
+            "blobKey": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_io_metadata"
+              },
+              "fieldId": "field_blob_key"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      }
+    },
+    "constraints": [
+      {
+        "id": "constraint_io_status",
+        "kind": "constraint",
+        "entityId": "entity_io_device",
+        "message": "Device status must be unknown, online or offline.",
+        "expression": {
+          "kind": "call",
+          "function": "one-of",
+          "arguments": [
+            {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "entity_io_device"
+              },
+              "fieldId": "field_io_device_status"
+            },
+            {
+              "kind": "literal",
+              "value": "unknown"
+            },
+            {
+              "kind": "literal",
+              "value": "online"
+            },
+            {
+              "kind": "literal",
+              "value": "offline"
+            }
+          ]
+        }
+      }
+    ],
+    "transitionConstraints": [],
+    "principalEntityId": "entity_io_user",
+    "observableStateIds": [
+      "state_io_devices"
+    ],
+    "integrations": [
+      {
+        "id": "integration_io_devices",
+        "kind": "integration",
+        "name": "Devices"
+      }
+    ],
+    "events": [
+      {
+        "id": "event_io_status",
+        "kind": "event",
+        "payloadType": {
+          "kind": "entity",
+          "entityId": "entity_io_change"
+        }
+      }
+    ],
+    "triggers": [
+      {
+        "id": "trigger_io_status",
+        "kind": "trigger",
+        "actionId": "action_io_apply_status",
+        "when": {
+          "kind": "event",
+          "eventId": "event_io_status"
+        },
+        "arguments": {
+          "param_io_device": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "trigger_io_status"
+            },
+            "fieldId": "field_io_change_device"
+          },
+          "param_io_status": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "trigger_io_status"
+            },
+            "fieldId": "field_io_change_status"
+          }
+        }
+      }
+    ],
+    "subscriptions": [
+      {
+        "id": "subscription_io_status",
+        "kind": "subscription",
+        "name": "live status",
+        "integrationId": "integration_io_devices",
+        "source": "device-status",
+        "eventId": "event_io_status",
+        "lifecycle": {
+          "reconnect": {
+            "policy": "fixed",
+            "maxAttempts": 3,
+            "delayMs": 100
+          }
+        },
+        "delivery": {
+          "deduplicateBy": "field_io_change_delivery",
+          "maxQueued": 8,
+          "backpressure": "block"
+        }
+      }
+    ],
+    "storages": [
+      {
+        "id": "storage_io_logs",
+        "kind": "storage",
+        "name": "Logs",
+        "blobEntityId": "entity_io_blob",
+        "readAuthorization": {
+          "kind": "some",
+          "source": {
+            "kind": "ref",
+            "targetId": "state_io_devices"
+          },
+          "scopeId": "scope_io_ref",
+          "predicate": {
+            "kind": "binary",
+            "operator": "eq",
+            "left": {
+              "kind": "field",
+              "source": {
+                "kind": "field",
+                "source": {
+                  "kind": "ref",
+                  "targetId": "scope_io_ref"
+                },
+                "fieldId": "field_io_device_log"
+              },
+              "fieldId": "field_blob_key"
+            },
+            "right": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "storage_io_logs"
+              },
+              "fieldId": "field_blob_key"
+            }
+          }
+        },
+        "uploadAuthorization": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_io_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "operator"
+          }
+        }
+      }
+    ]
+  },
+  "initialState": [
+    {
+      "stateId": "state_io_devices",
+      "value": [
+        {
+          "field_io_device_id": "d1",
+          "field_io_device_status": "unknown",
+          "field_io_device_log": null
+        }
+      ],
+      "revision": 1
+    }
+  ],
+  "externalSubscriptions": {
+    "subscription_io_status": {
+      "entries": [
+        {
+          "kind": "connect-failure",
+          "message": "no route to broker"
+        },
+        {
+          "kind": "connect-failure",
+          "message": "no route to broker"
+        },
+        {
+          "kind": "connect-failure",
+          "message": "no route to broker"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "kind": "advance",
+      "ms": 100
+    },
+    {
+      "kind": "advance",
+      "ms": 100
+    },
+    {
+      "kind": "advance",
+      "ms": 100
+    },
+    {
+      "kind": "expect-subscription",
+      "subscriptionId": "subscription_io_status",
+      "expect": {
+        "state": "failed"
+      }
+    }
+  ],
+  "expectedState": {
+    "state_io_devices": [
+      {
+        "field_io_device_id": "d1",
+        "field_io_device_status": "unknown",
+        "field_io_device_log": null
+      }
+    ]
+  }
+}

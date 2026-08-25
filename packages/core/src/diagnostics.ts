@@ -120,4 +120,18 @@ export const VALIDATION_CODES = {
   invalidInvocationSource: 'INVALID_INVOCATION_SOURCE',
   /** A client-authority trigger of a kind the intended trigger runtime does not execute — it would validate and compile but never fire (spec 8.1 §31-36). */
   clientTriggerUnsupported: 'CLIENT_TRIGGER_UNSUPPORTED',
+
+  // Subscriptions and blob storage (0.9).
+  /** A `SubscriptionDef` whose event has no trigger bound to it: a live source feeding nothing. */
+  subscriptionEventUnreachable: 'SUBSCRIPTION_EVENT_UNREACHABLE',
+  /** A `SubscriptionDef` in a graph with no server authority — nothing would ever activate it. */
+  subscriptionWithoutAuthority: 'SUBSCRIPTION_WITHOUT_AUTHORITY',
+  /** A delivery or lifecycle policy that cannot be executed as written — a non-positive queue, a dedup field that is not on the payload entity. */
+  subscriptionInvalidPolicy: 'SUBSCRIPTION_INVALID_POLICY',
+  /** A `StorageDef.blobEntityId`, or a blob operation's `storageId`, that does not resolve. */
+  unknownStorage: 'UNKNOWN_STORAGE',
+  /** A `StorageDef` whose `blobEntityId` is not the canonical `blobRefEntity()` shape. */
+  invalidBlobEntity: 'INVALID_BLOB_ENTITY',
+  /** A blob operation that cannot execute as written — inside a `for-each`, or with no readable key. */
+  invalidBlobOperation: 'INVALID_BLOB_OPERATION',
 } as const;

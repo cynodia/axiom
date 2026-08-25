@@ -26,6 +26,8 @@ import type {
   Location,
   NodeId,
   StateDef,
+  StorageDef,
+  SubscriptionDef,
   TransitionConstraintDef,
   TriggerDef,
   UINode,
@@ -562,6 +564,93 @@ export class GraphQueries {
    */
   getWebhookEvents(): EventDef[] {
     return this.getTriggeredEvents();
+  }
+
+  // -------------------------------------------- subscriptions and object storage
+
+  /** Every long-lived external event source this application declares. */
+  listSubscriptions(): SubscriptionDef[] {
+    return this.graph.getNodesByKind('subscription');
+  }
+
+  /** The subscriptions an integration's adapter is responsible for maintaining. */
+  getSubscriptionsForIntegration(integrationId: NodeId): SubscriptionDef[] {
+    return this.listSubscriptions().filter(
+      (subscription) => subscription.integrationId === integrationId,
+    );
+  }
+
+  /** The `EventDef` a subscription's deliveries become. */
+  getEventForSubscription(subscriptionId: NodeId): EventDef | undefined {
+    const subscription = this.graph.getNode(subscriptionId);
+    if (subscription?.kind !== 'subscription') {
+      return undefined;
+    }
+    const event = this.graph.getNode(subscription.eventId);
+    return event?.kind === 'event' ? event : undefined;
+  }
+
+  /**
+   * Every action a delivery on this subscription can reach, following its event through the
+   * triggers bound to it. The answer to "what can this feed actually change" without
+   * walking the graph by hand.
+   */
+  getActionsReachableFromSubscription(subscriptionId: NodeId): ActionDef[] {
+    const event = this.getEventForSubscription(subscriptionId);
+    return event ? this.getActionsTriggeredByEvent(event.id) : [];
+  }
+
+  /**
+   * Every way the outside world can reach this application, in one answer: the integrations
+   * it calls, the operations it calls on them, the live sources it listens to, the events
+   * those deliver, and the object stores it reads or writes.
+   *
+   * Graph-static, like every other query here — it says what the application *can* do, not
+   * what any running authority has done.
+   */
+  getExternalEventSources(): {
+    subscriptions: SubscriptionDef[];
+    events: EventDef[];
+    integrations: IntegrationDef[];
+  } {
+    const subscriptions = this.listSubscriptions();
+    const eventIds = new Set(subscriptions.map((subscription) => subscription.eventId));
+    const integrationIds = new Set(subscriptions.map((subscription) => subscription.integrationId));
+    return {
+      subscriptions,
+      events: this.graph.getNodesByKind('event').filter((event) => eventIds.has(event.id)),
+      integrations: this.listIntegrations().filter((integration) => integrationIds.has(integration.id)),
+    };
+  }
+
+  /** Every object store this application declares. */
+  listStorages(): StorageDef[] {
+    return this.graph.getNodesByKind('storage');
+  }
+
+  /** Actions that read from, commit into or delete from this store. */
+  getActionsUsingStorage(storageId: NodeId): ActionDef[] {
+    return this.graph
+      .getNodesByKind('action')
+      .filter((action) =>
+        (action.operations ?? []).some(
+          (operation) =>
+            (operation.kind === 'blob-metadata' ||
+              operation.kind === 'blob-commit' ||
+              operation.kind === 'blob-delete') &&
+            operation.storageId === storageId,
+        ),
+      );
+  }
+
+  /**
+   * Stores that would serve nothing and accept nothing, because they declare no access
+   * rule. A missing rule is refusal, so this reports dead capability rather than a hole.
+   */
+  getStoragesWithoutAccessRules(): StorageDef[] {
+    return this.listStorages().filter(
+      (storage) => !storage.readAuthorization && !storage.uploadAuthorization,
+    );
   }
 
   /** Whether an ordinary client `InvokeRequest` may name this action at all. */

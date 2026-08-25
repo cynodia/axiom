@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.8.2-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.9.0-alpha.1. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -133,6 +133,19 @@ Full model: [`INTEGRATIONS.md`](INTEGRATIONS.md), [`EFFECTS.md`](EFFECTS.md),
 | `TRIGGER_TARGET_SOURCE_MISMATCH` | A trigger — which always invokes with `source: 'system'` — targets an action whose `invocation.allowedSources` excludes `'system'`; the trigger could never succeed (spec 8.1 §3-9). |
 | `INVALID_INVOCATION_SOURCE` | `ActionDef.invocation.allowedSources` is present but empty — the action could never be invoked at all. |
 | `CLIENT_TRIGGER_UNSUPPORTED` | A client-authority trigger of a kind the intended trigger runtime does not execute — before 8.1 this validated and compiled anyway, and simply never fired (spec 8.1 §31-36). The browser trigger runtime executes no kind today. Only raised when a `triggerRuntime` is actually named — `validateGraph(graph)` with no options is target-neutral and never raises it; `validateForBrowser(graph)`/`compileToIR(graph)` name the real browser capabilities and do (spec 8.2 §2-6). The message states the remediation: move the target action to server authority, or compile for a trigger runtime that publishes the kind. |
+
+### Subscriptions and object storage
+
+Full model: [`SUBSCRIPTIONS.md`](SUBSCRIPTIONS.md) and [`STORAGE.md`](STORAGE.md).
+
+| Code | Raised when |
+| --- | --- |
+| `SUBSCRIPTION_EVENT_UNREACHABLE` | A `SubscriptionDef` whose `eventId` no `TriggerDef{when:{kind:'event'}}` is bound to. Every delivery would be validated and then discarded — a live source feeding nothing. |
+| `SUBSCRIPTION_WITHOUT_AUTHORITY` | A `SubscriptionDef` in a graph with no server-authoritative state. Subscriptions are authority-side; nothing would ever activate it. |
+| `SUBSCRIPTION_INVALID_POLICY` | A delivery or lifecycle policy that cannot be executed as written: `maxQueued` below one, `maxAttempts` below one, an unknown backpressure policy, or a `deduplicateBy` that is not a field of the event's payload entity. |
+| `UNKNOWN_STORAGE` | A blob operation's `storageId`, or a `StorageDef.blobEntityId`, that does not resolve. |
+| `INVALID_BLOB_ENTITY` | A `StorageDef.blobEntityId` naming an entity that is not the canonical `blobRefEntity()` shape. The message names the missing fields. |
+| `INVALID_BLOB_OPERATION` | A blob operation that cannot execute as written. |
 
 ### UI and routing
 

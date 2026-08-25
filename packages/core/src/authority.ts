@@ -161,6 +161,11 @@ function operationExpressions(operation: Operation): Expression[] {
         found.push(operation.idempotencyKey);
       }
       break;
+    case 'blob-metadata':
+    case 'blob-commit':
+    case 'blob-delete':
+      found.push(operation.blobKey);
+      break;
     default:
   }
   return found;
@@ -170,6 +175,16 @@ function operationExpressions(operation: Operation): Expression[] {
 export function actionUsesIntegration(action: ActionDef): boolean {
   return (action.operations ?? []).some(
     (operation) => operation.kind === 'integration-query' || operation.kind === 'integration-effect',
+  );
+}
+
+/** Whether an action reaches an object store anywhere in its top-level operations. */
+export function actionUsesStorage(action: ActionDef): boolean {
+  return (action.operations ?? []).some(
+    (operation) =>
+      operation.kind === 'blob-metadata' ||
+      operation.kind === 'blob-commit' ||
+      operation.kind === 'blob-delete',
   );
 }
 
@@ -216,9 +231,12 @@ export function statesWrittenBy(
           break;
         case 'integration-query':
         case 'integration-effect':
-          // Neither writes Axiom state directly: a query's result is a transaction-local
-          // scope binding, and an effect's outcome reaches state only through a follow-up
-          // action invoked from its success/failure event.
+        case 'blob-metadata':
+        case 'blob-commit':
+        case 'blob-delete':
+          // None of these writes Axiom state directly: a query's (or a metadata lookup's)
+          // result is a transaction-local scope binding, and an effect's outcome reaches
+          // state only through a follow-up action invoked from its success/failure event.
           break;
         default:
       }
@@ -269,10 +287,10 @@ export function statesReadByAction(
  * cannot disagree with what the action actually does.
  */
 export function actionAuthority(action: ActionDef, context: AuthorityContext): Authority {
-  // Integrations default server-only (spec §65: secrets, trust, CORS, auditability,
-  // deterministic authority), so an action that calls one is unconditionally server —
-  // independent of what it writes.
-  if (actionUsesIntegration(action)) {
+  // Integrations and object stores are both server-only by default (spec §65: secrets,
+  // trust, CORS, auditability, deterministic authority), so an action that reaches either
+  // is unconditionally server — independent of what it writes.
+  if (actionUsesIntegration(action) || actionUsesStorage(action)) {
     return 'server';
   }
   for (const stateId of statesWrittenBy(action, context)) {

@@ -1,11 +1,17 @@
-import type { IntegrationOperationDef, NodeId } from './deps.js';
+import type { IntegrationOperationDef, NodeId, StorageDef } from './deps.js';
 import type { ServerHost } from './host.js';
 import type { IntegrationAdapterRegistry } from './integration.js';
+import type { BlobStorageRegistry } from './blobs.js';
+import { blobRef } from './blobs.js';
 import type { EffectRecord, PersistenceAdapter } from './persistence.js';
+import type { IntegrationResult } from './integration.js';
 
 export interface EffectRunnerOptions {
   adapters: IntegrationAdapterRegistry;
   integrationOperations: Record<NodeId, IntegrationOperationDef>;
+  /** Object stores, for `blob-commit`/`blob-delete` intents. */
+  blobStores?: BlobStorageRegistry;
+  storages?: Record<NodeId, StorageDef>;
   persistence: PersistenceAdapter;
   host: ServerHost;
   /** Called once an effect reaches `succeeded` or `failed`, to dispatch its declared event. */
@@ -46,8 +52,38 @@ function delay(host: ServerHost, ms: number): Promise<void> {
 
 export function createEffectRunner(options: EffectRunnerOptions): EffectRunner {
   const { adapters, integrationOperations, persistence, host, onTerminal, onRunning, report } = options;
+  const blobStores = options.blobStores ?? {};
+  const storages = options.storages ?? {};
+
+  /**
+   * A storage effect executes through the same attempt/retry/outcome machinery an
+   * integration effect does — deliberately, rather than through a second durability system
+   * (spec 0.9 §57). Only the call at the bottom differs.
+   */
+  async function callStore(record: EffectRecord): Promise<IntegrationResult> {
+    const storage = record.storage as NonNullable<EffectRecord['storage']>;
+    const store = blobStores[storage.storageId];
+    if (!store) {
+      return {
+        ok: false,
+        code: 'BLOB_STORE_MISSING',
+        message: `No blob store registered for ${storage.storageId}`,
+        retryable: false,
+      };
+    }
+    const outcome =
+      storage.operation === 'commit' ? await store.commit(storage.key) : await store.delete(storage.key);
+    if (!outcome.ok) {
+      return { ok: false, code: outcome.code, message: outcome.message, ...(outcome.retryable !== undefined ? { retryable: outcome.retryable } : {}) };
+    }
+    return { ok: true, value: outcome.value === null ? storage.key : blobRef(outcome.value) };
+  }
 
   async function run(record: EffectRecord): Promise<void> {
+    if (record.storage) {
+      await runWith(record, storages[record.storage.storageId]?.retry, () => callStore(record));
+      return;
+    }
     const operation = integrationOperations[record.operationId];
     if (!operation) {
       const failed: EffectRecord = {
@@ -71,7 +107,22 @@ export function createEffectRunner(options: EffectRunnerOptions): EffectRunner {
       return;
     }
 
-    const policy = operation.retry ?? { policy: 'none' as const };
+    await runWith(record, operation.retry, () =>
+      adapter.effect(
+        operation,
+        record.arguments,
+        record.idempotencyKey ? { idempotencyKey: record.idempotencyKey } : {},
+      ),
+    );
+  }
+
+  /** The shared attempt loop: durable status per attempt, bounded retries, one terminal outcome. */
+  async function runWith(
+    record: EffectRecord,
+    retry: IntegrationOperationDef['retry'],
+    call: () => Promise<IntegrationResult>,
+  ): Promise<void> {
+    const policy = retry ?? { policy: 'none' as const };
     const maxAttempts = policy.policy === 'none' ? 1 : (policy.maxAttempts ?? 3);
     // Deliberately local to this dispatch, not seeded from `record.attempts`: a record
     // found `'running'` at startup means a previous process called the adapter and was
@@ -88,11 +139,7 @@ export function createEffectRunner(options: EffectRunnerOptions): EffectRunner {
       onRunning?.({ ...record, status: 'running', attempts: persistedAttempts });
       report?.({ kind: 'effect-attempted', effectId: record.id, operationId: record.operationId, attempt: persistedAttempts });
 
-      const result = await adapter.effect(
-        operation,
-        record.arguments,
-        record.idempotencyKey ? { idempotencyKey: record.idempotencyKey } : {},
-      );
+      const result = await call();
 
       if (result.ok) {
         const succeeded: EffectRecord = {

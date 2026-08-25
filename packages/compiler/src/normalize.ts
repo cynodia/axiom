@@ -243,8 +243,13 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
       case 'integration':
       case 'integration-operation':
       case 'event':
-        // Server-only vocabulary: no client concern ever needs to know an integration,
-        // its operations or the events it can raise exist (spec §80).
+      case 'subscription':
+      case 'storage':
+        // Server-only vocabulary: no client concern ever needs to know an integration, its
+        // operations, the events it can raise (spec §80), the live sources it subscribes to
+        // or the object stores it reaches. A subscription in particular has no client half
+        // at all — the browser maintains no long-lived external source — so it is absent
+        // here rather than present and inert (spec 0.9 §62-64).
         delete nodes[node.id];
         break;
       case 'trigger': {

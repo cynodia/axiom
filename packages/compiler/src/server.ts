@@ -9,6 +9,7 @@ import {
   serverIRExpressions,
   serverStateClosure,
   stateAuthority,
+  usesExternalIOVocabulary,
   usesIntegrationVocabulary,
   usesInvocationVocabulary,
   usesV4Semantics,
@@ -28,6 +29,8 @@ import type {
   ServerIR,
   ServerIRContract,
   StateDef,
+  StorageDef,
+  SubscriptionDef,
   TransitionConstraintDef,
   TriggerDef,
 } from '@cynodia/axiom-core';
@@ -64,6 +67,8 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
   const integrations: IntegrationDef[] = [];
   const integrationOperations: Record<NodeId, IntegrationOperationDef> = {};
   const events: EventDef[] = [];
+  const subscriptions: SubscriptionDef[] = [];
+  const storages: StorageDef[] = [];
   for (const node of nodes) {
     if (node.kind === 'entity') {
       entities.push(node);
@@ -79,6 +84,13 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
       integrationOperations[node.id] = node;
     } else if (node.kind === 'event') {
       events.push(node);
+    } else if (node.kind === 'subscription') {
+      // Every subscription is authority-side by construction: there is no client half to
+      // decide about (spec 0.9 §62-64), and validation has already refused a graph that
+      // declares one without an authority to activate it.
+      subscriptions.push(node);
+    } else if (node.kind === 'storage') {
+      storages.push(node);
     }
   }
 
@@ -144,6 +156,8 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     ...(Object.keys(integrationOperations).length > 0 ? { integrationOperations } : {}),
     ...(events.length > 0 ? { events } : {}),
     ...(triggers.length > 0 ? { triggers } : {}),
+    ...(subscriptions.length > 0 ? { subscriptions } : {}),
+    ...(storages.length > 0 ? { storages } : {}),
   };
 
   // Only the definitions the authority's own rules reach. A calculation used by the client
@@ -174,6 +188,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
       : requiredServerContract(serverIRExpressions(document)),
     usesIntegrationVocabulary(document) ? 'axiom.server.v3' : 'axiom.server.v1',
     usesV4Semantics(document) ? 'axiom.server.v4' : 'axiom.server.v1',
+    usesExternalIOVocabulary(document) ? 'axiom.server.v5' : 'axiom.server.v1',
   ];
   const contract = contractCandidates.reduce(maxContract);
 

@@ -17,6 +17,7 @@ import {
   maxContract,
   requiredServerContract,
   serverIRExpressions,
+  usesExternalIOVocabulary,
   usesIntegrationVocabulary,
   usesInvocationVocabulary,
   usesV4Semantics,
@@ -34,6 +35,7 @@ import type {
   ServerIR,
   ServerIRContract,
   StateDef,
+  StorageDef,
   TriggerDef,
 } from '@cynodia/axiom-core';
 import { MemoryElement, createAxiomRuntime, createMemoryHost, valuesEqual } from '@cynodia/axiom-runtime';
@@ -46,6 +48,11 @@ import { createEffectRunner } from './effects.js';
 import type { IntegrationAdapter, IntegrationAdapterRegistry, IntegrationResult } from './integration.js';
 import { createTriggerRuntime } from './triggers.js';
 import type { TriggerRuntime } from './triggers.js';
+import { blobRef } from './blobs.js';
+import type { BlobStorageRegistry, StoredBlob } from './blobs.js';
+import { createSubscriptionRuntime } from './subscriptions.js';
+import type { SubscriptionRecord, SubscriptionRuntime } from './subscriptions.js';
+import type { SubscriptionAdapterRegistry } from './subscription.js';
 import { PROTOCOL_VERSION } from './protocol.js';
 import type {
   EventRequest,
@@ -89,6 +96,26 @@ export const SERVER_DIAGNOSTIC_CODES = {
   EVENT_DISPATCH_DEPTH_EXCEEDED: 'EVENT_DISPATCH_DEPTH_EXCEEDED',
   /** A webhook delivery failed provider signature verification and was refused. */
   WEBHOOK_VERIFICATION_FAILED: 'WEBHOOK_VERIFICATION_FAILED',
+  /** The Server IR declares a subscription with no registered adapter for its integration. */
+  SUBSCRIPTION_ADAPTER_MISSING: 'SUBSCRIPTION_ADAPTER_MISSING',
+  /** A subscription's source could not be established, after every reconnect attempt. */
+  SUBSCRIPTION_START_FAILED: 'SUBSCRIPTION_START_FAILED',
+  /** A delivery was discarded by a declared lossy backpressure policy. Never silent. */
+  SUBSCRIPTION_DELIVERY_DROPPED: 'SUBSCRIPTION_DELIVERY_DROPPED',
+  /** A delivery's action failed after every permitted attempt. */
+  SUBSCRIPTION_DELIVERY_FAILED: 'SUBSCRIPTION_DELIVERY_FAILED',
+  /** The Server IR declares an object store with no registered blob adapter. */
+  BLOB_STORE_MISSING: 'BLOB_STORE_MISSING',
+  /** No object with that key, or the key names a still-staged upload. */
+  BLOB_NOT_FOUND: 'BLOB_NOT_FOUND',
+  /** The caller may not read, download or upload this object. Possession of a key is not permission. */
+  BLOB_ACCESS_DENIED: 'BLOB_ACCESS_DENIED',
+  /** An upload exceeded the store's declared `maxSizeBytes`. */
+  BLOB_TOO_LARGE: 'BLOB_TOO_LARGE',
+  /** An upload's media type is not in the store's declared `acceptedMediaTypes`. */
+  BLOB_MEDIA_TYPE_REJECTED: 'BLOB_MEDIA_TYPE_REJECTED',
+  /** A `blob-commit` or `blob-delete` failed at the store, after its retry policy. */
+  BLOB_OPERATION_FAILED: 'BLOB_OPERATION_FAILED',
   /**
    * The action's `invocation.allowedSources` does not include this invocation's source
    * (spec 8.1 §3-9) — e.g. an ordinary client `InvokeRequest` naming a system-only action.
@@ -113,6 +140,15 @@ export interface AxiomServerOptions {
    * rather than at first invocation (spec §116).
    */
   integrations?: IntegrationAdapterRegistry;
+  /**
+   * One adapter per integration that a `SubscriptionDef` names, keyed by `IntegrationDef.id`.
+   * Checked at `start()` for the same reason integration adapters are: a declared live
+   * source with nothing to maintain it must fail loudly at startup, not stay silently
+   * inactive forever.
+   */
+  subscriptions?: SubscriptionAdapterRegistry;
+  /** One blob store per `StorageDef` the Server IR declares, keyed by `StorageDef.id`. */
+  blobStores?: BlobStorageRegistry;
 }
 
 export interface AxiomServer {
@@ -131,6 +167,42 @@ export interface AxiomServer {
    * because an effect is not a state mutation (spec §73).
    */
   effectLog(): EffectRecord[];
+  /**
+   * Every subscription this authority maintains, with its lifecycle state and delivery
+   * counters — configured, active, reconnecting, failed, received, rejected, dropped, last
+   * delivery, last failure. An operator or agent answers "is the feed up, and is it
+   * arriving" from here, not from an application-authored health route.
+   */
+  subscriptionLog(): SubscriptionRecord[];
+  subscriptionStatus(id: NodeId): SubscriptionRecord | undefined;
+  /**
+   * Every storage effect this authority has dispatched, with its outcome — how an
+   * un-committed upload or a failed external deletion stays observable rather than
+   * becoming a silent orphan (spec 0.9 §55, §56).
+   */
+  blobLog(): EffectRecord[];
+  /**
+   * Reads an object's metadata after checking the store's `readAuthorization` against
+   * `principal`. The one entry point a download or metadata transport may use: possession
+   * of a key is never permission.
+   */
+  authorizeBlobRead(
+    storageId: NodeId,
+    key: string,
+    principal: PrincipalRecord | null,
+  ): Promise<{ ok: true; blob: StoredBlob } | { ok: false; diagnostic: RuntimeDiagnostic }>;
+  /** Whether this caller may upload into this store, and under what limits. */
+  authorizeBlobUpload(
+    storageId: NodeId,
+    principal: PrincipalRecord | null,
+    upload: { mediaType: string; size: number },
+  ): Promise<{ ok: true } | { ok: false; diagnostic: RuntimeDiagnostic }>;
+  /** Stages an authorized upload and returns the public `BlobRef` an action may receive. */
+  stageBlob(
+    storageId: NodeId,
+    principal: PrincipalRecord | null,
+    upload: { data: Uint8Array; mediaType: string; filename?: string },
+  ): Promise<{ ok: true; ref: Record<string, LiteralValue> } | { ok: false; diagnostic: RuntimeDiagnostic }>;
   stop(): Promise<void>;
 }
 
@@ -233,6 +305,40 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   const integrationOperations: Record<NodeId, IntegrationOperationDef> = ir.integrationOperations ?? {};
   const adapters: IntegrationAdapterRegistry = options.integrations ?? {};
   const eventsById = new Map<NodeId, EventDef>((ir.events ?? []).map((event) => [event.id, event]));
+  const storagesById: Record<NodeId, StorageDef> = {};
+  for (const storage of ir.storages ?? []) {
+    storagesById[storage.id] = storage;
+  }
+  const blobStores: BlobStorageRegistry = options.blobStores ?? {};
+
+  /**
+   * Reads a stored object's metadata for a `blob-metadata` operation.
+   *
+   * A missing key and a still-`staged` key both fail: an operation that bound a plausible
+   * empty record for either would be handing the action a reference to bytes no committed
+   * transaction ever accepted.
+   */
+  async function readBlobMetadata(
+    storageId: string,
+    key: string,
+  ): Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string }> {
+    const store = blobStores[storageId as NodeId];
+    if (!store) {
+      return { ok: false, code: 'BLOB_STORE_MISSING', message: `No blob store registered for ${storageId}` };
+    }
+    const outcome = await store.metadata(key);
+    if (!outcome.ok) {
+      return { ok: false, code: outcome.code, message: outcome.message };
+    }
+    if (outcome.value.lifecycle !== 'stored') {
+      return {
+        ok: false,
+        code: 'BLOB_NOT_FOUND',
+        message: `${key} is staged and has not been committed`,
+      };
+    }
+    return { ok: true, value: blobRef(outcome.value) };
+  }
 
   /**
    * Races the adapter's query against `context.timeoutMs`, enforced by the runtime rather
@@ -312,7 +418,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     return { ok: true, value: result.value };
   }
 
-  const runtime = buildRuntime(ir, host, queryIntegration);
+  const runtime = buildRuntime(ir, host, queryIntegration, readBlobMetadata);
   let storeRevision = 0;
   const revisions = new Map<NodeId, number>();
   const replies = new Map<string, InvokeResponse>();
@@ -767,29 +873,54 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     return respond(false, diagnostics, {}, requestId);
   }
 
-  /** Validates an external/internal event's payload, then dispatches it to bound triggers. */
-  async function dispatchEvent(eventId: NodeId, payload: unknown, depth: number): Promise<RuntimeDiagnostic[]> {
+  /**
+   * Validates an external/internal event's payload, then dispatches it to bound triggers.
+   *
+   * `diagnostics` describes the **event**: an unknown id, or a payload that does not
+   * conform. `triggersOk` describes what happened downstream — whether every bound
+   * trigger's action actually committed. The two are separate because a caller's
+   * `EventResponse.ok` has always meant "the event was accepted", and a subscription needs
+   * the second answer to decide whether a delivery was applied.
+   */
+  async function dispatchEventDetailed(
+    eventId: NodeId,
+    payload: unknown,
+    depth: number,
+  ): Promise<{ diagnostics: RuntimeDiagnostic[]; triggersOk: boolean }> {
     const event = eventsById.get(eventId);
     report({ kind: 'event-received', eventId });
     if (!event) {
-      return [diagnostic(SERVER_DIAGNOSTIC_CODES.EVENT_PAYLOAD_INVALID, `Unknown event ${String(eventId)}`, { eventId })];
+      return {
+        diagnostics: [
+          diagnostic(SERVER_DIAGNOSTIC_CODES.EVENT_PAYLOAD_INVALID, `Unknown event ${String(eventId)}`, { eventId }),
+        ],
+        triggersOk: false,
+      };
     }
     const problems = validateValueAgainstType(payload, event.payloadType, {
       path: 'payload',
       getEntity: (id) => entities.get(id),
     });
     if (problems.length > 0) {
-      return [
-        diagnostic(
-          SERVER_DIAGNOSTIC_CODES.EVENT_PAYLOAD_INVALID,
-          `${event.name ?? event.id}'s payload does not conform to its declared type`,
-          { eventId, problems: problems.map((problem) => problem.message) },
-        ),
-      ];
+      // Refused before any action sees it: no mutation, no state, no dispatch.
+      return {
+        diagnostics: [
+          diagnostic(
+            SERVER_DIAGNOSTIC_CODES.EVENT_PAYLOAD_INVALID,
+            `${event.name ?? event.id}'s payload does not conform to its declared type`,
+            { eventId, problems: problems.map((problem) => problem.message) },
+          ),
+        ],
+        triggersOk: false,
+      };
     }
-    await triggerRuntime.fireEvent(eventId, payload, depth);
+    const fired = await triggerRuntime.fireEvent(eventId, payload, depth);
     report({ kind: 'event-dispatched', eventId });
-    return [];
+    return { diagnostics: [], triggersOk: fired.ok };
+  }
+
+  async function dispatchEvent(eventId: NodeId, payload: unknown, depth: number): Promise<RuntimeDiagnostic[]> {
+    return (await dispatchEventDetailed(eventId, payload, depth)).diagnostics;
   }
 
   function evaluateForTrigger(
@@ -861,9 +992,103 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     await serialize(() => dispatchEvent(eventId, payload, (record.dispatchDepth ?? 0) + 1));
   }
 
+  /**
+   * Dispatches a subscription delivery into the authority.
+   *
+   * It takes its own serialized turn, exactly as a host-timer trigger tick and an effect
+   * outcome do: an external delivery is a genuinely independent entry into the authority,
+   * never nested inside a client request's already-claimed turn. That is also what makes
+   * "one delivery, one transaction" true — the subscription runtime awaits this before
+   * taking the next delivery, so two deliveries can never share a transaction.
+   */
+  async function dispatchSubscriptionDelivery(
+    eventId: NodeId,
+    payload: unknown,
+  ): Promise<{ ok: boolean; code?: string; message?: string }> {
+    const outcome = await serialize(() => dispatchEventDetailed(eventId, payload, 0));
+    const first = outcome.diagnostics[0];
+    if (first) {
+      return { ok: false, code: String(first.code), message: first.message };
+    }
+    if (!outcome.triggersOk) {
+      return {
+        ok: false,
+        code: SERVER_DIAGNOSTIC_CODES.SUBSCRIPTION_DELIVERY_FAILED,
+        message: 'a triggered action refused this delivery',
+      };
+    }
+    return { ok: true };
+  }
+
+  const subscriptionRuntime: SubscriptionRuntime = createSubscriptionRuntime({
+    subscriptions: ir.subscriptions ?? [],
+    adapters: options.subscriptions ?? {},
+    host,
+    evaluate: (expression) => {
+      const outcome = runtime.evaluate(expression);
+      return outcome.ok ? { ok: true, value: outcome.value } : { ok: false };
+    },
+    dispatch: dispatchSubscriptionDelivery,
+    // Deduplication is durable when the persistence adapter can make it so. Without that
+    // it is a bounded in-memory window, which does not survive a restart — a real
+    // limitation, documented rather than assumed away.
+    ...(persistence.hasDelivery && persistence.recordDelivery
+      ? {
+          deliveries: {
+            seen: (subscriptionId, key) =>
+              (persistence.hasDelivery as NonNullable<PersistenceAdapter['hasDelivery']>)(subscriptionId, key),
+            remember: (subscriptionId, key, window) =>
+              (persistence.recordDelivery as NonNullable<PersistenceAdapter['recordDelivery']>)(
+                subscriptionId,
+                key,
+                window,
+              ),
+          },
+        }
+      : {}),
+    report: (event) => report({ kind: event.kind, subscriptionId: event.subscriptionId, eventId: event.eventId }),
+  });
+
+  /** Evaluates a store's access rule with the caller, and the blob, bound into scope. */
+  async function authorizeStorage(
+    storage: StorageDef,
+    rule: 'readAuthorization' | 'uploadAuthorization',
+    principal: PrincipalRecord | null,
+    blob?: StoredBlob,
+  ): Promise<RuntimeDiagnostic | null> {
+    const expression = storage[rule];
+    if (!expression) {
+      // A store with no rule serves nothing. The safe default for a missing access rule is
+      // refusal: an author who forgets one gets a closed door, never an open one.
+      return diagnostic(
+        SERVER_DIAGNOSTIC_CODES.BLOB_ACCESS_DENIED,
+        `${storage.name ?? storage.id} declares no ${rule}, so nothing may be read from or written to it`,
+        { storageId: storage.id },
+      );
+    }
+    runtime.hydrateState(PRINCIPAL, principal);
+    const outcome = blob
+      ? runtime.evaluateWithBindings(expression, { [String(storage.id)]: blobRef(blob) })
+      : runtime.evaluate(expression);
+    const permitted = outcome.ok
+      ? Array.isArray(outcome.value)
+        ? outcome.value.length > 0
+        : Boolean(outcome.value)
+      : false;
+    return permitted
+      ? null
+      : diagnostic(
+          SERVER_DIAGNOSTIC_CODES.BLOB_ACCESS_DENIED,
+          `The caller may not access this object in ${storage.name ?? storage.id}`,
+          { storageId: storage.id, principal: principalIdentity(principal) },
+        );
+  }
+
   const effectRunner = createEffectRunner({
     adapters,
     integrationOperations,
+    blobStores,
+    storages: storagesById,
     persistence,
     host,
     onTerminal: onEffectTerminal,
@@ -885,10 +1110,34 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       started = true;
       // Every integration this document requires must have a registered adapter before
       // any request is accepted — not deferred to first invocation (spec §116).
-      const missing = (ir.integrations ?? []).filter((integration) => !adapters[integration.id]);
+      // Only integrations that actually expose an operation need a query/effect adapter.
+      // An integration that exists solely to name the capability domain of a subscription
+      // has nothing for one to implement, and demanding an empty object would be ceremony.
+      const calledIntegrationIds = new Set(
+        Object.values(integrationOperations).map((operation) => operation.integrationId),
+      );
+      const missing = (ir.integrations ?? []).filter(
+        (integration) => calledIntegrationIds.has(integration.id) && !adapters[integration.id],
+      );
       if (missing.length > 0) {
         throw new Error(
           `Missing integration adapter(s): ${missing.map((integration) => integration.name ?? integration.id).join(', ')}`,
+        );
+      }
+      // Same rule for the other two adapter kinds: a declared live source with nothing to
+      // maintain it, or a declared store with nothing behind it, is a deployment mistake
+      // that must fail at startup rather than surface as permanent silence.
+      const subscriptionAdapters = options.subscriptions ?? {};
+      const unmaintained = [
+        ...new Set((ir.subscriptions ?? []).map((subscription) => subscription.integrationId)),
+      ].filter((integrationId) => !subscriptionAdapters[integrationId]);
+      if (unmaintained.length > 0) {
+        throw new Error(`Missing subscription adapter(s): ${unmaintained.join(', ')}`);
+      }
+      const storeless = (ir.storages ?? []).filter((storage) => !blobStores[storage.id]);
+      if (storeless.length > 0) {
+        throw new Error(
+          `Missing blob store(s): ${storeless.map((storage) => storage.name ?? storage.id).join(', ')}`,
         );
       }
       // Committed state is restored administratively: it is already authoritative, so it
@@ -913,6 +1162,11 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       // (spec §119), and before this call returns — so `accept external requests` in that
       // ordering is exactly "after `start()` resolves".
       await triggerRuntime.start();
+      // Subscriptions activate last, and startup decides which: an application never calls
+      // `subscription.start()` itself (spec 0.9 §17). A source that cannot be reached leaves
+      // the application running with that subscription observably `reconnecting`/`failed` —
+      // unless it declared `lifecycle.required`, which is the one case that rejects here.
+      await subscriptionRuntime.start();
     },
 
     handle(request: ServerRequest): Promise<ServerResponse> {
@@ -982,9 +1236,125 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     revision: () => storeRevision,
     mutationLog: () => runtime.getMutationLog(),
     effectLog: () => [...effectRecords.values()].map((entry) => ({ ...entry })),
+    subscriptionLog: () => subscriptionRuntime.status(),
+    subscriptionStatus: (id: NodeId) => subscriptionRuntime.statusOf(id),
+    blobLog: () =>
+      [...effectRecords.values()].filter((entry) => entry.storage !== undefined).map((entry) => ({ ...entry })),
+
+    async authorizeBlobRead(storageId, key, principal) {
+      const storage = storagesById[storageId];
+      if (!storage) {
+        return {
+          ok: false,
+          diagnostic: diagnostic(SERVER_DIAGNOSTIC_CODES.BLOB_STORE_MISSING, `No store ${String(storageId)}`, {
+            storageId,
+          }),
+        };
+      }
+      const store = blobStores[storageId];
+      if (!store) {
+        return {
+          ok: false,
+          diagnostic: diagnostic(
+            SERVER_DIAGNOSTIC_CODES.BLOB_STORE_MISSING,
+            `No blob store adapter registered for ${String(storageId)}`,
+            { storageId },
+          ),
+        };
+      }
+      const found = await store.metadata(key);
+      // A key that names nothing and a key the caller may not read are answered the same
+      // way, deliberately: distinguishing them would turn the endpoint into an oracle a
+      // hostile client could enumerate keys with.
+      const denial = found.ok
+        ? await authorizeStorage(storage, 'readAuthorization', principal, found.value)
+        : diagnostic(SERVER_DIAGNOSTIC_CODES.BLOB_ACCESS_DENIED, 'No such object, or access denied', {
+            storageId,
+          });
+      if (denial) {
+        return { ok: false, diagnostic: denial };
+      }
+      return { ok: true, blob: (found as { ok: true; value: StoredBlob }).value };
+    },
+
+    async authorizeBlobUpload(storageId, principal, upload) {
+      const storage = storagesById[storageId];
+      if (!storage) {
+        return {
+          ok: false,
+          diagnostic: diagnostic(SERVER_DIAGNOSTIC_CODES.BLOB_STORE_MISSING, `No store ${String(storageId)}`, {
+            storageId,
+          }),
+        };
+      }
+      const denial = await authorizeStorage(storage, 'uploadAuthorization', principal);
+      if (denial) {
+        return { ok: false, diagnostic: denial };
+      }
+      if (storage.maxSizeBytes !== undefined && upload.size > storage.maxSizeBytes) {
+        return {
+          ok: false,
+          diagnostic: diagnostic(
+            SERVER_DIAGNOSTIC_CODES.BLOB_TOO_LARGE,
+            `${upload.size} bytes exceeds the ${storage.maxSizeBytes} this store accepts`,
+            { storageId },
+          ),
+        };
+      }
+      if (storage.acceptedMediaTypes && !storage.acceptedMediaTypes.includes(upload.mediaType)) {
+        return {
+          ok: false,
+          diagnostic: diagnostic(
+            SERVER_DIAGNOSTIC_CODES.BLOB_MEDIA_TYPE_REJECTED,
+            `${upload.mediaType} is not accepted by this store`,
+            { storageId },
+          ),
+        };
+      }
+      return { ok: true };
+    },
+
+    async stageBlob(storageId, principal, upload) {
+      const permitted = await this.authorizeBlobUpload(storageId, principal, {
+        mediaType: upload.mediaType,
+        size: upload.data.byteLength,
+      });
+      if (!permitted.ok) {
+        return permitted;
+      }
+      const store = blobStores[storageId];
+      if (!store) {
+        return {
+          ok: false,
+          diagnostic: diagnostic(
+            SERVER_DIAGNOSTIC_CODES.BLOB_STORE_MISSING,
+            `No blob store adapter registered for ${String(storageId)}`,
+            { storageId },
+          ),
+        };
+      }
+      const staged = await store.stage({
+        data: upload.data,
+        mediaType: upload.mediaType,
+        ...(upload.filename !== undefined ? { filename: upload.filename } : {}),
+      });
+      if (!staged.ok) {
+        return {
+          ok: false,
+          diagnostic: diagnostic(SERVER_DIAGNOSTIC_CODES.BLOB_OPERATION_FAILED, staged.message, { storageId }),
+        };
+      }
+      // What comes back is the public BlobRef and nothing else: an upload never discloses
+      // the store's own lifecycle bookkeeping or provider identifiers (spec 0.9 §53).
+      return { ok: true, ref: blobRef(staged.value) };
+    },
 
     async stop(): Promise<void> {
       triggerRuntime.stop();
+      // Subscriptions stop before the queue is drained: after this resolves, no further
+      // delivery can enter the runtime at all, which is what makes shutdown deterministic
+      // rather than merely likely.
+      await subscriptionRuntime.stop();
       await queue.catch(() => undefined);
       await persistence.close?.();
     },
@@ -1010,6 +1380,7 @@ function understatedContract(ir: ServerIR): ServerIRContract | undefined {
       : requiredServerContract(serverIRExpressions(ir)),
     usesIntegrationVocabulary(ir) ? 'axiom.server.v3' : 'axiom.server.v1',
     usesV4Semantics(ir) ? 'axiom.server.v4' : 'axiom.server.v1',
+    usesExternalIOVocabulary(ir) ? 'axiom.server.v5' : 'axiom.server.v1',
   ];
   const required = candidates.reduce(maxContract);
   const order = SERVER_IR_CONTRACTS as readonly string[];
@@ -1022,7 +1393,17 @@ type QueryIntegration = (
   context: { timeoutMs?: number },
 ) => Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string; retryable?: boolean }>;
 
-function buildRuntime(ir: ServerIR, host: ServerHost, queryIntegration: QueryIntegration): AxiomRuntime {
+type ReadBlobMetadata = (
+  storageId: string,
+  key: string,
+) => Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string }>;
+
+function buildRuntime(
+  ir: ServerIR,
+  host: ServerHost,
+  queryIntegration: QueryIntegration,
+  readBlobMetadata: ReadBlobMetadata,
+): AxiomRuntime {
   const nodes: ApplicationIR['nodes'] = {};
   for (const entity of ir.entities) {
     nodes[entity.id] = entity;
@@ -1091,6 +1472,7 @@ function buildRuntime(ir: ServerIR, host: ServerHost, queryIntegration: QueryInt
       now: () => host.now(),
       uuid: () => host.uuid(),
       queryIntegration: (operationId, args, options) => queryIntegration(operationId, args, options),
+      readBlobMetadata: (storageId, key) => readBlobMetadata(storageId, key),
     },
   });
 }
