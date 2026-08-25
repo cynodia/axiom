@@ -1,10 +1,11 @@
 {
   "conformance": "axiom.conformance.v2",
-  "name": "integration-query-success",
+  "name": "simultaneous-same-instant-triggers-both-commit",
   "covers": [
-    "integration query"
+    "triggers",
+    "concurrent mutation"
   ],
-  "description": "A successful integration query binds its result and commits.",
+  "description": "Two one-shot delay triggers due at the same simulated instant are serialized against each other, not raced — both commit, with no spurious conflict.",
   "principals": {},
   "serverIR": {
     "contract": "axiom.server.v4",
@@ -669,36 +670,21 @@
   },
   "initialState": [
     {
-      "stateId": "state_status",
-      "value": "unknown",
+      "stateId": "state_counter",
+      "value": 0,
       "revision": 1
     }
   ],
   "externalAdapters": {
-    "integration_provider": {
-      "query": [
-        {
-          "result": {
-            "ok": true,
-            "value": "online"
-          }
-        }
-      ]
-    }
+    "integration_provider": {}
   },
   "steps": [
     {
-      "kind": "invoke",
-      "actionId": "action_refresh",
-      "expect": {
-        "ok": true,
-        "changedStates": [
-          "state_status"
-        ]
-      }
+      "kind": "advance",
+      "ms": 10
     }
   ],
   "expectedState": {
-    "state_status": "online"
+    "state_counter": 2
   }
 }

@@ -127,10 +127,18 @@ test('getTriggersForAction and getTimedTriggers answer what runs automatically',
   assert.deepEqual(agent.getTimedTriggers().map((trigger) => trigger.id), [TRIGGER_INTERVAL]);
 });
 
-test('getActionsTriggeredByEvent and getWebhookEvents follow event-kind triggers', () => {
+test('getActionsTriggeredByEvent and getTriggeredEvents follow event-kind triggers', () => {
   const agent = new AgentAPI(buildGraph());
   assert.deepEqual(agent.getActionsTriggeredByEvent(EVENT_CHANGED).map((action) => action.id), [ACTION_APPLY]);
-  assert.deepEqual(agent.getWebhookEvents().map((event) => event.id), [EVENT_CHANGED]);
+  assert.deepEqual(agent.getTriggeredEvents().map((event) => event.id), [EVENT_CHANGED]);
+});
+
+test('getWebhookEvents is a deprecated alias for getTriggeredEvents (spec 8.2 §36)', () => {
+  const agent = new AgentAPI(buildGraph());
+  assert.deepEqual(
+    agent.getWebhookEvents().map((event) => event.id),
+    agent.getTriggeredEvents().map((event) => event.id),
+  );
 });
 
 test('getExternalDependencies is the machine-discoverable external dependency manifest', () => {

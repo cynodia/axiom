@@ -1,10 +1,11 @@
 {
   "conformance": "axiom.conformance.v2",
-  "name": "integration-query-success",
+  "name": "effect-retry-sequence",
   "covers": [
-    "integration query"
+    "effects",
+    "events"
   ],
-  "description": "A successful integration query binds its result and commits.",
+  "description": "A transient failure (retryable: true) is retried under the declared fixed-delay policy and eventually dispatches a success outcome.",
   "principals": {},
   "serverIR": {
     "contract": "axiom.server.v4",
@@ -669,18 +670,26 @@
   },
   "initialState": [
     {
-      "stateId": "state_status",
-      "value": "unknown",
+      "stateId": "state_message",
+      "value": "",
       "revision": 1
     }
   ],
   "externalAdapters": {
     "integration_provider": {
-      "query": [
+      "effect": [
+        {
+          "result": {
+            "ok": false,
+            "code": "TRANSIENT",
+            "message": "try again",
+            "retryable": true
+          }
+        },
         {
           "result": {
             "ok": true,
-            "value": "online"
+            "value": "rebooted after retry"
           }
         }
       ]
@@ -689,16 +698,17 @@
   "steps": [
     {
       "kind": "invoke",
-      "actionId": "action_refresh",
+      "actionId": "action_reboot",
       "expect": {
-        "ok": true,
-        "changedStates": [
-          "state_status"
-        ]
+        "ok": true
       }
+    },
+    {
+      "kind": "advance",
+      "ms": 60
     }
   ],
   "expectedState": {
-    "state_status": "online"
+    "state_message": "rebooted after retry"
   }
 }

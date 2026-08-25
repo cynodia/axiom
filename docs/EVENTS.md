@@ -1,6 +1,6 @@
 # Events
 
-Axiom 0.8.1-alpha.1. An event is a typed fact — something that happened — never work
+Axiom 0.8.2-alpha.1. An event is a typed fact — something that happened — never work
 itself. [`AUTHORITY.md`](AUTHORITY.md#external-events) is the load-bearing statement;
 this file is the vocabulary and the webhook delivery mechanism.
 
@@ -110,10 +110,20 @@ Full tables: [`VALIDATION.md`](VALIDATION.md#integrations-effects-triggers-and-e
 ## AgentAPI
 
 ```ts
-agent.getWebhookEvents();               // EventDef[] — events at least one trigger reacts to
+agent.getTriggeredEvents();             // EventDef[] — events at least one trigger reacts to
 agent.getActionsTriggeredByEvent(id);   // ActionDef[]
 ```
 
-"Which webhook can mutate `Order`?" (spec §78) is answerable by following
-`getWebhookEvents()` through `getActionsTriggeredByEvent()` to the actions it can reach,
+`getTriggeredEvents()` is a **graph-static** query — "which `EventDef`s have a `TriggerDef`
+bound to them" — not "which webhook deliveries has this server received" (spec 8.2 §34-37).
+An event it returns may be dispatched by a verified external webhook, by an effect's
+`succeededEventId`/`failedEventId`, or by any other internal source; the graph does not
+record which, so nothing here claims to. Webhook routes and deployment-level registration
+are host/deployment concerns, deliberately outside what `GraphQueries` infers.
+
+`getWebhookEvents()` is a deprecated alias, kept for backward compatibility; new code should
+call `getTriggeredEvents()`.
+
+"Which trigger-bound event can mutate `Order`?" (spec §78) is answerable by following
+`getTriggeredEvents()` through `getActionsTriggeredByEvent()` to the actions it can reach,
 without reading a single handler.

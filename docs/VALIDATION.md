@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.8.1-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.8.2-alpha.1. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -132,7 +132,7 @@ Full model: [`INTEGRATIONS.md`](INTEGRATIONS.md), [`EFFECTS.md`](EFFECTS.md),
 | `TRIGGER_WRONG_AUTHORITY` | An `event` trigger targeting a client-authority action (only the server dispatches events), or a `route-enter`/`route-leave` trigger targeting a server-authority one (only the client router dispatches those). |
 | `TRIGGER_TARGET_SOURCE_MISMATCH` | A trigger — which always invokes with `source: 'system'` — targets an action whose `invocation.allowedSources` excludes `'system'`; the trigger could never succeed (spec 8.1 §3-9). |
 | `INVALID_INVOCATION_SOURCE` | `ActionDef.invocation.allowedSources` is present but empty — the action could never be invoked at all. |
-| `CLIENT_TRIGGER_UNSUPPORTED` | A client-authority trigger of a kind the intended trigger runtime does not execute — before 8.1 this validated and compiled anyway, and simply never fired (spec 8.1 §31-36). The browser trigger runtime executes no kind today. |
+| `CLIENT_TRIGGER_UNSUPPORTED` | A client-authority trigger of a kind the intended trigger runtime does not execute — before 8.1 this validated and compiled anyway, and simply never fired (spec 8.1 §31-36). The browser trigger runtime executes no kind today. Only raised when a `triggerRuntime` is actually named — `validateGraph(graph)` with no options is target-neutral and never raises it; `validateForBrowser(graph)`/`compileToIR(graph)` name the real browser capabilities and do (spec 8.2 §2-6). The message states the remediation: move the target action to server authority, or compile for a trigger runtime that publishes the kind. |
 
 ### UI and routing
 

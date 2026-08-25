@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.8.1-alpha.1. How an application crosses the trust boundary.
+Axiom 0.8.2-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -549,6 +549,26 @@ Running them requires no part of this implementation. That is the point: the Ser
 specification plus these fixtures are the whole contract, so an independent runtime in
 another language can be held to exactly the same standard.
 
+**A public reference runner is exported for the TypeScript reference runtime itself**
+(spec 8.2 §14-16):
+
+```ts
+import { runConformanceFixture, runConformanceSuite } from '@cynodia/axiom-server';
+
+const result = await runConformanceFixture(fixtureJson);   // { name, ok, failures[] }
+```
+
+It imports only `@cynodia/axiom-server` and fixture data — no graph, no compiler, no
+builder — and reports structured pass/fail rather than throwing on an ordinary fixture
+mismatch. `packages/server/test/conformance.test.ts` runs every shipped fixture through
+this exact function, and `npm run conformance:run` (`scripts/run-conformance.mjs`) runs the
+whole suite from a standalone script using nothing but this public API and the manifest —
+the "held to the same standard by an outside caller" claim, demonstrated rather than
+asserted. The fixture **model** (`ConformanceFixture` and friends, `conformance-types.ts`)
+is deliberately kept separate from this **adapter**
+(`conformance-runner.ts`): a non-TypeScript implementation needs only the model's shape and
+the semantics on this page, never this file.
+
 Enumerate the suite from its manifest rather than by listing a directory:
 
 ```
@@ -556,12 +576,24 @@ Enumerate the suite from its manifest rather than by listing a directory:
 @cynodia/axiom-server/conformance/<name>.json → one fixture
 ```
 
-The manifest names the contracts the fixtures are written against (`axiom.conformance.v1`,
-`axiom.server.v1`, `axiom.protocol.v1`), the release, every area covered, and every fixture
-with its file. A runtime that does not implement a contract the manifest names should refuse
-the suite rather than discover the mismatch one assertion at a time. The files are plain JSON
-in a documented package directory, so a non-JavaScript consumer can read them straight out of
-the tarball without Node's module resolver.
+The manifest carries three **separate, non-overlapping** version concepts (spec 8.2 §9-10;
+do not conflate them under one "contract" name):
+
+| Field | Means |
+| --- | --- |
+| `manifest.conformance` | The **fixture-format** version (`axiom.conformance.v1`/`v2`) — the shape of the JSON documents themselves: what top-level keys a fixture may have (`invocations` vs `steps`/`externalAdapters`, and so on). |
+| `manifest.baseContract` | The **oldest** Server IR contract any fixture in this manifest may use — `axiom.server.v1`, always, since new fixtures are added without ever raising this floor. It does **not** describe what the newest fixture needs. |
+| `manifest.fixtures[].contract` | The Server IR contract **that specific fixture** requires — this is what is authoritative for what running it needs. The suite ships fixtures spanning `v1` through `v4` simultaneously, each correctly labelled. |
+| `manifest.release` | The `@cynodia/axiom` package version this snapshot of the suite shipped with — unrelated to either version above. |
+
+Before 8.2 the manifest's top-level field was named `contract` and fixed at
+`axiom.server.v1`, which read as a claim about the whole suite even after `v3`/`v4`
+fixtures were added; it is now named `baseContract` with the meaning above, precisely
+because per-fixture `contract` is what is actually authoritative. A runtime that does not
+implement a contract a fixture names should refuse that fixture rather than discover the
+mismatch mid-assertion. The files are plain JSON in a documented package directory, so a
+non-JavaScript consumer can read them straight out of the tarball without Node's module
+resolver.
 
 Every fixture is executed against the reference runtime by this repository's own test suite,
 and its expectations are exhaustive — a fixture that says which states changed must name all
@@ -573,6 +605,7 @@ of them and no others. No fixture is permitted to disagree with the shipped runt
 @cynodia/axiom-server/schema/server-ir.v1.schema.json
 @cynodia/axiom-server/schema/server-ir.v2.schema.json
 @cynodia/axiom-server/schema/server-ir.v3.schema.json
+@cynodia/axiom-server/schema/server-ir.v4.schema.json
 @cynodia/axiom-server/schema/protocol.v1.schema.json
 ```
 
@@ -592,15 +625,21 @@ page plus the conformance fixtures.
 | `axiom.server.v1` | the frozen 0.6.1 contract, below | 0.6.1 |
 | `axiom.server.v2` | the expression kinds `group` and `expression-ref`, and the `expressionDefs` they resolve against | 0.7.0 |
 | `axiom.server.v3` | integrations, integration operations, events, triggers, and the `integration-query`/`integration-effect` operation kinds | 0.8.0 |
+| `axiom.server.v4` | `ActionDef.invocation.allowedSources` invocation-source restriction, and the structured effect-outcome envelope (`effectOutcomeEntity`, `EFFECT_ID_FIELD` and its sibling reserved fields) that every effect dispatch uses from 8.1 onward | 0.8.1 |
 
-`SERVER_IR_CONTRACTS` enumerates all three. The rules:
+`SERVER_IR_CONTRACTS` enumerates all four, and is the single source of truth this table is
+tested against — `packages/demo/test/documentation.test.ts` fails if a contract in
+`SERVER_IR_CONTRACTS` has no row here, or a row here names a contract the code does not
+declare (spec 8.2 §7-8). The rules:
 
-- **A document declares the oldest contract that can carry it.** `compileToServerIR` computes the label from the vocabulary the document actually uses, so an application that uses nothing from 0.7 or 0.8 produces a byte-identical `axiom.server.v1` document, and the committed v1 conformance fixtures are unchanged.
-- **A runtime MUST refuse a contract it does not implement**, and MUST refuse a document whose vocabulary exceeds its declared contract. A v2 runtime executing a v1-labelled document that uses `group` would accept what a conforming v1 runtime elsewhere refuses, and the two would then disagree about the same file. `createAxiomServer` raises rather than executing one.
-- **A frozen contract gains nothing.** `axiom.server.v1` does not contain `group`, `expression-ref`, `expressionDefs`, an integration, a trigger, an event, or the `integration-query`/`integration-effect` operation kinds, and `server-ir.v1.schema.json` is byte-frozen. Vocabulary arrives under a new identifier or not at all.
+- **A document declares the oldest contract that can carry it.** `compileToServerIR` computes the label from the vocabulary the document actually uses, so an application that uses nothing from 0.7 or 0.8 produces a byte-identical `axiom.server.v1` document, and the committed v1 conformance fixtures are unchanged. `usesV4Semantics` computes the v4 case specifically: an action's `invocation.allowedSources` genuinely restricting the default two-source set, or any `integration-operation` with `mode: 'effect'` (since every effect dispatch uses the structured v4 envelope) — a document that merely mentions `invocation` without restricting it only needs `axiom.server.v2`, the same tier `group`/`expression-ref` occupy.
+- **A runtime MUST refuse a contract it does not implement**, and MUST refuse a document whose vocabulary exceeds its declared contract. A v2 runtime executing a v1-labelled document that uses `group` would accept what a conforming v1 runtime elsewhere refuses, and the two would then disagree about the same file. `createAxiomServer` raises rather than executing one — including refusing a document that **understates** its own contract (`understatedContract`).
+- **A frozen contract gains nothing.** `axiom.server.v1` does not contain `group`, `expression-ref`, `expressionDefs`, an integration, a trigger, an event, the `integration-query`/`integration-effect` operation kinds, `invocation`, or the structured effect-outcome envelope, and `server-ir.v1.schema.json` is byte-frozen. Vocabulary arrives under a new identifier or not at all.
+- **`axiom.server.v4` is the latest contract as of 0.8.2** (`SERVER_IR_LATEST_CONTRACT`). 0.8.2 is polish-only — documentation, effect observability timing, fixture coverage and AgentAPI aliasing — and introduces no incompatible IR vocabulary change, so no `axiom.server.v5` was created (spec 8.2 §55-56).
 
 There is one JSON Schema per contract, each generated from the runtime's own vocabulary and
-each shipped: `server-ir.v1.schema.json`, `server-ir.v2.schema.json`, `server-ir.v3.schema.json`.
+each shipped: `server-ir.v1.schema.json`, `server-ir.v2.schema.json`, `server-ir.v3.schema.json`,
+`server-ir.v4.schema.json`.
 
 **`group`.** Partitions a collection: `Collection<A>` → `Collection<Group<K, A>>`. Groups appear
 in the order their key was **first seen** in the source; members keep source order; two keys are

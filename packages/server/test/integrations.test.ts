@@ -407,6 +407,10 @@ test('an effect intent committed before a restart is not lost (spec §19,96,140)
   await first.handle({ kind: 'invoke', protocol: 'axiom.protocol.v1', actionId: ACTION_REBOOT });
   const pendingAfterFirst = (await persistence.loadPendingEffects?.()) ?? [];
   assert.equal(pendingAfterFirst.length, 1, 'the intent is durable before the adapter ever answers');
+  // The persisted record itself, independent of `effectLog()`'s in-memory copy, must show
+  // the adapter was genuinely called — not merely that an intent exists (spec 8.2 §20,23).
+  assert.equal(pendingAfterFirst[0].status, 'running');
+  assert.equal(pendingAfterFirst[0].attempts, 1);
   await first.stop();
 
   const resumedAdapter = createFakeIntegrationAdapter({ effect: () => ({ ok: true, value: 'ok after restart' }) });
@@ -418,7 +422,31 @@ test('an effect intent committed before a restart is not lost (spec §19,96,140)
   });
   await second.start();
   await waitUntil(() => second.getState(STATE_LAST_MESSAGE) === 'ok after restart');
+  // A record found `running` at startup gets a fresh attempt budget, not a stuck one at
+  // zero remaining (spec §20) — attempts still counts up from where it was, and the outcome
+  // applies exactly once (the state assertion above already proves that).
+  const resumedRecord = second.effectLog().find((entry) => entry.operationId === OP_REBOOT);
+  assert.equal(resumedRecord?.status, 'succeeded');
+  assert.equal(resumedRecord?.attempts, 2);
   await second.stop();
+});
+
+test('effectLog reports status running with attempts 1 for a hung effect, never pending/0 (spec 8.2 §17-23)', async () => {
+  const hangingAdapter = createFakeIntegrationAdapter({
+    effect: () => new Promise<IntegrationResult>(() => undefined),
+  });
+  const { server } = buildServer(hangingAdapter);
+  await server.start();
+
+  await server.handle({ kind: 'invoke', protocol: 'axiom.protocol.v1', actionId: ACTION_REBOOT });
+  await waitUntil(() => {
+    const record = server.effectLog().find((entry) => entry.operationId === OP_REBOOT);
+    return record?.status === 'running';
+  });
+  const record = server.effectLog().find((entry) => entry.operationId === OP_REBOOT) as EffectRecord;
+  assert.equal(record.status, 'running', 'not yet dispatched must be distinguishable from dispatched and outstanding');
+  assert.equal(record.attempts, 1, 'attempts counts invocations started, not merely settled (spec §21)');
+  await server.stop();
 });
 
 // -------------------------------------------------------------------- events

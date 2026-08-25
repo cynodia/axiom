@@ -31,7 +31,8 @@ Main exports: `createAxiomServer`, `createMemoryPersistence`, `createSqlitePersi
 `createServerHost`, `createDeterministicServerHost`, `createDirectTransport`,
 `createHttpTransport`, `createRemoteGateway`, `serveOverHttp`, `serveAxiomApplication`,
 `createFakeIntegrationAdapter`, `createHttpIntegrationAdapter`, `createTriggerRuntime`,
-`createEffectRunner`, `SERVER_DIAGNOSTIC_CODES`.
+`createEffectRunner`, `runConformanceFixture`, `runConformanceSuite`,
+`SERVER_DIAGNOSTIC_CODES`.
 
 `serveAxiomApplication` is the whole deployment story: it serves the generated page at `GET /`
 and the semantic endpoint at `POST /axiom`, from one process, for any Axiom application. No
@@ -48,11 +49,16 @@ implementation in another language needs to conform to it:
 @cynodia/axiom-server/schema/server-ir.v1.schema.json   JSON Schema for the frozen v1 IR
 @cynodia/axiom-server/schema/server-ir.v2.schema.json   JSON Schema for v2 (+ group, expression-ref)
 @cynodia/axiom-server/schema/server-ir.v3.schema.json   JSON Schema for v3 (+ integrations, effects, triggers, events)
+@cynodia/axiom-server/schema/server-ir.v4.schema.json   JSON Schema for v4 (+ invocation source, structured effect outcome)
 @cynodia/axiom-server/schema/protocol.v1.schema.json    JSON Schema for the protocol
 ```
 
 The fixtures are pure data. Running them requires no part of this implementation — which is
 the point: the semantic contract, the schemas and these files are the whole specification.
+`runConformanceFixture`/`runConformanceSuite` are a public TypeScript reference runner over
+that fixture format, for this implementation's own use or a consumer building against it;
+the fixture *model* they accept is deliberately independent of them, so a non-TypeScript
+implementation needs only the shapes and the semantics documented in `docs/AUTHORITY.md`.
 
 ## Installation
 

@@ -1,6 +1,6 @@
 # Triggers
 
-Axiom 0.8.1-alpha.1. A `TriggerDef` says **when** an action should be invoked, without
+Axiom 0.8.2-alpha.1. A `TriggerDef` says **when** an action should be invoked, without
 embedding callback code. `docs/AUTHORITY.md`
 [§ Triggers](AUTHORITY.md#triggers) is the load-bearing statement of the execution model;
 this file is the vocabulary.
@@ -69,15 +69,25 @@ triggers targeting a server-authority one, are rejected at validation
 do nothing with it.
 
 **A client-authority trigger of a kind the browser cannot execute is a validation error,
-not a silent no-op.** The browser runtime implements no trigger kind at all today
-(`BROWSER_TRIGGER_CAPABILITIES.supportedTriggerKinds` is empty), so `validateGraph`/
-`compileToIR` reject such a trigger with `CLIENT_TRIGGER_UNSUPPORTED` — the same
-capability-gate pattern `RendererCapabilities` already applies to UI node kinds. Before
-spec 8.1, the trigger validated and compiled into `ApplicationIR.triggers` and simply never
-fired, which is exactly the "publicly declared, typechecks, passes validation, has no
-defined runtime behaviour" shape the framework forbids. Compiling for a trigger runtime
-that *does* implement a kind (`compileToIR(graph, { triggerRuntime })`) accepts it. Only the
-authoritative runtime executes triggers today. See [Not in 0.8.0](AUTHORITY.md#not-in-080).
+not a silent no-op — for any call that actually names the browser's capabilities.** The
+browser runtime implements no trigger kind at all today
+(`BROWSER_TRIGGER_CAPABILITIES.supportedTriggerKinds` is empty), so `compileToIR` — which
+applies `BROWSER_TRIGGER_CAPABILITIES` by default — and `validateForBrowser` both reject
+such a trigger with `CLIENT_TRIGGER_UNSUPPORTED`, the same capability-gate pattern
+`RendererCapabilities` already applies to UI node kinds. Before spec 8.1, the trigger
+validated and compiled into `ApplicationIR.triggers` and simply never fired, which is
+exactly the "publicly declared, typechecks, passes validation, has no defined runtime
+behaviour" shape the framework forbids.
+
+**`validateGraph(graph)` with no options is target-neutral by design (spec 8.2 §2-4) and
+does not raise `CLIENT_TRIGGER_UNSUPPORTED`** — a graph is never rejected for a trigger
+runtime nobody named, exactly as it is never rejected for a renderer nobody named. A
+validate-only workflow that wants the browser-real answer without compiling calls
+`validateForBrowser(graph)` (`@cynodia/axiom-compiler`) instead of the bare call; both it
+and `compileToIR` apply the identical `BROWSER_TRIGGER_CAPABILITIES`, so they never
+disagree. Compiling for a trigger runtime that *does* implement a kind
+(`compileToIR(graph, { triggerRuntime })`) accepts it. Only the authoritative runtime
+executes triggers today. See [Not in 0.8.0](AUTHORITY.md#not-in-080).
 
 ## Interval semantics
 

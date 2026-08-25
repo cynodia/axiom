@@ -1,10 +1,10 @@
 {
   "conformance": "axiom.conformance.v2",
-  "name": "integration-query-success",
+  "name": "event-payload-invalid",
   "covers": [
-    "integration query"
+    "events"
   ],
-  "description": "A successful integration query binds its result and commits.",
+  "description": "A malformed event payload is rejected before any bound action sees it.",
   "principals": {},
   "serverIR": {
     "contract": "axiom.server.v4",
@@ -669,36 +669,28 @@
   },
   "initialState": [
     {
-      "stateId": "state_status",
-      "value": "unknown",
+      "stateId": "state_message",
+      "value": "",
       "revision": 1
     }
   ],
   "externalAdapters": {
-    "integration_provider": {
-      "query": [
-        {
-          "result": {
-            "ok": true,
-            "value": "online"
-          }
-        }
-      ]
-    }
+    "integration_provider": {}
   },
   "steps": [
     {
-      "kind": "invoke",
-      "actionId": "action_refresh",
+      "kind": "event",
+      "eventId": "event_succeeded",
+      "payload": "not-a-valid-outcome",
       "expect": {
-        "ok": true,
-        "changedStates": [
-          "state_status"
+        "ok": false,
+        "diagnosticCodes": [
+          "EVENT_PAYLOAD_INVALID"
         ]
       }
     }
   ],
   "expectedState": {
-    "state_status": "online"
+    "state_message": ""
   }
 }

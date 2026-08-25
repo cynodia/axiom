@@ -1,0 +1,127 @@
+{
+  "conformance": "axiom.conformance.v2",
+  "name": "late-query-result-after-timeout",
+  "covers": [
+    "integration query",
+    "timeout"
+  ],
+  "description": "A query that eventually resolves successfully, but only after its declared timeoutMs already answered, is discarded — the late success can never mutate state.",
+  "principals": {},
+  "serverIR": {
+    "contract": "axiom.server.v3",
+    "id": "conformance-late-query",
+    "name": "Conformance late query",
+    "version": "0.8.2",
+    "entities": [],
+    "fields": {},
+    "states": [
+      {
+        "id": "state_status_late",
+        "kind": "state",
+        "name": "status",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "string"
+        },
+        "initialValue": "unknown"
+      }
+    ],
+    "actions": {
+      "action_refresh_late": {
+        "id": "action_refresh_late",
+        "kind": "action",
+        "name": "refresh",
+        "operations": [
+          {
+            "kind": "integration-query",
+            "operationId": "integration_operation_fetch_late",
+            "bindAs": "scope_query_late",
+            "timeoutMs": 500
+          },
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_status_late"
+            },
+            "value": {
+              "kind": "ref",
+              "targetId": "scope_query_late"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      }
+    },
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_status_late"
+    ],
+    "integrations": [
+      {
+        "id": "integration_provider_late",
+        "kind": "integration",
+        "name": "Provider"
+      }
+    ],
+    "integrationOperations": {
+      "integration_operation_fetch_late": {
+        "id": "integration_operation_fetch_late",
+        "kind": "integration-operation",
+        "integrationId": "integration_provider_late",
+        "name": "fetchStatus",
+        "mode": "query",
+        "resultType": {
+          "kind": "primitive",
+          "primitive": "string"
+        }
+      }
+    }
+  },
+  "initialState": [
+    {
+      "stateId": "state_status_late",
+      "value": "unknown",
+      "revision": 1
+    }
+  ],
+  "externalAdapters": {
+    "integration_provider_late": {
+      "query": [
+        {
+          "result": {
+            "ok": true,
+            "value": "online"
+          },
+          "resolveAfterMs": 300
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "kind": "invoke",
+      "actionId": "action_refresh_late",
+      "expect": {
+        "ok": false,
+        "diagnosticCodes": [
+          "INTEGRATION_TIMEOUT"
+        ]
+      }
+    },
+    {
+      "kind": "advance",
+      "ms": 500
+    },
+    {
+      "kind": "advance",
+      "ms": 200
+    }
+  ],
+  "expectedState": {
+    "state_status_late": "unknown"
+  }
+}

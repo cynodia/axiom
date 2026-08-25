@@ -1,6 +1,6 @@
 # Integrations
 
-Axiom 0.8.1-alpha.1. How an application declares and calls an external system, without
+Axiom 0.8.2-alpha.1. How an application declares and calls an external system, without
 embedding a transport, an SDK or a secret in the graph. The authority boundary this
 depends on is [`AUTHORITY.md`](AUTHORITY.md#external-systems); this file is the vocabulary.
 
@@ -100,6 +100,24 @@ An adapter MAY still race its own deadline internally (`createHttpIntegrationAda
 via `AbortController`) to cancel the underlying provider call early, but this is an
 optimization, never a correctness requirement: the runtime's own enforcement is what a graph
 author can rely on regardless of which adapter is registered.
+
+### A hung query delays other work, bounded by `timeoutMs` (spec 8.2 §40-42)
+
+The Axiom authority executes every invocation it runs — an ordinary client request, a
+trigger tick, an effect-outcome event dispatch — through one serialized FIFO queue
+(`AxiomServer`'s internal `serialize`, spec 8.1 §26-30). A query that hangs therefore does
+not merely block *its own* invocation: it also blocks whatever unrelated request happened
+to queue up behind it, even one that shares no state, integration or trigger with it at
+all. This is expected, not a bug to route around — it is what makes same-instant triggers
+commit one at a time identically on the deterministic and the real host.
+
+**The delay this can cause is bounded by `timeoutMs`, never indefinite.** The hung query
+itself cannot run past its declared deadline (above), so the request queued behind it is
+released as soon as that deadline fires — worst case, `timeoutMs`, not forever. Do not
+introduce concurrent query execution to remove this delay; the observed serialization is
+correct under the current authority model (spec 8.2 §41) and changing it is out of scope.
+See `'a hung query delays a genuinely unrelated queued Action, bounded by timeoutMs'`
+(`packages/server/test/timeout-and-scheduling.test.ts`) for the regression test.
 
 ## Registering an adapter
 

@@ -1,9 +1,9 @@
 {
   "conformance": "axiom.conformance.v1",
-  "contract": "axiom.server.v1",
+  "baseContract": "axiom.server.v1",
   "protocol": "axiom.protocol.v1",
-  "release": "0.8.1-alpha.1",
-  "description": "Portable conformance fixtures for the Axiom Server IR. Each entry is a self-contained JSON document: the Server IR, the state to start from, the principals, the invocations to perform and the results required. Running them needs no part of this implementation.",
+  "release": "0.8.2-alpha.1",
+  "description": "Portable conformance fixtures for the Axiom Server IR. Each entry is a self-contained JSON document: the Server IR, the state to start from, the principals, the invocations to perform and the results required. Running them needs no part of this implementation. \"conformance\" above is the fixture-FORMAT version (axiom.conformance.v1/v2); each fixture entry's own \"contract\" is the Server IR contract THAT fixture requires — the two are independent axes and neither implies the other.",
   "areas": [
     "action guards",
     "argument validation",
@@ -228,6 +228,133 @@
         "invocation source"
       ],
       "description": "An anonymous client cannot directly invoke an action reachable only by a trigger, event or effect outcome.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "late-query-result-after-timeout",
+      "file": "late-query-result-after-timeout.json",
+      "covers": [
+        "integration query",
+        "timeout"
+      ],
+      "description": "A query that eventually resolves successfully, but only after its declared timeoutMs already answered, is discarded — the late success can never mutate state.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v3",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 3
+    },
+    {
+      "name": "late-query-rejection-after-timeout",
+      "file": "late-query-rejection-after-timeout.json",
+      "covers": [
+        "integration query",
+        "timeout"
+      ],
+      "description": "A query that eventually rejects, but only after its declared timeoutMs already answered, is discarded exactly like a late success — the invocation already failed with INTEGRATION_TIMEOUT, not the provider error.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v3",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 3
+    },
+    {
+      "name": "failed-effect-structured-outcome",
+      "file": "failed-effect-structured-outcome.json",
+      "covers": [
+        "effects",
+        "events"
+      ],
+      "description": "A failed effect dispatches its structured failure outcome (code, message, retryable) to a system-only follow-up action — no text parsing required.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "authenticated-client-rejects-system-only-action",
+      "file": "authenticated-client-rejects-system-only-action.json",
+      "covers": [
+        "invocation source",
+        "authorization"
+      ],
+      "description": "An authenticated client is refused by a system-only action exactly like an anonymous one — invocation.allowedSources checks the request's source, not the caller's identity.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "simultaneous-same-instant-triggers-both-commit",
+      "file": "simultaneous-same-instant-triggers-both-commit.json",
+      "covers": [
+        "triggers",
+        "concurrent mutation"
+      ],
+      "description": "Two one-shot delay triggers due at the same simulated instant are serialized against each other, not raced — both commit, with no spurious conflict.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "rolled-back-action-produces-no-effect",
+      "file": "rolled-back-action-produces-no-effect.json",
+      "covers": [
+        "effects",
+        "rollback",
+        "constraints"
+      ],
+      "description": "A constraint violation rolls back the whole transaction, including the effect intent it recorded within it — no adapter call, no outcome event.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "effect-retry-sequence",
+      "file": "effect-retry-sequence.json",
+      "covers": [
+        "effects",
+        "events"
+      ],
+      "description": "A transient failure (retryable: true) is retried under the declared fixed-delay policy and eventually dispatches a success outcome.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "event-payload-invalid",
+      "file": "event-payload-invalid.json",
+      "covers": [
+        "events"
+      ],
+      "description": "A malformed event payload is rejected before any bound action sees it.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "verified-external-event-invokes-system-only-action",
+      "file": "verified-external-event-invokes-system-only-action.json",
+      "covers": [
+        "events",
+        "triggers",
+        "invocation source"
+      ],
+      "description": "A verified external event — semantically, an ordinary event dispatch, since HTTP delivery and signature verification are host/adapter concerns outside the graph — invokes a system-only action through its bound trigger, never reachable by a direct client InvokeRequest.",
       "conformance": "axiom.conformance.v2",
       "contract": "axiom.server.v4",
       "concurrent": false,

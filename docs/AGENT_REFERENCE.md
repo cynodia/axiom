@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.8.1-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.8.2-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -31,7 +31,7 @@ One canonical term per concept. These are not interchangeable.
 ## Graph construction
 
 ```ts
-const graph = new ApplicationGraph(id, name);      // version defaults to '0.8.0'
+const graph = new ApplicationGraph(id, name);      // version defaults to '0.8.2'
 graph.addNode<StateDef>({ id, kind: 'state', ... }); // returns NodeId; throws if id exists
 graph.getNode<StateDef>(id);                        // deep clone, or undefined
 graph.updateNode(node);                             // write a modified node back
@@ -496,6 +496,22 @@ if (!result.ok) {
 warnings never make a graph invalid. 72 codes in `VALIDATION_CODES`, grouped in
 [`VALIDATION.md`](VALIDATION.md).
 
+**`validateGraph(graph)` with no options is target-neutral by design** (spec 8.2 §2-4): a
+graph is never rejected for a renderer or trigger runtime nobody named. This means a bare
+`validateGraph(graph).valid === true` does **not** by itself guarantee the graph is
+executable by the browser client — a UI node kind no renderer implements, or a
+client-authority trigger kind the browser trigger runtime does not execute
+(`CLIENT_TRIGGER_UNSUPPORTED`), both validate silently under the no-options call. Use
+`validateForBrowser(graph)` (`@cynodia/axiom-compiler`) for a validate-only check against
+real browser capabilities, or call `compileToIR(graph)` directly — it applies those same
+capabilities and throws `GraphValidationError` on exactly what `validateForBrowser` would
+report as an error. See [Renderability](#renderability) below for the parallel UI-kind gate.
+
+```ts
+validateGraph(graph).valid;          // target-neutral: accepts every UI kind and trigger kind
+validateForBrowser(graph).valid;     // browser-real: same as compileToIR's validation step
+```
+
 ## Agent API
 
 ```ts
@@ -638,7 +654,7 @@ event.
 agent.listIntegrations() / agent.listIntegrationOperations(id?);
 agent.getActionsUsingIntegration(id) / agent.getEffectsForAction(actionId);
 agent.getTriggersForAction(actionId) / agent.getTimedTriggers();
-agent.getActionsTriggeredByEvent(eventId) / agent.getWebhookEvents();
+agent.getActionsTriggeredByEvent(eventId) / agent.getTriggeredEvents();  // graph-static: has a bound trigger, not "was delivered"
 agent.getExternalDependencies();   // { integrations, operations } — the deployment manifest
 agent.getSystemOnlyActions() / agent.getTriggersTargetingClientOnlyActions();
 agent.isClientInvocable(actionId) / agent.isSystemOnly(actionId);
@@ -647,11 +663,23 @@ agent.isClientInvocable(actionId) / agent.isSystemOnly(actionId);
 Portable artifacts, for a runtime written in another language:
 
 ```
-@cynodia/axiom-server/conformance                     the fixture manifest
+@cynodia/axiom-server/conformance                     the fixture manifest (fixture.format, below)
 @cynodia/axiom-server/conformance/<name>.json         one fixture, pure data
-@cynodia/axiom-server/schema/server-ir.v1.schema.json JSON Schema for the IR
+@cynodia/axiom-server/schema/server-ir.v1.schema.json JSON Schema for axiom.server.v1 (frozen)
+@cynodia/axiom-server/schema/server-ir.v2.schema.json JSON Schema for axiom.server.v2
+@cynodia/axiom-server/schema/server-ir.v3.schema.json JSON Schema for axiom.server.v3
+@cynodia/axiom-server/schema/server-ir.v4.schema.json JSON Schema for axiom.server.v4 (latest)
 @cynodia/axiom-server/schema/protocol.v1.schema.json  JSON Schema for the protocol
 ```
+
+This list is generated/tested content, not hand-maintained prose: `packages/demo/test
+/documentation.test.ts` fails if a shipped `schema/*.json` file is missing from it or a
+listed file no longer exists (spec 8.2 §43-45). `runConformanceFixture`/
+`runConformanceSuite` (`@cynodia/axiom-server`) are the public runner over that fixture
+format — see [`AUTHORITY.md`](AUTHORITY.md#conformance) for `fixture.conformance` (the
+fixture-format version) vs `fixture.serverIR.contract` (the per-fixture Server IR contract)
+vs the manifest's own `conformance`/`protocol`/`release` fields — three separate concepts,
+never conflated under one "contract" name (spec 8.2 §9-10).
 
 Boundary diagnostics: `UNKNOWN_SERVER_ACTION` `ARGUMENT_TYPE_MISMATCH` `AUTHORIZATION_DENIED`
 `INVOCATION_SOURCE_NOT_ALLOWED` `CONCURRENCY_CONFLICT` `MALFORMED_REQUEST`
@@ -682,6 +710,19 @@ A UI node kind is only in the contract if a renderer implements it. A renderer p
 Capabilities describe **node-kind** support, not partial support: a renderer cannot yet say
 that it draws a kind but not one of its options. Nothing in the current vocabulary needs that,
 and it is a deliberate future extension rather than an oversight.
+
+The same gate exists for client-authority triggers, since the browser trigger runtime
+implements no `TriggerSpec.kind` at all:
+
+```ts
+validateGraph(graph, { triggerRuntime: BROWSER_TRIGGER_CAPABILITIES });  // CLIENT_TRIGGER_UNSUPPORTED
+compileToIR(graph);                                                     // applies it by default
+```
+
+`CLIENT_TRIGGER_UNSUPPORTED`'s message states the remediation, not only the refusal: move
+the trigger's target action to server authority, or compile for a trigger runtime that
+publishes the kind (`compileToIR(graph, { triggerRuntime })`). Full model:
+[`TRIGGERS.md`](TRIGGERS.md#where-a-trigger-executes).
 
 ## Named expressions
 

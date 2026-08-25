@@ -33,8 +33,29 @@ turn it into a working browser application whose generated JavaScript nobody rea
   declaration-owned expansion with drift and materialization, `entity-form` covering create
   *and* edit, options sources, expression-capable pattern text, canonical `group` and named
   reusable expressions, and real-browser dialog conformance**.
+* `specs/spec8.md` — the **0.8 integrations, effects & triggers release**: `IntegrationDef`/
+  `IntegrationOperationDef` (query vs effect), `integration-query`/`integration-effect`
+  operations, the post-commit transactional-outbox effect model, `TriggerDef` (interval,
+  delay, lifecycle, event) invoking ordinary actions under a system principal, `EventDef`
+  and the semantic event pipeline, and `axiom.server.v3`.
+* `specs/spec8.1.md` — the **0.8.1 integration & trigger hardening release**: runtime-owned
+  (not adapter-cooperative) `integration-query` timeout, `ActionDef.invocation
+  .allowedSources` closing the client/system invocation-source trust gap, deterministic/
+  real-host scheduling parity for simultaneous triggers, `CLIENT_TRIGGER_UNSUPPORTED`
+  rejecting a trigger kind the intended runtime cannot execute, the structured effect-outcome
+  envelope (`effectOutcomeEntity`), and `axiom.server.v4`.
+* `specs/spec8.2.md` — the **0.8.2 integration & trigger polish / contract-clarity
+  release**: `validateForBrowser` alongside the deliberately target-neutral
+  `validateGraph`, `effectLog()` reporting `running`/`attempts` truthfully while an adapter
+  call is outstanding, the full effect-outcome envelope and `EFFECT_CORRELATION_ID_FIELD`
+  documented field by field, `getTriggeredEvents()` replacing the misleadingly-named
+  `getWebhookEvents()`, `retryable` absent/true/false semantics documented and tested, the
+  conformance manifest's `contract` field renamed to `baseContract`, and the portable
+  conformance suite expanded to 24 fixtures with a public `runConformanceFixture`/
+  `runConformanceSuite` reference runner. No new IR vocabulary; `axiom.server.v4` remains
+  latest.
 
-Together, spec2–spec7 are the authority on design decisions — **except where the
+Together, spec2–spec8.2 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 
@@ -87,6 +108,7 @@ npm test                    # runs node:test over COMPILED output — build firs
 npm run test:browser        # real-Chromium dialog conformance; FAILS if Playwright is absent
 
 npm run conformance:generate # rewrite packages/server/conformance/*.json + manifest.json
+npm run conformance:run      # run the whole suite through the public runConformanceFixture API only
 npm run schema:generate      # rewrite packages/server/schema/*.json
 npm run toolkit:catalog      # rewrite packages/ui-toolkit/docs/PATTERN_CATALOG.json
 npm run toolkit:metrics      # re-measure authoring compression into packages/ui-toolkit/metrics.json

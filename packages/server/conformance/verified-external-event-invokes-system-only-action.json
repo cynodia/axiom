@@ -1,10 +1,12 @@
 {
   "conformance": "axiom.conformance.v2",
-  "name": "integration-query-success",
+  "name": "verified-external-event-invokes-system-only-action",
   "covers": [
-    "integration query"
+    "events",
+    "triggers",
+    "invocation source"
   ],
-  "description": "A successful integration query binds its result and commits.",
+  "description": "A verified external event — semantically, an ordinary event dispatch, since HTTP delivery and signature verification are host/adapter concerns outside the graph — invokes a system-only action through its bound trigger, never reachable by a direct client InvokeRequest.",
   "principals": {},
   "serverIR": {
     "contract": "axiom.server.v4",
@@ -675,26 +677,15 @@
     }
   ],
   "externalAdapters": {
-    "integration_provider": {
-      "query": [
-        {
-          "result": {
-            "ok": true,
-            "value": "online"
-          }
-        }
-      ]
-    }
+    "integration_provider": {}
   },
   "steps": [
     {
-      "kind": "invoke",
-      "actionId": "action_refresh",
+      "kind": "event",
+      "eventId": "event_external_status",
+      "payload": "online",
       "expect": {
-        "ok": true,
-        "changedStates": [
-          "state_status"
-        ]
+        "ok": true
       }
     }
   ],

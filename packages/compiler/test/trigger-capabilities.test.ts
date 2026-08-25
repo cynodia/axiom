@@ -11,7 +11,7 @@ import {
 } from '@cynodia/axiom-core';
 import type { ActionDef, EntityDef, RouteDef, StateDef, TriggerDef, ViewNode } from '@cynodia/axiom-core';
 import { BROWSER_TRIGGER_CAPABILITIES } from '@cynodia/axiom-runtime';
-import { compileToIR, compileToServerIR } from '@cynodia/axiom-compiler';
+import { compileToIR, compileToServerIR, validateForBrowser } from '@cynodia/axiom-compiler';
 
 /**
  * Spec 8.1 §31-36: before this, a client-authority trigger validated, compiled into
@@ -83,11 +83,27 @@ test('a trigger runtime that supports the kind accepts the same graph', () => {
   );
 });
 
-test('validation with no named trigger runtime accepts every client trigger kind', () => {
+test('validation with no named trigger runtime accepts every client trigger kind (spec 8.2 §2-4: target-neutral by design)', () => {
   assert.deepEqual(
     validateGraph(graphWithClientTrigger()).errors.filter((error) => error.code === 'CLIENT_TRIGGER_UNSUPPORTED'),
     [],
   );
+});
+
+test('validateForBrowser applies the same browser trigger capabilities as compileToIR, and rejects', () => {
+  const errors = validateForBrowser(graphWithClientTrigger()).errors.filter(
+    (error) => error.code === 'CLIENT_TRIGGER_UNSUPPORTED',
+  );
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].details?.target, 'browser');
+});
+
+test('CLIENT_TRIGGER_UNSUPPORTED states the remediation, not only the refusal', () => {
+  const errors = validateForBrowser(graphWithClientTrigger()).errors.filter(
+    (error) => error.code === 'CLIENT_TRIGGER_UNSUPPORTED',
+  );
+  assert.match(errors[0].message, /move .* to server-authoritative execution/i);
+  assert.match(errors[0].message, /compile for a trigger runtime that publishes/i);
 });
 
 test('compileToServerIR is unaffected: a client-authority trigger is simply absent from the server half', () => {

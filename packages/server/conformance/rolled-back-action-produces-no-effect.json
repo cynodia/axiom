@@ -1,10 +1,12 @@
 {
   "conformance": "axiom.conformance.v2",
-  "name": "integration-query-success",
+  "name": "rolled-back-action-produces-no-effect",
   "covers": [
-    "integration query"
+    "effects",
+    "rollback",
+    "constraints"
   ],
-  "description": "A successful integration query binds its result and commits.",
+  "description": "A constraint violation rolls back the whole transaction, including the effect intent it recorded within it — no adapter call, no outcome event.",
   "principals": {},
   "serverIR": {
     "contract": "axiom.server.v4",
@@ -669,18 +671,28 @@
   },
   "initialState": [
     {
-      "stateId": "state_status",
-      "value": "unknown",
+      "stateId": "state_guard",
+      "value": [
+        {
+          "field_guard_id": "g1",
+          "field_guard_value": 1
+        }
+      ],
+      "revision": 1
+    },
+    {
+      "stateId": "state_message",
+      "value": "",
       "revision": 1
     }
   ],
   "externalAdapters": {
     "integration_provider": {
-      "query": [
+      "effect": [
         {
           "result": {
             "ok": true,
-            "value": "online"
+            "value": "should never be dispatched"
           }
         }
       ]
@@ -689,16 +701,23 @@
   "steps": [
     {
       "kind": "invoke",
-      "actionId": "action_refresh",
+      "actionId": "action_guarded_reboot",
       "expect": {
-        "ok": true,
-        "changedStates": [
-          "state_status"
-        ]
+        "ok": false,
+        "diagnosticCodes": [
+          "CONSTRAINT_VIOLATION"
+        ],
+        "changedStates": []
       }
     }
   ],
   "expectedState": {
-    "state_status": "online"
+    "state_guard": [
+      {
+        "field_guard_id": "g1",
+        "field_guard_value": 1
+      }
+    ],
+    "state_message": ""
   }
 }

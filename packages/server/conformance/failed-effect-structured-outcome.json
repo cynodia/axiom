@@ -1,10 +1,11 @@
 {
   "conformance": "axiom.conformance.v2",
-  "name": "integration-query-success",
+  "name": "failed-effect-structured-outcome",
   "covers": [
-    "integration query"
+    "effects",
+    "events"
   ],
-  "description": "A successful integration query binds its result and commits.",
+  "description": "A failed effect dispatches its structured failure outcome (code, message, retryable) to a system-only follow-up action — no text parsing required.",
   "principals": {},
   "serverIR": {
     "contract": "axiom.server.v4",
@@ -669,18 +670,20 @@
   },
   "initialState": [
     {
-      "stateId": "state_status",
-      "value": "unknown",
+      "stateId": "state_message",
+      "value": "",
       "revision": 1
     }
   ],
   "externalAdapters": {
     "integration_provider": {
-      "query": [
+      "effect": [
         {
           "result": {
-            "ok": true,
-            "value": "online"
+            "ok": false,
+            "code": "DEVICE_UNREACHABLE",
+            "message": "no route to device",
+            "retryable": false
           }
         }
       ]
@@ -689,16 +692,13 @@
   "steps": [
     {
       "kind": "invoke",
-      "actionId": "action_refresh",
+      "actionId": "action_reboot",
       "expect": {
-        "ok": true,
-        "changedStates": [
-          "state_status"
-        ]
+        "ok": true
       }
     }
   ],
   "expectedState": {
-    "state_status": "online"
+    "state_message": "no route to device"
   }
 }

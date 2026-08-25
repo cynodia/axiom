@@ -155,6 +155,25 @@ const INT_TRIGGER_POLL = nodeId('trigger_poll');
 const INT_TRIGGER_SUCCEEDED = nodeId('trigger_succeeded');
 const INT_TRIGGER_FAILED = nodeId('trigger_failed');
 
+// 8.2 additions (spec 8.2 §11-12): a guarded record + constraint (rollback-suppresses-
+// effect), a counter bumped by two simultaneous delay triggers (scheduling parity), and a
+// verified-external-event → system-only-action pair (the webhook semantic fixture).
+const INT_ENTITY_GUARD = nodeId('entity_guard');
+const F_GUARD_ID = fieldId('field_guard_id');
+const F_GUARD_VALUE = fieldId('field_guard_value');
+const INT_STATE_GUARD = nodeId('state_guard');
+const INT_CONSTRAINT_GUARD = nodeId('constraint_guard');
+const INT_ACTION_GUARDED_REBOOT = nodeId('action_guarded_reboot');
+const INT_STATE_COUNTER = nodeId('state_counter');
+const INT_ACTION_BUMP_A = nodeId('action_bump_a');
+const INT_ACTION_BUMP_B = nodeId('action_bump_b');
+const INT_TRIGGER_BUMP_A = nodeId('trigger_bump_a');
+const INT_TRIGGER_BUMP_B = nodeId('trigger_bump_b');
+const INT_EVENT_EXTERNAL_STATUS = nodeId('event_external_status');
+const INT_ACTION_APPLY_EXTERNAL_STATUS = nodeId('action_apply_external_status');
+const INT_PARAM_STATUS = nodeId('param_status');
+const INT_TRIGGER_EXTERNAL_STATUS = nodeId('trigger_external_status');
+
 /** Every operation/trigger/effect-outcome/invocation-source construct 8.1 hardens. */
 function buildIntegrationGraph() {
   const graph = new ApplicationGraph('conformance-integrations', 'Conformance integrations');
@@ -168,7 +187,8 @@ function buildIntegrationGraph() {
   graph.addNode({ id: INT_OP_FETCH, kind: 'integration-operation', integrationId: INT_INTEGRATION,
     name: 'fetchStatus', mode: 'query', resultType: primitiveType('string') });
   graph.addNode({ id: INT_OP_REBOOT, kind: 'integration-operation', integrationId: INT_INTEGRATION,
-    name: 'reboot', mode: 'effect', idempotent: true, resultType: primitiveType('string') });
+    name: 'reboot', mode: 'effect', idempotent: true, resultType: primitiveType('string'),
+    retry: { policy: 'fixed', maxAttempts: 3, delayMs: 50 } });
 
   graph.addNode(effectOutcomeEntity(INT_ENTITY_OUTCOME, primitiveType('string')));
   graph.addNode({ id: INT_EVENT_SUCCEEDED, kind: 'event', payloadType: entityType(INT_ENTITY_OUTCOME) });
@@ -199,6 +219,51 @@ function buildIntegrationGraph() {
     when: { kind: 'event', eventId: INT_EVENT_FAILED },
     arguments: { [INT_PARAM_MESSAGE]: field(ref(INT_TRIGGER_FAILED), EFFECT_MESSAGE_FIELD) } });
 
+  // A guarded record + constraint, so an action that both writes it invalid AND records an
+  // effect intent demonstrates the whole transaction — mutation and effect intent alike —
+  // rolls back together (spec 8.2 §11 item 6).
+  graph.addNode({ id: INT_ENTITY_GUARD, kind: 'entity', identityFieldId: F_GUARD_ID, fields: [
+    { id: F_GUARD_ID, valueType: primitiveType('string'), required: true },
+    { id: F_GUARD_VALUE, valueType: primitiveType('number'), required: true }] });
+  graph.addNode({ id: INT_STATE_GUARD, kind: 'state', name: 'guard', authority: 'server',
+    valueType: collectionType(entityType(INT_ENTITY_GUARD)),
+    initialValue: [{ [F_GUARD_ID]: 'g1', [F_GUARD_VALUE]: 1 }] });
+  graph.addNode({ id: INT_CONSTRAINT_GUARD, kind: 'constraint', entityId: INT_ENTITY_GUARD,
+    message: 'Guard value must stay below 10.',
+    expression: binary('lt', field(ref(INT_ENTITY_GUARD), F_GUARD_VALUE), literal(10)) });
+  graph.addNode({ id: INT_ACTION_GUARDED_REBOOT, kind: 'action', name: 'guardedReboot',
+    operations: [
+      { kind: 'set',
+        target: fieldLocation(itemLocation(stateLocation(INT_STATE_GUARD), identitySelector(F_GUARD_ID, literal('g1'))), F_GUARD_VALUE),
+        value: literal(999) },
+      { kind: 'integration-effect', operationId: INT_OP_REBOOT,
+        succeededEventId: INT_EVENT_SUCCEEDED, failedEventId: INT_EVENT_FAILED }] });
+
+  // Two one-shot delay triggers due at the same simulated instant, bumping a shared
+  // counter — the deterministic/real-host scheduling-parity guarantee (spec 8.1 §26-30),
+  // as a portable fixture (spec 8.2 §11 item 5).
+  graph.addNode({ id: INT_STATE_COUNTER, kind: 'state', name: 'counter', authority: 'server',
+    valueType: primitiveType('number'), initialValue: 0 });
+  graph.addNode({ id: INT_ACTION_BUMP_A, kind: 'action', name: 'bumpA',
+    operations: [{ kind: 'set', target: stateLocation(INT_STATE_COUNTER), value: binary('add', ref(INT_STATE_COUNTER), literal(1)) }] });
+  graph.addNode({ id: INT_ACTION_BUMP_B, kind: 'action', name: 'bumpB',
+    operations: [{ kind: 'set', target: stateLocation(INT_STATE_COUNTER), value: binary('add', ref(INT_STATE_COUNTER), literal(1)) }] });
+  graph.addNode({ id: INT_TRIGGER_BUMP_A, kind: 'trigger', actionId: INT_ACTION_BUMP_A, when: { kind: 'delay', afterMs: 10 } });
+  graph.addNode({ id: INT_TRIGGER_BUMP_B, kind: 'trigger', actionId: INT_ACTION_BUMP_B, when: { kind: 'delay', afterMs: 10 } });
+
+  // A verified external event → a system-only action, the semantic boundary a webhook sits
+  // behind (spec 8.2 §12). HTTP delivery and signature verification are host/adapter
+  // concerns (spec §53) and are deliberately absent — an `event` step models "already
+  // verified", exactly as the fixture format's steps vocabulary intends.
+  graph.addNode({ id: INT_EVENT_EXTERNAL_STATUS, kind: 'event', payloadType: primitiveType('string') });
+  graph.addNode({ id: INT_ACTION_APPLY_EXTERNAL_STATUS, kind: 'action', name: 'applyExternalStatus',
+    invocation: { allowedSources: ['system'] },
+    parameters: [{ id: INT_PARAM_STATUS, valueType: primitiveType('string'), required: true }],
+    operations: [{ kind: 'set', target: stateLocation(INT_STATE_STATUS), value: ref(INT_PARAM_STATUS) }] });
+  graph.addNode({ id: INT_TRIGGER_EXTERNAL_STATUS, kind: 'trigger', actionId: INT_ACTION_APPLY_EXTERNAL_STATUS,
+    when: { kind: 'event', eventId: INT_EVENT_EXTERNAL_STATUS },
+    arguments: { [INT_PARAM_STATUS]: ref(INT_TRIGGER_EXTERNAL_STATUS) } });
+
   return graph;
 }
 
@@ -209,6 +274,39 @@ if (!integrationValidation.valid) {
   process.exit(1);
 }
 const integrationServerIR = compiler.compileToServerIR(integrationGraph);
+
+// A dedicated, trigger-free graph for the late-query fixtures: `integrationServerIR` above
+// carries a 1000ms poll trigger, which a fixture advancing virtual time past 1000ms would
+// incidentally also fire, consuming a second scripted response and hanging on a `neverSettle`-
+// like unresolved timer nothing ever advances to. Isolating this graph avoids coupling two
+// unrelated fixture concerns to the exact same shared IR.
+const LATE_STATE_STATUS = nodeId('state_status_late');
+const LATE_INTEGRATION = nodeId('integration_provider_late');
+const LATE_OP_FETCH = nodeId('integration_operation_fetch_late');
+const LATE_ACTION_REFRESH = nodeId('action_refresh_late');
+const LATE_SCOPE_QUERY = nodeId('scope_query_late');
+
+function buildLateQueryGraph() {
+  const graph = new ApplicationGraph('conformance-late-query', 'Conformance late query');
+  graph.addNode({ id: LATE_STATE_STATUS, kind: 'state', name: 'status', authority: 'server',
+    valueType: primitiveType('string'), initialValue: 'unknown' });
+  graph.addNode({ id: LATE_INTEGRATION, kind: 'integration', name: 'Provider' });
+  graph.addNode({ id: LATE_OP_FETCH, kind: 'integration-operation', integrationId: LATE_INTEGRATION,
+    name: 'fetchStatus', mode: 'query', resultType: primitiveType('string') });
+  graph.addNode({ id: LATE_ACTION_REFRESH, kind: 'action', name: 'refresh',
+    operations: [
+      { kind: 'integration-query', operationId: LATE_OP_FETCH, bindAs: LATE_SCOPE_QUERY, timeoutMs: 500 },
+      { kind: 'set', target: stateLocation(LATE_STATE_STATUS), value: ref(LATE_SCOPE_QUERY) }] });
+  return graph;
+}
+
+const lateQueryGraph = buildLateQueryGraph();
+const lateQueryValidation = validateGraph(lateQueryGraph);
+if (!lateQueryValidation.valid) {
+  console.error(lateQueryValidation.errors.map((e) => `[${e.code}] ${e.message}`).join('\n'));
+  process.exit(1);
+}
+const lateQueryServerIR = compiler.compileToServerIR(lateQueryGraph);
 
 const principals = {
   clerk: { [F_USER_ID]: 'u1', [F_USER_ROLE]: 'clerk' },
@@ -451,6 +549,175 @@ const integrationFixtures = [
     ],
     expectedState: { [INT_STATE_MESSAGE]: '' },
   },
+  {
+    name: 'late-query-result-after-timeout',
+    conformance: 'axiom.conformance.v2',
+    serverIR: lateQueryServerIR,
+    principals: {},
+    covers: ['integration query', 'timeout'],
+    description:
+      'A query that eventually resolves successfully, but only after its declared timeoutMs already answered, is discarded — the late success can never mutate state.',
+    initialState: [{ stateId: LATE_STATE_STATUS, value: 'unknown', revision: 1 }],
+    externalAdapters: {
+      [LATE_INTEGRATION]: { query: [{ result: { ok: true, value: 'online' }, resolveAfterMs: 300 }] },
+    },
+    steps: [
+      { kind: 'invoke', actionId: LATE_ACTION_REFRESH, expect: { ok: false, diagnosticCodes: ['INTEGRATION_TIMEOUT'] } },
+      { kind: 'advance', ms: 500 },
+      // The late result resolves well after the deadline already answered (300ms after the
+      // query started, i.e. 200ms after its 500ms timeoutMs deadline already fired).
+      { kind: 'advance', ms: 200 },
+    ],
+    expectedState: { [LATE_STATE_STATUS]: 'unknown' },
+  },
+  {
+    name: 'late-query-rejection-after-timeout',
+    conformance: 'axiom.conformance.v2',
+    serverIR: lateQueryServerIR,
+    principals: {},
+    covers: ['integration query', 'timeout'],
+    description:
+      'A query that eventually rejects, but only after its declared timeoutMs already answered, is discarded exactly like a late success — the invocation already failed with INTEGRATION_TIMEOUT, not the provider error.',
+    initialState: [{ stateId: LATE_STATE_STATUS, value: 'unknown', revision: 1 }],
+    externalAdapters: {
+      [LATE_INTEGRATION]: {
+        query: [{ result: { ok: false, code: 'DEVICE_UNREACHABLE', message: 'no route', retryable: false }, resolveAfterMs: 300 }],
+      },
+    },
+    steps: [
+      { kind: 'invoke', actionId: LATE_ACTION_REFRESH, expect: { ok: false, diagnosticCodes: ['INTEGRATION_TIMEOUT'] } },
+      { kind: 'advance', ms: 500 },
+      { kind: 'advance', ms: 200 },
+    ],
+    expectedState: { [LATE_STATE_STATUS]: 'unknown' },
+  },
+  {
+    name: 'failed-effect-structured-outcome',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['effects', 'events'],
+    description:
+      'A failed effect dispatches its structured failure outcome (code, message, retryable) to a system-only follow-up action — no text parsing required.',
+    initialState: [{ stateId: INT_STATE_MESSAGE, value: '', revision: 1 }],
+    externalAdapters: {
+      [INT_INTEGRATION]: {
+        effect: [{ result: { ok: false, code: 'DEVICE_UNREACHABLE', message: 'no route to device', retryable: false } }],
+      },
+    },
+    steps: [{ kind: 'invoke', actionId: INT_ACTION_REBOOT, expect: { ok: true } }],
+    expectedState: { [INT_STATE_MESSAGE]: 'no route to device' },
+  },
+  {
+    name: 'authenticated-client-rejects-system-only-action',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: { someone: {} },
+    covers: ['invocation source', 'authorization'],
+    description:
+      "An authenticated client is refused by a system-only action exactly like an anonymous one — invocation.allowedSources checks the request's source, not the caller's identity.",
+    initialState: [{ stateId: INT_STATE_MESSAGE, value: '', revision: 1 }],
+    externalAdapters: { [INT_INTEGRATION]: {} },
+    steps: [
+      { kind: 'invoke', actionId: INT_ACTION_APPLY_MESSAGE, credential: 'someone', arguments: { [INT_PARAM_MESSAGE]: 'forged' },
+        expect: { ok: false, diagnosticCodes: ['INVOCATION_SOURCE_NOT_ALLOWED'] } },
+    ],
+    expectedState: { [INT_STATE_MESSAGE]: '' },
+  },
+  {
+    name: 'simultaneous-same-instant-triggers-both-commit',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['triggers', 'concurrent mutation'],
+    description:
+      'Two one-shot delay triggers due at the same simulated instant are serialized against each other, not raced — both commit, with no spurious conflict.',
+    initialState: [{ stateId: INT_STATE_COUNTER, value: 0, revision: 1 }],
+    externalAdapters: { [INT_INTEGRATION]: {} },
+    steps: [{ kind: 'advance', ms: 10 }],
+    expectedState: { [INT_STATE_COUNTER]: 2 },
+  },
+  {
+    name: 'rolled-back-action-produces-no-effect',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['effects', 'rollback', 'constraints'],
+    description:
+      'A constraint violation rolls back the whole transaction, including the effect intent it recorded within it — no adapter call, no outcome event.',
+    initialState: [
+      { stateId: INT_STATE_GUARD, value: [{ [F_GUARD_ID]: 'g1', [F_GUARD_VALUE]: 1 }], revision: 1 },
+      { stateId: INT_STATE_MESSAGE, value: '', revision: 1 },
+    ],
+    // If the effect intent were not suppressed by rollback, this would be called and
+    // INT_STATE_MESSAGE would move — the assertion below is what proves it never runs.
+    externalAdapters: { [INT_INTEGRATION]: { effect: [{ result: { ok: true, value: 'should never be dispatched' } }] } },
+    steps: [
+      { kind: 'invoke', actionId: INT_ACTION_GUARDED_REBOOT,
+        expect: { ok: false, diagnosticCodes: ['CONSTRAINT_VIOLATION'], changedStates: [] } },
+    ],
+    expectedState: {
+      [INT_STATE_GUARD]: [{ [F_GUARD_ID]: 'g1', [F_GUARD_VALUE]: 1 }],
+      [INT_STATE_MESSAGE]: '',
+    },
+  },
+  {
+    name: 'effect-retry-sequence',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['effects', 'events'],
+    description:
+      'A transient failure (retryable: true) is retried under the declared fixed-delay policy and eventually dispatches a success outcome.',
+    initialState: [{ stateId: INT_STATE_MESSAGE, value: '', revision: 1 }],
+    externalAdapters: {
+      [INT_INTEGRATION]: {
+        effect: [
+          { result: { ok: false, code: 'TRANSIENT', message: 'try again', retryable: true } },
+          { result: { ok: true, value: 'rebooted after retry' } },
+        ],
+      },
+    },
+    steps: [
+      { kind: 'invoke', actionId: INT_ACTION_REBOOT, expect: { ok: true } },
+      { kind: 'advance', ms: 60 },
+    ],
+    expectedState: { [INT_STATE_MESSAGE]: 'rebooted after retry' },
+  },
+  {
+    name: 'event-payload-invalid',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['events'],
+    description: 'A malformed event payload is rejected before any bound action sees it.',
+    initialState: [{ stateId: INT_STATE_MESSAGE, value: '', revision: 1 }],
+    externalAdapters: { [INT_INTEGRATION]: {} },
+    steps: [
+      { kind: 'event', eventId: INT_EVENT_SUCCEEDED, payload: 'not-a-valid-outcome',
+        expect: { ok: false, diagnosticCodes: ['EVENT_PAYLOAD_INVALID'] } },
+    ],
+    expectedState: { [INT_STATE_MESSAGE]: '' },
+  },
+  {
+    name: 'verified-external-event-invokes-system-only-action',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['events', 'triggers', 'invocation source'],
+    description:
+      'A verified external event — semantically, an ordinary event dispatch, since HTTP delivery and signature verification are host/adapter concerns outside the graph — invokes a system-only action through its bound trigger, never reachable by a direct client InvokeRequest.',
+    initialState: [{ stateId: INT_STATE_STATUS, value: 'unknown', revision: 1 }],
+    externalAdapters: { [INT_INTEGRATION]: {} },
+    // An EventResponse carries no `changes` (that is reported only for an invoke response),
+    // so the effect of the dispatched event is checked through `expectedState` below rather
+    // than a changedStates assertion on the step itself.
+    steps: [
+      { kind: 'event', eventId: INT_EVENT_EXTERNAL_STATUS, payload: 'online',
+        expect: { ok: true } },
+    ],
+    expectedState: { [INT_STATE_STATUS]: 'online' },
+  },
 ];
 
 const directory = path.join(repoRoot, 'packages/server/conformance');
@@ -504,13 +771,22 @@ for (const fixture of [...fixtures, ...integrationFixtures]) {
  */
 const manifest = {
   conformance: 'axiom.conformance.v1',
-  contract: 'axiom.server.v1',
+  // Renamed from the ambiguous `contract` (spec 8.2 §9-10): this is the OLDEST Server IR
+  // contract any fixture in this manifest may use, not "the contract of this suite" — the
+  // suite ships fixtures spanning v1 through v4 simultaneously. Each fixture's own
+  // `contract` field (below) is what is authoritative for what that fixture actually uses;
+  // this top-level field exists only so a minimal consumer that implements nothing past v1
+  // can tell at a glance that some fixtures require more before it even opens one.
+  baseContract: 'axiom.server.v1',
   protocol: 'axiom.protocol.v1',
   release: version,
   description:
     'Portable conformance fixtures for the Axiom Server IR. Each entry is a self-contained ' +
     'JSON document: the Server IR, the state to start from, the principals, the invocations ' +
-    'to perform and the results required. Running them needs no part of this implementation.',
+    'to perform and the results required. Running them needs no part of this implementation. ' +
+    '"conformance" above is the fixture-FORMAT version (axiom.conformance.v1/v2); each ' +
+    'fixture entry\'s own "contract" is the Server IR contract THAT fixture requires — the ' +
+    'two are independent axes and neither implies the other.',
   areas: [...new Set([...fixtures, ...integrationFixtures].flatMap((fixture) => fixture.covers))].sort(),
   fixtures: manifestEntries,
 };

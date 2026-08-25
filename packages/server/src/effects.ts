@@ -10,6 +10,14 @@ export interface EffectRunnerOptions {
   host: ServerHost;
   /** Called once an effect reaches `succeeded` or `failed`, to dispatch its declared event. */
   onTerminal(record: EffectRecord): Promise<void>;
+  /**
+   * Called synchronously once an attempt is durably recorded as `running`, before the
+   * adapter is actually invoked — how `AxiomServer.effectLog()`'s in-memory view learns of
+   * the transition (spec 8.2 §17-23). Without this, a hung adapter call is indistinguishable
+   * from an effect nobody has dispatched yet: both showed `status: 'pending', attempts: 0`
+   * in the public log forever, even though the adapter had genuinely been called.
+   */
+  onRunning?(record: EffectRecord): void;
   report?(event: {
     kind: 'effect-attempted' | 'effect-succeeded' | 'effect-failed';
     effectId: string;
@@ -37,7 +45,7 @@ function delay(host: ServerHost, ms: number): Promise<void> {
 }
 
 export function createEffectRunner(options: EffectRunnerOptions): EffectRunner {
-  const { adapters, integrationOperations, persistence, host, onTerminal, report } = options;
+  const { adapters, integrationOperations, persistence, host, onTerminal, onRunning, report } = options;
 
   async function run(record: EffectRecord): Promise<void> {
     const operation = integrationOperations[record.operationId];
@@ -77,6 +85,7 @@ export function createEffectRunner(options: EffectRunnerOptions): EffectRunner {
       attempt += 1;
       const persistedAttempts = record.attempts + attempt;
       await persistence.recordEffectAttempt?.(record.id, { status: 'running', attempts: persistedAttempts });
+      onRunning?.({ ...record, status: 'running', attempts: persistedAttempts });
       report?.({ kind: 'effect-attempted', effectId: record.id, operationId: record.operationId, attempt: persistedAttempts });
 
       const result = await adapter.effect(

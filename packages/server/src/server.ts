@@ -867,6 +867,13 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     persistence,
     host,
     onTerminal: onEffectTerminal,
+    // Public `effectLog()` observability (spec 8.2 §17-23): without this, a hung adapter
+    // call is indistinguishable from an effect nobody has dispatched yet — both would show
+    // `status: 'pending', attempts: 0` forever, even though the adapter had genuinely been
+    // invoked. `effectRecords` is the same in-memory map `effectLog()` reads.
+    onRunning: (record) => {
+      effectRecords.set(record.id, record);
+    },
     report: (event) => report({ kind: event.kind, effectId: event.effectId, operationId: event.operationId, attempt: event.attempt }),
   });
 

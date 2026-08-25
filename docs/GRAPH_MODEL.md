@@ -1,6 +1,6 @@
 # Graph model
 
-Axiom 0.8.1-alpha.1. The `ApplicationGraph` is the authoritative representation of an
+Axiom 0.8.2-alpha.1. The `ApplicationGraph` is the authoritative representation of an
 application. Everything else — the IR, the page, the DOM — is derived from it and is never
 edited.
 
@@ -25,7 +25,7 @@ edited.
 ## API
 
 ```ts
-const graph = new ApplicationGraph(id, name, version?);   // version defaults to '0.8.0'
+const graph = new ApplicationGraph(id, name, version?);   // version defaults to '0.8.2'
 
 graph.addNode<T>(node): NodeId        // generates an id if omitted; throws if it exists
 graph.getNode<T>(id): T | undefined   // deep clone

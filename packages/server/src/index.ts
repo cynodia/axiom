@@ -21,5 +21,6 @@ export * from './integration.js';
 export * from './effects.js';
 export * from './triggers.js';
 export * from './server.js';
+export * from './conformance-runner.js';
 export * from './transport.js';
 export * from './node-host.js';

@@ -204,7 +204,11 @@ export function validateAuthority(
     if (authority === 'client' && !triggerRuntime.supportedTriggerKinds.includes(node.when.kind)) {
       errors.push({
         code: VALIDATION_CODES.clientTriggerUnsupported,
-        message: `Trigger ${node.name ?? node.id} is a client-authority '${node.when.kind}' trigger, which the ${triggerRuntime.target} trigger runtime does not execute`,
+        message:
+          `Trigger ${node.name ?? node.id} is a client-authority '${node.when.kind}' trigger, which the ` +
+          `${triggerRuntime.target} trigger runtime does not execute. Move ${target.name ?? target.id} to ` +
+          `server-authoritative execution (so the trigger becomes server-authority), or compile for a ` +
+          `trigger runtime that publishes '${node.when.kind}' in its supportedTriggerKinds.`,
         nodeId: node.id,
         details: { actionId: target.id, kind: node.when.kind, target: triggerRuntime.target },
       });

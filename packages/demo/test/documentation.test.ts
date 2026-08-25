@@ -50,7 +50,7 @@ import {
   toBoolean,
 } from '@cynodia/axiom';
 import type { EntityDef, RouteDef, StateDef, ViewNode } from '@cynodia/axiom';
-import { MAX_EVENT_DISPATCH_DEPTH, SERVER_DIAGNOSTIC_CODES } from '@cynodia/axiom-server';
+import { MAX_EVENT_DISPATCH_DEPTH, SERVER_DIAGNOSTIC_CODES, SERVER_IR_CONTRACTS } from '@cynodia/axiom-server';
 import { runMinimalExample } from '@cynodia/axiom-demo/minimal';
 import { runSeatingExample } from '@cynodia/axiom-demo/minimal-server';
 
@@ -234,6 +234,8 @@ test('every validation code is documented, and every documented code exists', ()
     'EFFECT_ID_FIELD', 'EFFECT_INTEGRATION_ID_FIELD', 'EFFECT_OPERATION_ID_FIELD',
     'EFFECT_CODE_FIELD', 'EFFECT_MESSAGE_FIELD', 'EFFECT_RETRYABLE_FIELD',
     'EFFECT_IDEMPOTENCY_KEY_FIELD', 'EFFECT_CORRELATION_ID_FIELD', 'EFFECT_RESULT_FIELD',
+    // Trigger/renderer capability constants (spec 8.2): exported constants, not codes.
+    'BROWSER_TRIGGER_CAPABILITIES',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });
@@ -587,6 +589,42 @@ test('the conformance and schema subpaths a document names actually resolve', ()
 
   for (const match of EVERY_DOC.matchAll(/@cynodia\/axiom-server(\/[\w./*-]+)/g)) {
     assert.ok(resolves(`.${match[1]}`), `${match[0]} is not exported by @cynodia/axiom-server`);
+  }
+});
+
+test('every Server IR contract has a row in the AUTHORITY.md contract table, and vice versa (spec 8.2 §7-8)', () => {
+  const authority = ALL_DOCS.get('docs/AUTHORITY.md') as string;
+  const tableSection = authority.slice(authority.indexOf('## Contract identifiers'));
+  for (const contract of SERVER_IR_CONTRACTS) {
+    assert.match(
+      tableSection,
+      new RegExp(`\`${contract}\``),
+      `${contract} (in SERVER_IR_CONTRACTS) has no row in AUTHORITY.md's contract table`,
+    );
+  }
+  const documented = new Set(
+    [...tableSection.matchAll(/^\| `(axiom\.server\.v\d+)`/gm)].map((match) => match[1]),
+  );
+  const known = new Set<string>(SERVER_IR_CONTRACTS as readonly string[]);
+  const stale = [...documented].filter((contract) => !known.has(contract));
+  assert.deepEqual(stale, [], 'AUTHORITY.md names a contract that SERVER_IR_CONTRACTS does not declare');
+});
+
+test('every shipped server-ir schema file is named in docs/AGENT_REFERENCE.md (spec 8.2 §43-45)', () => {
+  const reference = ALL_DOCS.get('docs/AGENT_REFERENCE.md') as string;
+  const schemaFiles = readdirSync(path.join(repoRoot, 'packages/server/schema')).filter((name) =>
+    name.endsWith('.schema.json'),
+  );
+  assert.ok(schemaFiles.length > 0);
+  for (const file of schemaFiles) {
+    assert.ok(
+      reference.includes(file),
+      `${file} ships in packages/server/schema but is not named in docs/AGENT_REFERENCE.md`,
+    );
+  }
+  // And the reverse: nothing named there should be a file that does not actually exist.
+  for (const match of reference.matchAll(/schema\/([\w.-]+\.schema\.json)/g)) {
+    assert.ok(schemaFiles.includes(match[1]), `docs/AGENT_REFERENCE.md names ${match[1]}, which does not ship`);
   }
 });
 

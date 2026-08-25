@@ -203,6 +203,58 @@ test('a slow timed-out poll does not poison a queued concurrent ordinary action 
   await server.stop();
 });
 
+test(
+  'a hung query delays a genuinely unrelated queued Action, bounded by timeoutMs (spec 8.2 §40-42)',
+  async () => {
+    // Axiom's authority queue is a single serialized FIFO (spec 8.1 §26-30): a hung query
+    // does not merely block *itself*, it blocks whatever request queued up behind it — an
+    // action that shares no state, no integration and no trigger with it at all. The bound
+    // on how long that delay can last is `timeoutMs`, not indefinite.
+    const STATE_COUNTER = nodeId('state_counter_08_2_queue');
+    const ACTION_BUMP = nodeId('action_bump_08_2_queue');
+    const graph = buildGraph(1000, 5000);
+    graph.addNode<StateDef>({
+      id: STATE_COUNTER,
+      kind: 'state',
+      authority: 'server',
+      valueType: primitiveType('number'),
+      initialValue: 0,
+    });
+    graph.addNode<ActionDef>({
+      id: ACTION_BUMP,
+      kind: 'action',
+      operations: [
+        { kind: 'set', target: stateLocation(STATE_COUNTER), value: binary('add', ref(STATE_COUNTER), literal(1)) },
+      ],
+    });
+    const ir = compileToServerIR(graph);
+    const host = createDeterministicServerHost();
+    const server = createAxiomServer({
+      ir,
+      host,
+      persistence: createMemoryPersistence(),
+      integrations: { [INTEGRATION]: hangingAdapter() },
+    });
+    await server.start();
+
+    const hungQuery = server.handle({ kind: 'invoke', protocol: 'axiom.protocol.v1', actionId: ACTION_REFRESH });
+    await settle();
+    // Queued behind the hung query — not yet settled, and the unrelated state has not moved.
+    const queuedBump = server.handle({ kind: 'invoke', protocol: 'axiom.protocol.v1', actionId: ACTION_BUMP });
+    await settle();
+    assert.equal(server.getState(STATE_COUNTER), 0, 'the queued action has not run yet — it is waiting its turn');
+
+    host.advance(1000); // the hung query's timeoutMs fires, which is what unblocks the queue.
+    const queryResponse = (await hungQuery) as { ok: boolean };
+    assert.equal(queryResponse.ok, false);
+
+    const bumpResponse = (await queuedBump) as { ok: boolean };
+    assert.equal(bumpResponse.ok, true, 'the unrelated action runs once the queue is unblocked, not before');
+    assert.equal(server.getState(STATE_COUNTER), 1);
+    await server.stop();
+  },
+);
+
 // ------------------------------------------------------ deterministic/real host parity
 
 async function runThreeSimultaneousPolls(

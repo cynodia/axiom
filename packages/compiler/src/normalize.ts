@@ -353,6 +353,32 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
   };
 }
 
+/**
+ * Validates a graph against the same capabilities `compileToIR` compiles for by default —
+ * the real browser renderer and the real (empty) browser trigger runtime — without
+ * compiling it.
+ *
+ * `validateGraph(graph)` alone is deliberately target-neutral (spec 8.2 §2-4, §41 of spec5):
+ * a graph is never rejected for a renderer or trigger runtime nobody named, the same way
+ * `RendererCapabilities` was already optional before triggers existed. That means a bare
+ * `validateGraph(graph).valid === true` does not by itself say the graph is executable by a
+ * browser — a UI node kind no renderer draws, or a client-authority trigger kind the browser
+ * trigger runtime does not execute (`CLIENT_TRIGGER_UNSUPPORTED`), both validate silently
+ * under the no-options call. A consumer that wants a validate-only answer reflecting actual
+ * browser executability — without compiling the whole IR just to catch a thrown
+ * `GraphValidationError` — calls this instead; `compileToIR(graph)`'s own validation step is
+ * exactly this call, so the two never disagree.
+ */
+export function validateForBrowser(
+  graph: ApplicationGraph,
+  options: Pick<CompileOptions, 'renderer' | 'triggerRuntime'> = {},
+): ValidationResult {
+  return validateGraph(graph, {
+    renderer: options.renderer ?? (BROWSER_RENDERER_CAPABILITIES as RendererCapabilities),
+    triggerRuntime: options.triggerRuntime ?? (BROWSER_TRIGGER_CAPABILITIES as TriggerRuntimeCapabilities),
+  });
+}
+
 export function serializeIR(ir: ApplicationIR): string {
   return JSON.stringify(ir);
 }

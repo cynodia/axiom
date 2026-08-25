@@ -532,8 +532,18 @@ export class GraphQueries {
       .filter((trigger) => trigger.when.kind === 'interval' || trigger.when.kind === 'delay');
   }
 
-  /** Events at least one trigger reacts to — the external/internal facts this application listens for. */
-  getWebhookEvents(): EventDef[] {
+  /**
+   * Events at least one trigger reacts to — the internal/external facts this application
+   * listens for.
+   *
+   * This is a **graph-static** query: it answers "which `EventDef`s have a `TriggerDef`
+   * bound to them", not "which webhook deliveries has this server received". An event
+   * returned here may be dispatched by a verified external webhook, by an effect's
+   * `succeededEventId`/`failedEventId`, or by any other internal source — "webhook-ness" is
+   * not a property the graph records, so a name implying it overstates what this answers
+   * (spec 8.2 §34-35).
+   */
+  getTriggeredEvents(): EventDef[] {
     const referenced = new Set(
       this.graph
         .getNodesByKind('trigger')
@@ -541,6 +551,17 @@ export class GraphQueries {
         .map((trigger) => (trigger.when as { kind: 'event'; eventId: NodeId }).eventId),
     );
     return this.graph.getNodesByKind('event').filter((event) => referenced.has(event.id));
+  }
+
+  /**
+   * @deprecated Renamed to {@link getTriggeredEvents} (spec 8.2 §34-36): this answers
+   * "which events have a trigger bound to them", not "which webhook deliveries were
+   * received" — the two are not the same, since the same query covers effect-outcome
+   * events too. Kept as an alias for backward compatibility; new code should call
+   * `getTriggeredEvents()` directly.
+   */
+  getWebhookEvents(): EventDef[] {
+    return this.getTriggeredEvents();
   }
 
   /** Whether an ordinary client `InvokeRequest` may name this action at all. */

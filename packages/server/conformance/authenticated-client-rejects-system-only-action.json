@@ -1,11 +1,14 @@
 {
   "conformance": "axiom.conformance.v2",
-  "name": "integration-query-success",
+  "name": "authenticated-client-rejects-system-only-action",
   "covers": [
-    "integration query"
+    "invocation source",
+    "authorization"
   ],
-  "description": "A successful integration query binds its result and commits.",
-  "principals": {},
+  "description": "An authenticated client is refused by a system-only action exactly like an anonymous one — invocation.allowedSources checks the request's source, not the caller's identity.",
+  "principals": {
+    "someone": {}
+  },
   "serverIR": {
     "contract": "axiom.server.v4",
     "id": "conformance-integrations",
@@ -669,36 +672,31 @@
   },
   "initialState": [
     {
-      "stateId": "state_status",
-      "value": "unknown",
+      "stateId": "state_message",
+      "value": "",
       "revision": 1
     }
   ],
   "externalAdapters": {
-    "integration_provider": {
-      "query": [
-        {
-          "result": {
-            "ok": true,
-            "value": "online"
-          }
-        }
-      ]
-    }
+    "integration_provider": {}
   },
   "steps": [
     {
       "kind": "invoke",
-      "actionId": "action_refresh",
+      "actionId": "action_apply_message",
+      "credential": "someone",
+      "arguments": {
+        "param_message": "forged"
+      },
       "expect": {
-        "ok": true,
-        "changedStates": [
-          "state_status"
+        "ok": false,
+        "diagnosticCodes": [
+          "INVOCATION_SOURCE_NOT_ALLOWED"
         ]
       }
     }
   ],
   "expectedState": {
-    "state_status": "online"
+    "state_message": ""
   }
 }

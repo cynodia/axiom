@@ -12,7 +12,7 @@
     "contract": "axiom.server.v4",
     "id": "conformance-integrations",
     "name": "Conformance integrations",
-    "version": "0.8.0",
+    "version": "0.8.2",
     "entities": [
       {
         "id": "entity_effect_outcome",
@@ -83,6 +83,29 @@
               "kind": "primitive",
               "primitive": "string"
             }
+          }
+        ]
+      },
+      {
+        "id": "entity_guard",
+        "kind": "entity",
+        "identityFieldId": "field_guard_id",
+        "fields": [
+          {
+            "id": "field_guard_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_guard_value",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
           }
         ]
       }
@@ -180,6 +203,28 @@
             "primitive": "string"
           }
         }
+      },
+      "field_guard_id": {
+        "entityId": "entity_guard",
+        "field": {
+          "id": "field_guard_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_guard_value": {
+        "entityId": "entity_guard",
+        "field": {
+          "id": "field_guard_value",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          },
+          "required": true
+        }
       }
     },
     "states": [
@@ -204,6 +249,36 @@
           "primitive": "string"
         },
         "initialValue": ""
+      },
+      {
+        "id": "state_guard",
+        "kind": "state",
+        "name": "guard",
+        "authority": "server",
+        "valueType": {
+          "kind": "collection",
+          "itemType": {
+            "kind": "entity",
+            "entityId": "entity_guard"
+          }
+        },
+        "initialValue": [
+          {
+            "field_guard_id": "g1",
+            "field_guard_value": 1
+          }
+        ]
+      },
+      {
+        "id": "state_counter",
+        "kind": "state",
+        "name": "counter",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "number"
+        },
+        "initialValue": 0
       }
     ],
     "actions": {
@@ -282,13 +357,170 @@
         ],
         "preconditions": [],
         "failureModes": []
+      },
+      "action_guarded_reboot": {
+        "id": "action_guarded_reboot",
+        "kind": "action",
+        "name": "guardedReboot",
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "field",
+              "target": {
+                "kind": "collection-item",
+                "collection": {
+                  "kind": "state",
+                  "stateId": "state_guard"
+                },
+                "selector": {
+                  "kind": "identity",
+                  "fieldId": "field_guard_id",
+                  "value": {
+                    "kind": "literal",
+                    "value": "g1"
+                  }
+                }
+              },
+              "fieldId": "field_guard_value"
+            },
+            "value": {
+              "kind": "literal",
+              "value": 999
+            }
+          },
+          {
+            "kind": "integration-effect",
+            "operationId": "integration_operation_reboot",
+            "succeededEventId": "event_succeeded",
+            "failedEventId": "event_failed"
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_bump_a": {
+        "id": "action_bump_a",
+        "kind": "action",
+        "name": "bumpA",
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_counter"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_counter"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_bump_b": {
+        "id": "action_bump_b",
+        "kind": "action",
+        "name": "bumpB",
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_counter"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_counter"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_apply_external_status": {
+        "id": "action_apply_external_status",
+        "kind": "action",
+        "name": "applyExternalStatus",
+        "invocation": {
+          "allowedSources": [
+            "system"
+          ]
+        },
+        "parameters": [
+          {
+            "id": "param_status",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_status"
+            },
+            "value": {
+              "kind": "ref",
+              "targetId": "param_status"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
       }
     },
-    "constraints": [],
+    "constraints": [
+      {
+        "id": "constraint_guard",
+        "kind": "constraint",
+        "entityId": "entity_guard",
+        "message": "Guard value must stay below 10.",
+        "expression": {
+          "kind": "binary",
+          "operator": "lt",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "entity_guard"
+            },
+            "fieldId": "field_guard_value"
+          },
+          "right": {
+            "kind": "literal",
+            "value": 10
+          }
+        }
+      }
+    ],
     "transitionConstraints": [],
     "observableStateIds": [
       "state_status",
-      "state_message"
+      "state_message",
+      "state_guard",
+      "state_counter"
     ],
     "integrations": [
       {
@@ -319,6 +551,11 @@
         "resultType": {
           "kind": "primitive",
           "primitive": "string"
+        },
+        "retry": {
+          "policy": "fixed",
+          "maxAttempts": 3,
+          "delayMs": 50
         }
       }
     },
@@ -337,6 +574,14 @@
         "payloadType": {
           "kind": "entity",
           "entityId": "entity_effect_outcome"
+        }
+      },
+      {
+        "id": "event_external_status",
+        "kind": "event",
+        "payloadType": {
+          "kind": "primitive",
+          "primitive": "string"
         }
       }
     ],
@@ -386,6 +631,39 @@
               "targetId": "trigger_failed"
             },
             "fieldId": "field_effect_message"
+          }
+        }
+      },
+      {
+        "id": "trigger_bump_a",
+        "kind": "trigger",
+        "actionId": "action_bump_a",
+        "when": {
+          "kind": "delay",
+          "afterMs": 10
+        }
+      },
+      {
+        "id": "trigger_bump_b",
+        "kind": "trigger",
+        "actionId": "action_bump_b",
+        "when": {
+          "kind": "delay",
+          "afterMs": 10
+        }
+      },
+      {
+        "id": "trigger_external_status",
+        "kind": "trigger",
+        "actionId": "action_apply_external_status",
+        "when": {
+          "kind": "event",
+          "eventId": "event_external_status"
+        },
+        "arguments": {
+          "param_status": {
+            "kind": "ref",
+            "targetId": "trigger_external_status"
           }
         }
       }
