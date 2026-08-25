@@ -3,14 +3,23 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { SERVER_IR_CONTRACT } from '@cynodia/axiom-core';
+import { SERVER_IR_CONTRACT, SERVER_IR_CONTRACTS } from '@cynodia/axiom-core';
 import {
   PROTOCOL_VERSION,
   createAxiomServer,
   createDeterministicServerHost,
+  createFakeIntegrationAdapter,
   createMemoryPersistence,
 } from '@cynodia/axiom-server';
-import type { InvokeResponse, PersistedState, PrincipalRecord, ServerIR } from '@cynodia/axiom-server';
+import type {
+  InvokeResponse,
+  IntegrationResult,
+  PersistedState,
+  PrincipalRecord,
+  ServerIR,
+} from '@cynodia/axiom-server';
+
+const CONFORMANCE_VERSIONS = ['axiom.conformance.v1', 'axiom.conformance.v2'];
 
 /**
  * The conformance suite.
@@ -38,6 +47,28 @@ interface Invocation {
   };
 }
 
+/**
+ * `axiom.conformance.v2` vocabulary (spec 8.1 §42-49): a scripted, data-only external
+ * adapter and a step sequence, for fixtures that exercise integrations, effects and
+ * triggers without any executable code in the fixture file.
+ */
+interface ScriptedResponse {
+  result?: IntegrationResult;
+  /** Never resolves — models a non-cooperating provider, for a `timeoutMs` fixture. */
+  neverSettle?: boolean;
+}
+
+interface ScriptedAdapter {
+  /** Consumed one per call, in order; the last entry repeats once the list is exhausted. */
+  query?: ScriptedResponse[];
+  effect?: ScriptedResponse[];
+}
+
+type Step =
+  | ({ kind: 'invoke' } & Invocation)
+  | { kind: 'event'; eventId: string; payload: unknown; credential?: string; expect?: Invocation['expect'] }
+  | { kind: 'advance'; ms: number };
+
 interface Fixture {
   conformance: string;
   name: string;
@@ -48,7 +79,9 @@ interface Fixture {
   initialState: PersistedState[];
   concurrent?: boolean;
   restartAndReassert?: boolean;
-  invocations: Invocation[];
+  invocations?: Invocation[];
+  externalAdapters?: Record<string, ScriptedAdapter>;
+  steps?: Step[];
   expect?: { committedCount?: number };
   expectedState: Record<string, unknown>;
 }
@@ -74,20 +107,143 @@ const manifest = JSON.parse(
   await readFile(path.join(directory, 'manifest.json'), 'utf8'),
 ) as Manifest;
 
+/** Shared by both the `invocations` and the `steps` path. */
+function assertExpect(answer: InvokeResponse, expected: Invocation['expect'] | undefined, where: string): void {
+  assert.equal(answer.kind, 'result', where);
+  if (!expected) {
+    return;
+  }
+  if (expected.ok !== undefined) {
+    assert.equal(
+      answer.ok,
+      expected.ok,
+      `${where}: ${JSON.stringify(answer.diagnostics.map((d) => d.code))}`,
+    );
+  }
+  for (const code of expected.diagnosticCodes ?? []) {
+    assert.ok(
+      answer.diagnostics.some((diagnostic) => diagnostic.code === code),
+      `${where} should report ${code}, reported ${JSON.stringify(answer.diagnostics.map((d) => d.code))}`,
+    );
+  }
+  for (const mode of expected.failureModes ?? []) {
+    assert.ok(
+      answer.diagnostics.some((diagnostic) => diagnostic.details?.failureMode === mode),
+      `${where} should report failure mode ${mode}`,
+    );
+  }
+  if (expected.changedStates) {
+    // Exhaustive, not a subset: a runtime that reports a state as changed when its value
+    // did not move is as wrong as one that omits a state that did.
+    assert.deepEqual(
+      Object.keys(answer.changes).sort(),
+      [...expected.changedStates].sort(),
+      `${where}: changes must name exactly the observable states whose value moved`,
+    );
+  }
+  if (expected.replayed !== undefined) {
+    assert.equal(answer.replayed ?? false, expected.replayed, `${where} replay`);
+  }
+}
+
+/**
+ * Builds a data-only `IntegrationAdapter` from a fixture's `externalAdapters` entry — no
+ * TypeScript callback, just an ordered list of canned responses (spec 8.1 §23,42-49).
+ */
+function buildScriptedAdapter(spec: ScriptedAdapter) {
+  const makeHandler = (responses: ScriptedResponse[] | undefined) => {
+    let index = 0;
+    return async (): Promise<IntegrationResult> => {
+      const response = responses?.[Math.min(index, responses.length - 1)];
+      index += 1;
+      if (!response) {
+        return { ok: false, code: 'NOT_IMPLEMENTED', message: 'no scripted response registered' };
+      }
+      if (response.neverSettle) {
+        return new Promise<IntegrationResult>(() => undefined);
+      }
+      return response.result ?? { ok: false, code: 'NOT_IMPLEMENTED', message: 'no result scripted' };
+    };
+  };
+  return createFakeIntegrationAdapter({ query: makeHandler(spec.query), effect: makeHandler(spec.effect) });
+}
+
+/** One real macrotask turn — see `settle` in `timeout-and-scheduling.test.ts` for why. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 for (const file of files) {
   const fixture = JSON.parse(await readFile(path.join(directory, file), 'utf8')) as Fixture;
 
   test(`conformance: ${fixture.name} — ${fixture.description}`, async () => {
-    assert.equal(fixture.conformance, 'axiom.conformance.v1');
+    assert.ok(CONFORMANCE_VERSIONS.includes(fixture.conformance), fixture.conformance);
 
     const persistence = createMemoryPersistence(fixture.initialState);
     const host = createDeterministicServerHost({
       authenticate: (credential) =>
         credential ? fixture.principals[credential] ?? null : null,
     });
-    const server = createAxiomServer({ ir: fixture.serverIR, persistence, host });
+    const integrations = Object.fromEntries(
+      Object.entries(fixture.externalAdapters ?? {}).map(([id, spec]) => [id, buildScriptedAdapter(spec)]),
+    );
+    const server = createAxiomServer({ ir: fixture.serverIR, persistence, host, integrations });
     await server.start();
 
+    const assertFinalState = (subject: typeof server, where: string): void => {
+      for (const [stateId, expected] of Object.entries(fixture.expectedState)) {
+        assert.deepEqual(subject.getState(stateId as never), expected, `${where}: ${stateId}`);
+      }
+    };
+
+    if (fixture.steps) {
+      // Every `invoke`/`event` step is started immediately but checked only once every step
+      // has run — an `advance` in between is what lets a `timeoutMs` deadline or a trigger's
+      // schedule actually fire before the request it started settles.
+      const pending: Array<{ promise: Promise<InvokeResponse>; expect: Invocation['expect']; where: string }> = [];
+      for (const [index, step] of fixture.steps.entries()) {
+        const where = `${fixture.name} step ${index}`;
+        if (step.kind === 'advance') {
+          await settle();
+          host.advance(step.ms);
+          continue;
+        }
+        const request =
+          step.kind === 'invoke'
+            ? {
+                kind: 'invoke' as const,
+                protocol: PROTOCOL_VERSION,
+                actionId: step.actionId as never,
+                arguments: step.arguments ?? {},
+                ...(step.credential ? { credential: step.credential } : {}),
+                ...(step.requestId ? { requestId: step.requestId } : {}),
+              }
+            : {
+                kind: 'event' as const,
+                protocol: PROTOCOL_VERSION,
+                eventId: step.eventId as never,
+                payload: step.payload,
+                ...(step.credential ? { credential: step.credential } : {}),
+              };
+        pending.push({
+          promise: server.handle(request as never) as Promise<InvokeResponse>,
+          expect: step.expect,
+          where,
+        });
+      }
+      // Detached, post-commit work (an effect dispatch, its outcome event, a follow-up
+      // action) is never awaited by any request's own response — one more turn lets it
+      // finish before state is asserted.
+      await settle();
+      for (const { promise, expect, where } of pending) {
+        assertExpect(await promise, expect, where);
+      }
+      assertFinalState(server, fixture.name);
+      await server.stop();
+      return;
+    }
+
+    const invocations = fixture.invocations ?? [];
     const send = (invocation: Invocation): Promise<InvokeResponse> =>
       server.handle({
         kind: 'invoke',
@@ -99,53 +255,17 @@ for (const file of files) {
       }) as Promise<InvokeResponse>;
 
     const answers = fixture.concurrent
-      ? await Promise.all(fixture.invocations.map(send))
+      ? await Promise.all(invocations.map(send))
       : await (async () => {
           const collected: InvokeResponse[] = [];
-          for (const invocation of fixture.invocations) {
+          for (const invocation of invocations) {
             collected.push(await send(invocation));
           }
           return collected;
         })();
 
     answers.forEach((answer, index) => {
-      const expected = fixture.invocations[index].expect;
-      const where = `${fixture.name} invocation ${index}`;
-      assert.equal(answer.kind, 'result', where);
-      if (!expected) {
-        return;
-      }
-      if (expected.ok !== undefined) {
-        assert.equal(
-          answer.ok,
-          expected.ok,
-          `${where}: ${JSON.stringify(answer.diagnostics.map((d) => d.code))}`,
-        );
-      }
-      for (const code of expected.diagnosticCodes ?? []) {
-        assert.ok(
-          answer.diagnostics.some((diagnostic) => diagnostic.code === code),
-          `${where} should report ${code}, reported ${JSON.stringify(answer.diagnostics.map((d) => d.code))}`,
-        );
-      }
-      for (const mode of expected.failureModes ?? []) {
-        assert.ok(
-          answer.diagnostics.some((diagnostic) => diagnostic.details?.failureMode === mode),
-          `${where} should report failure mode ${mode}`,
-        );
-      }
-      if (expected.changedStates) {
-        // Exhaustive, not a subset: a runtime that reports a state as changed when its value
-        // did not move is as wrong as one that omits a state that did.
-        assert.deepEqual(
-          Object.keys(answer.changes).sort(),
-          [...expected.changedStates].sort(),
-          `${where}: changes must name exactly the observable states whose value moved`,
-        );
-      }
-      if (expected.replayed !== undefined) {
-        assert.equal(answer.replayed ?? false, expected.replayed, `${where} replay`);
-      }
+      assertExpect(answer, invocations[index].expect, `${fixture.name} invocation ${index}`);
     });
 
     if (fixture.expect?.committedCount !== undefined) {
@@ -156,11 +276,6 @@ for (const file of files) {
       );
     }
 
-    const assertFinalState = (subject: typeof server, where: string): void => {
-      for (const [stateId, expected] of Object.entries(fixture.expectedState)) {
-        assert.deepEqual(subject.getState(stateId as never), expected, `${where}: ${stateId}`);
-      }
-    };
     assertFinalState(server, fixture.name);
     await server.stop();
 
@@ -205,7 +320,7 @@ test('a fixture is self-contained data, with nothing of this implementation in i
     assert.doesNotMatch(source, /=>|\bfunction\s*\(|\brequire\(|^import /m, `${file} contains code`);
     // It carries its own IR, so a runtime needs no compiler to execute it.
     const fixture = JSON.parse(source) as Fixture;
-    assert.equal(fixture.serverIR.contract, 'axiom.server.v1');
+    assert.ok((SERVER_IR_CONTRACTS as readonly string[]).includes(fixture.serverIR.contract));
     assert.ok(fixture.serverIR.states.length > 0);
     assert.deepEqual(JSON.parse(JSON.stringify(fixture)), fixture);
   }

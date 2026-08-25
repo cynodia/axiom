@@ -1,9 +1,12 @@
 import {
   ApplicationGraph,
+  EFFECT_MESSAGE_FIELD,
+  EFFECT_RESULT_FIELD,
   PRINCIPAL,
   binary,
   call,
   collectionType,
+  effectOutcomeEntity,
   entityType,
   field,
   fieldId,
@@ -86,6 +89,7 @@ const PARAM_OP_EXTERNAL_ID = nodeId('param_op_external_id');
 const EVENT_DEVICE_REBOOTED = nodeId('event_device_rebooted');
 const EVENT_DEVICE_REBOOT_FAILED = nodeId('event_device_reboot_failed');
 const EVENT_DEVICE_STATUS_CHANGED = nodeId('event_device_status_changed');
+const ENTITY_EFFECT_OUTCOME = nodeId('entity_effect_outcome');
 
 // ---------------------------------------------------------------------- actions
 
@@ -220,8 +224,20 @@ export function createDeviceMonitorGraph(): ApplicationGraph {
 
   // ----------------------------------------------------------------------- events
 
-  graph.addNode<EventDef>({ id: EVENT_DEVICE_REBOOTED, kind: 'event', payloadType: primitiveType('string') });
-  graph.addNode<EventDef>({ id: EVENT_DEVICE_REBOOT_FAILED, kind: 'event', payloadType: primitiveType('string') });
+  // One shared entity covers both the succeeded and failed shape (spec 8.1 §37-41): field
+  // ids are graph-global, so a distinct entity per event could not also declare
+  // effectId/operationId without colliding.
+  graph.addNode<EntityDef>(effectOutcomeEntity(ENTITY_EFFECT_OUTCOME, primitiveType('string')));
+  graph.addNode<EventDef>({
+    id: EVENT_DEVICE_REBOOTED,
+    kind: 'event',
+    payloadType: entityType(ENTITY_EFFECT_OUTCOME),
+  });
+  graph.addNode<EventDef>({
+    id: EVENT_DEVICE_REBOOT_FAILED,
+    kind: 'event',
+    payloadType: entityType(ENTITY_EFFECT_OUTCOME),
+  });
   graph.addNode<EventDef>({
     id: EVENT_DEVICE_STATUS_CHANGED,
     kind: 'event',
@@ -288,6 +304,10 @@ export function createDeviceMonitorGraph(): ApplicationGraph {
     id: ACTION_APPLY_EFFECT_MESSAGE,
     kind: 'action',
     name: 'apply effect message',
+    // Only the reboot effect's own succeeded/failed event should ever reach this — a
+    // client that guessed this action id could otherwise forge a fake reboot outcome
+    // (spec 8.1 §3-9, §11). A trigger always invokes with `source: 'system'`.
+    invocation: { allowedSources: ['system'] },
     parameters: [{ id: PARAM_MESSAGE, valueType: primitiveType('string'), required: true }],
     operations: [{ kind: 'set', target: stateLocation(STATE_LAST_EFFECT_MESSAGE), value: ref(PARAM_MESSAGE) }],
   });
@@ -296,6 +316,10 @@ export function createDeviceMonitorGraph(): ApplicationGraph {
     id: ACTION_APPLY_STATUS_CHANGE,
     kind: 'action',
     name: 'apply status change',
+    // Only the verified `deviceStatusChanged` webhook event should ever reach this — a
+    // client that guessed this action id could otherwise forge a fake status change for
+    // any device (spec 8.1 §3-9, §10).
+    invocation: { allowedSources: ['system'] },
     parameters: [
       { id: PARAM_CHANGE_EXTERNAL_ID, valueType: primitiveType('string'), required: true },
       { id: PARAM_CHANGE_STATUS, valueType: primitiveType('string'), required: true },
@@ -333,14 +357,20 @@ export function createDeviceMonitorGraph(): ApplicationGraph {
     kind: 'trigger',
     actionId: ACTION_APPLY_EFFECT_MESSAGE,
     when: { kind: 'event', eventId: EVENT_DEVICE_REBOOTED },
-    arguments: { [String(PARAM_MESSAGE)]: call('concat', literal('Rebooted: '), ref(TRIGGER_REBOOTED)) },
+    arguments: {
+      [String(PARAM_MESSAGE)]: call(
+        'concat',
+        literal('Rebooted: '),
+        field(ref(TRIGGER_REBOOTED), EFFECT_RESULT_FIELD),
+      ),
+    },
   });
   graph.addNode<TriggerDef>({
     id: TRIGGER_REBOOT_FAILED,
     kind: 'trigger',
     actionId: ACTION_APPLY_EFFECT_MESSAGE,
     when: { kind: 'event', eventId: EVENT_DEVICE_REBOOT_FAILED },
-    arguments: { [String(PARAM_MESSAGE)]: ref(TRIGGER_REBOOT_FAILED) },
+    arguments: { [String(PARAM_MESSAGE)]: field(ref(TRIGGER_REBOOT_FAILED), EFFECT_MESSAGE_FIELD) },
   });
   graph.addNode<TriggerDef>({
     id: TRIGGER_STATUS_CHANGED,
@@ -473,6 +503,8 @@ export const deviceMonitorIds = {
   PARAM_EXTERNAL_ID,
   ACTION_APPLY_EFFECT_MESSAGE,
   ACTION_APPLY_STATUS_CHANGE,
+  PARAM_CHANGE_EXTERNAL_ID,
+  PARAM_CHANGE_STATUS,
   TRIGGER_POLL,
   TRIGGER_REBOOTED,
   TRIGGER_REBOOT_FAILED,

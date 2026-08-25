@@ -10,6 +10,8 @@ import {
   serverStateClosure,
   stateAuthority,
   usesIntegrationVocabulary,
+  usesInvocationVocabulary,
+  usesV4Semantics,
   validateGraph,
 } from '@cynodia/axiom-core';
 import type {
@@ -24,6 +26,7 @@ import type {
   IntegrationOperationDef,
   NodeId,
   ServerIR,
+  ServerIRContract,
   StateDef,
   TransitionConstraintDef,
   TriggerDef,
@@ -165,10 +168,14 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
    * one that groups or names an expression, or uses any integration/trigger/event
    * vocabulary, says so, because an older runtime could not execute it.
    */
-  const contract = maxContract(
-    carriesDefinitions ? 'axiom.server.v2' : requiredServerContract(serverIRExpressions(document)),
+  const contractCandidates: ServerIRContract[] = [
+    carriesDefinitions || usesInvocationVocabulary(document)
+      ? 'axiom.server.v2'
+      : requiredServerContract(serverIRExpressions(document)),
     usesIntegrationVocabulary(document) ? 'axiom.server.v3' : 'axiom.server.v1',
-  );
+    usesV4Semantics(document) ? 'axiom.server.v4' : 'axiom.server.v1',
+  ];
+  const contract = contractCandidates.reduce(maxContract);
 
   return { contract, ...document };
 }

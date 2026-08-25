@@ -28,6 +28,11 @@ const BINARY_OPERATORS = [
 const UNARY_OPERATORS = ['not', 'negate'];
 const PRIMITIVE_KINDS = ['string', 'number', 'boolean', 'date', 'datetime', 'binary'];
 
+/** Whether `contract` carries at least `min`'s vocabulary, by `SERVER_IR_CONTRACTS` order. */
+function atLeast(contract, min) {
+  return SERVER_IR_CONTRACTS.indexOf(contract) >= SERVER_IR_CONTRACTS.indexOf(min);
+}
+
 /** An id is an opaque string. Nothing in the contract may parse one. */
 const id = { type: 'string', minLength: 1 };
 const ref = (name) => ({ $ref: `#/$defs/${name}` });
@@ -87,7 +92,7 @@ const buildServerIR = (contract) => ({
     ...(contract === 'axiom.server.v1'
       ? {}
       : { expressionDefs: { type: 'object', additionalProperties: ref('ExpressionDef') } }),
-    ...(contract === 'axiom.server.v3'
+    ...(atLeast(contract, 'axiom.server.v3')
       ? {
           integrations: { type: 'array', items: ref('IntegrationDef') },
           integrationOperations: { type: 'object', additionalProperties: ref('IntegrationOperationDef') },
@@ -241,7 +246,7 @@ const buildServerIR = (contract) => ({
           resultTarget: location,
           declaredEffects: { type: 'array', items: { type: 'object' } },
         }, ['implementationId']),
-        ...(contract === 'axiom.server.v3'
+        ...(atLeast(contract, 'axiom.server.v3')
           ? [
               variant('integration-query', {
                 operationId: id,
@@ -285,6 +290,13 @@ const buildServerIR = (contract) => ({
         confirmationMessage: { type: 'string' },
         authorization: expression,
         confirmation: { type: 'object' },
+        ...(contract === 'axiom.server.v1'
+          ? {}
+          : {
+              invocation: object({
+                allowedSources: { type: 'array', items: { enum: ['client', 'system'] } },
+              }),
+            }),
       },
       ['id', 'kind', 'operations'],
     ),
@@ -341,7 +353,7 @@ const buildServerIR = (contract) => ({
           ),
         }),
 
-    ...(contract !== 'axiom.server.v3'
+    ...(!atLeast(contract, 'axiom.server.v3')
       ? {}
       : {
           IntegrationDef: object(
@@ -420,7 +432,7 @@ function expressionKindsFor(contract) {
 }
 
 function operationKindsFor(contract) {
-  return contract === 'axiom.server.v3'
+  return atLeast(contract, 'axiom.server.v3')
     ? [...OPERATION_KINDS]
     : OPERATION_KINDS.filter((kind) => !SERVER_IR_V3_OPERATION_KINDS.includes(kind));
 }

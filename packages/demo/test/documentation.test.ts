@@ -230,6 +230,10 @@ test('every validation code is documented, and every documented code exists', ()
     // Integrations, effects, triggers and events (0.8): exported vocabulary, not codes.
     'INTEGRATION_OPERATION_MODES', 'RETRY_POLICY_KINDS', 'TRIGGER_KINDS',
     'TRIGGER_OVERLAP_POLICIES', 'LIFECYCLE_EVENTS', 'MAX_EVENT_DISPATCH_DEPTH',
+    // Invocation source and effect-outcome vocabulary (8.1): exported constants, not codes.
+    'EFFECT_ID_FIELD', 'EFFECT_INTEGRATION_ID_FIELD', 'EFFECT_OPERATION_ID_FIELD',
+    'EFFECT_CODE_FIELD', 'EFFECT_MESSAGE_FIELD', 'EFFECT_RETRYABLE_FIELD',
+    'EFFECT_IDEMPOTENCY_KEY_FIELD', 'EFFECT_CORRELATION_ID_FIELD', 'EFFECT_RESULT_FIELD',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });

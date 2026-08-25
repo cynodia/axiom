@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.8.0-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.8.1-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -390,8 +390,11 @@ credential belongs to the host, not the graph.
 { kind: 'native', implementationId: 'app.sendEmail' }
 ```
 
-External effects are deliberately unsolved in 0.6. A design involving commands, a
-transactional outbox and idempotency is future work; do not smuggle one in meanwhile.
+Use `IntegrationDef` + an `integration-effect` operation instead — a typed semantic
+operation, dispatched post-commit through the durable outbox, with retry and an
+idempotency key, whose outcome reaches a follow-up action as a structured event rather than
+a side effect nothing can roll back. See [`INTEGRATIONS.md`](INTEGRATIONS.md) and
+[`EFFECTS.md`](EFFECTS.md).
 
 ## 31. Restating what the model already knows
 

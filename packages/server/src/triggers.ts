@@ -28,6 +28,25 @@ export interface TriggerRuntimeOptions {
   evaluate: TriggerEvaluate;
   invoke: TriggerInvoke;
   report?(event: TriggerRuntimeEvent): void;
+  /**
+   * Runs a host-timer-driven invocation after every earlier one this authority runs has
+   * finished, and before any later one — the same ordering guarantee `AxiomServer.handle()`
+   * already gives client requests (spec 8.1 §26-30), so a `DeterministicServerHost.advance()`
+   * that fires several same-period triggers in one turn does not race their commits against
+   * each other. Absent, invocations run unserialized, exactly as before.
+   *
+   * Wraps only the actual invocation inside `tick`, never `tick` itself: the overlap check
+   * (`inFlight`) exists to detect a *concurrent* tick of the same trigger while an earlier
+   * one is still running, which requires running immediately when the timer fires, not
+   * queued behind that earlier invocation.
+   *
+   * Deliberately **not** used inside `fireEvent`: an event-triggered action's invocation
+   * runs in whatever context its caller is already in — nested inside a client request's
+   * own serialized turn when the event came from `handle()`, or inside the caller's own
+   * `serialize` when it did not (an effect-outcome event, say). Wrapping it here too would
+   * make a client `event` request deadlock against its own already-claimed turn.
+   */
+  serialize?<T>(body: () => Promise<T>): Promise<T>;
 }
 
 /**
@@ -46,6 +65,7 @@ export interface TriggerRuntime {
 
 export function createTriggerRuntime(options: TriggerRuntimeOptions): TriggerRuntime {
   const { triggers, host, evaluate, invoke, report } = options;
+  const serialize = options.serialize ?? (<T>(body: () => Promise<T>): Promise<T> => body());
   const tasks: Array<{ cancel(): void }> = [];
   const inFlight = new Set<NodeId>();
   const queued = new Set<NodeId>();
@@ -90,6 +110,10 @@ export function createTriggerRuntime(options: TriggerRuntimeOptions): TriggerRun
   }
 
   async function tick(trigger: TriggerDef, overlap: 'skip' | 'queue'): Promise<void> {
+    // The overlap check itself must never wait behind `serialize` — it exists precisely to
+    // detect a *concurrent* tick of this same trigger while an earlier one is still
+    // in flight, which requires running immediately when the host timer fires, not queued
+    // behind that earlier invocation's own turn.
     if (inFlight.has(trigger.id)) {
       if (overlap === 'skip') {
         report?.({ kind: 'skipped-overlap', triggerId: trigger.id, actionId: trigger.actionId });
@@ -100,7 +124,9 @@ export function createTriggerRuntime(options: TriggerRuntimeOptions): TriggerRun
     }
     inFlight.add(trigger.id);
     try {
-      await fire(trigger);
+      // Only the actual invocation — not the overlap bookkeeping around it — is serialized
+      // against every other invocation this authority runs (spec 8.1 §26-30).
+      await serialize(() => fire(trigger));
     } finally {
       inFlight.delete(trigger.id);
       if (queued.delete(trigger.id)) {
@@ -127,7 +153,7 @@ export function createTriggerRuntime(options: TriggerRuntimeOptions): TriggerRun
           tasks.push(host.schedule(trigger.when.everyMs, () => void tick(trigger, overlap)));
         }
         if (trigger.when.kind === 'delay') {
-          tasks.push(host.scheduleOnce(trigger.when.afterMs, () => void fire(trigger)));
+          tasks.push(host.scheduleOnce(trigger.when.afterMs, () => void serialize(() => fire(trigger))));
         }
       }
     },

@@ -2,7 +2,7 @@
   "conformance": "axiom.conformance.v1",
   "contract": "axiom.server.v1",
   "protocol": "axiom.protocol.v1",
-  "release": "0.8.0-alpha.1",
+  "release": "0.8.1-alpha.1",
   "description": "Portable conformance fixtures for the Axiom Server IR. Each entry is a self-contained JSON document: the Server IR, the state to start from, the principals, the invocations to perform and the results required. Running them needs no part of this implementation.",
   "areas": [
     "action guards",
@@ -11,15 +11,21 @@
     "concurrent mutation",
     "constraints",
     "derived state",
+    "effects",
+    "events",
     "expression evaluation",
     "failure modes",
     "for-each provisional writes",
     "idempotency",
+    "integration query",
+    "invocation source",
     "mutation",
     "persistence",
     "restart",
     "rollback",
-    "transition constraints"
+    "timeout",
+    "transition constraints",
+    "triggers"
   ],
   "fixtures": [
     {
@@ -31,6 +37,8 @@
         "derived state"
       ],
       "description": "An action within its guards commits every write, and derived state follows.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
       "concurrent": false,
       "restartAndReassert": false,
       "invocations": 1
@@ -43,6 +51,8 @@
         "failure modes"
       ],
       "description": "A guard that does not hold refuses the invocation, naming its failure mode.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
       "concurrent": false,
       "restartAndReassert": false,
       "invocations": 2
@@ -56,6 +66,8 @@
         "for-each provisional writes"
       ],
       "description": "Iteration N sees the writes of iterations before it, so two lines for one part are counted together — and the invariant then rolls the whole action back.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
       "concurrent": false,
       "restartAndReassert": false,
       "invocations": 1
@@ -67,6 +79,8 @@
         "for-each provisional writes"
       ],
       "description": "The same two-line shape, within stock: 10 − 4 − 4, not 10 − 4 twice.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
       "concurrent": false,
       "restartAndReassert": false,
       "invocations": 1
@@ -78,6 +92,8 @@
         "transition constraints"
       ],
       "description": "A rule about how state may change refuses a raise, and permits a fall.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
       "concurrent": false,
       "restartAndReassert": false,
       "invocations": 2
@@ -89,6 +105,8 @@
         "authorization"
       ],
       "description": "Authorization is evaluated on the authority, with the caller bound to PRINCIPAL.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
       "concurrent": false,
       "restartAndReassert": false,
       "invocations": 3
@@ -100,6 +118,8 @@
         "argument validation"
       ],
       "description": "Untrusted arguments are checked against declared parameter types.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
       "concurrent": false,
       "restartAndReassert": false,
       "invocations": 4
@@ -112,6 +132,8 @@
         "idempotency"
       ],
       "description": "A repeated request id is answered from the record, not executed again.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
       "concurrent": false,
       "restartAndReassert": false,
       "invocations": 2
@@ -123,6 +145,8 @@
         "concurrent mutation"
       ],
       "description": "Three callers each want four of a stock of five. Exactly one may commit; the rest are refused by the guard against authoritative state.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
       "concurrent": true,
       "restartAndReassert": false,
       "invocations": 3
@@ -135,9 +159,80 @@
         "restart"
       ],
       "description": "Committed state is restored exactly on restart, and a rolled-back write never reappears.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
       "concurrent": false,
       "restartAndReassert": true,
       "invocations": 2
+    },
+    {
+      "name": "integration-query-success",
+      "file": "integration-query-success.json",
+      "covers": [
+        "integration query"
+      ],
+      "description": "A successful integration query binds its result and commits.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "integration-query-timeout",
+      "file": "integration-query-timeout.json",
+      "covers": [
+        "integration query",
+        "timeout"
+      ],
+      "description": "A non-cooperating adapter cannot wedge the invocation past its declared timeoutMs; the runtime enforces the deadline itself.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 2
+    },
+    {
+      "name": "timed-trigger-polling",
+      "file": "timed-trigger-polling.json",
+      "covers": [
+        "triggers",
+        "integration query"
+      ],
+      "description": "An interval trigger fires the query and writes its result, with no real wait.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "effect-success-event",
+      "file": "effect-success-event.json",
+      "covers": [
+        "effects",
+        "events",
+        "invocation source"
+      ],
+      "description": "A succeeded effect dispatches its structured outcome to a system-only follow-up action — never reachable by a client directly.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
+      "name": "system-only-action-rejects-client",
+      "file": "system-only-action-rejects-client.json",
+      "covers": [
+        "invocation source"
+      ],
+      "description": "An anonymous client cannot directly invoke an action reachable only by a trigger, event or effect outcome.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Triggers
 
-Axiom 0.8.0-alpha.1. A `TriggerDef` says **when** an action should be invoked, without
+Axiom 0.8.1-alpha.1. A `TriggerDef` says **when** an action should be invoked, without
 embedding callback code. `docs/AUTHORITY.md`
 [§ Triggers](AUTHORITY.md#triggers) is the load-bearing statement of the execution model;
 this file is the vocabulary.
@@ -44,6 +44,14 @@ can only be satisfied by a real, authenticated principal is correctly refused wh
 trigger targets it; this is not a special case in the authorization check, it is the
 ordinary one applied to a `null` principal, exactly as an anonymous client request gets.
 
+`source: 'system'` is also what `invocation.allowedSources` checks (spec 8.1 §3-14, full
+model in [`AUTHORITY.md`](AUTHORITY.md#invocation-source)): an action meant only to be a
+trigger's target — an effect's `succeededEventId`/`failedEventId` handler, a webhook's — can
+declare `invocation: { allowedSources: ['system'] }` so an anonymous client that guessed its
+id cannot invoke it directly. A trigger targeting an action that has opted out of
+`'system'` entirely is rejected at validation (`TRIGGER_TARGET_SOURCE_MISMATCH`), since the
+trigger could then never succeed.
+
 ## Where a trigger executes
 
 Derived from where its target action executes, not declared:
@@ -60,10 +68,16 @@ triggers targeting a server-authority one, are rejected at validation
 (`TRIGGER_WRONG_AUTHORITY`) — the mismatch can never reach a runtime that would silently
 do nothing with it.
 
-**Client-authority `interval`/`delay`/`route-enter`/`route-leave` triggers compile into
-`ApplicationIR.triggers` for inspection, but the browser runtime does not yet schedule or
-execute them.** Only the authoritative runtime does, today. See [Not in
-0.8.0](AUTHORITY.md#not-in-080).
+**A client-authority trigger of a kind the browser cannot execute is a validation error,
+not a silent no-op.** The browser runtime implements no trigger kind at all today
+(`BROWSER_TRIGGER_CAPABILITIES.supportedTriggerKinds` is empty), so `validateGraph`/
+`compileToIR` reject such a trigger with `CLIENT_TRIGGER_UNSUPPORTED` — the same
+capability-gate pattern `RendererCapabilities` already applies to UI node kinds. Before
+spec 8.1, the trigger validated and compiled into `ApplicationIR.triggers` and simply never
+fired, which is exactly the "publicly declared, typechecks, passes validation, has no
+defined runtime behaviour" shape the framework forbids. Compiling for a trigger runtime
+that *does* implement a kind (`compileToIR(graph, { triggerRuntime })`) accepts it. Only the
+authoritative runtime executes triggers today. See [Not in 0.8.0](AUTHORITY.md#not-in-080).
 
 ## Interval semantics
 
@@ -142,6 +156,23 @@ No test verifying interval/delay behavior needs to wait on a real second (spec �
 `advance(ms)` fires every host timer that becomes due, re-scheduling intervals, in the
 order they would fire on a real clock.
 
+**Every invocation — client request or trigger tick — is serialized against every other one
+this authority runs** (spec 8.1 §26-30), the same FIFO ordering `AxiomServer.handle()`
+already gave client requests. `advance(ms)` firing several same-period triggers in one call
+does not race their commits against each other: each waits its turn, exactly as it would
+under real, staggered timer callbacks. This is why the deterministic host and the real host
+agree on outcome for the same schedule — the ordering guarantee does not depend on which
+host is running. Only the overlap check itself (`inFlight`, above) runs unserialized, since
+it exists specifically to detect *concurrent* ticks of the *same* trigger, which requires
+running immediately when the timer fires.
+
+**A hung query cannot wedge a trigger forever.** `integration-query`'s `timeoutMs` is
+enforced by the runtime itself (spec 8.1 §15-25, full model in
+[`INTEGRATIONS.md`](INTEGRATIONS.md#timeout)) — a non-cooperating adapter's promise that
+never settles still causes the invocation, and therefore the tick, to fail within
+`timeoutMs`, clearing `inFlight` so the next scheduled tick runs normally instead of being
+skipped as an overlap forever.
+
 ## Validation
 
 | Code | Raised when |
@@ -150,6 +181,8 @@ order they would fire on a real clock.
 | `TRIGGER_INTERVAL_NOT_POSITIVE` | `everyMs`/`afterMs` is not a positive number. |
 | `UNKNOWN_EVENT` | An `event` trigger's `eventId` does not resolve to an `EventDef`. |
 | `TRIGGER_WRONG_AUTHORITY` | An authority mismatch between the trigger kind and its target action, described above. |
+| `TRIGGER_TARGET_SOURCE_MISMATCH` | The target action's `invocation.allowedSources` excludes `'system'`, so this trigger could never invoke it. |
+| `CLIENT_TRIGGER_UNSUPPORTED` | A client-authority trigger of a kind the named trigger runtime does not execute. |
 
 Full table: [`VALIDATION.md`](VALIDATION.md#integrations-effects-triggers-and-events).
 
@@ -159,7 +192,12 @@ Full table: [`VALIDATION.md`](VALIDATION.md#integrations-effects-triggers-and-ev
 agent.getTriggersForAction(actionId);        // TriggerDef[]
 agent.getTimedTriggers();                    // TriggerDef[] — interval and delay only
 agent.getActionsTriggeredByEvent(eventId);    // ActionDef[]
+agent.getSystemOnlyActions();                 // ActionDef[] — invocation.allowedSources excludes 'client'
+agent.getTriggersTargetingClientOnlyActions(); // TriggerDef[] — could never succeed
+agent.isClientInvocable(actionId);            // boolean
+agent.isSystemOnly(actionId);                 // boolean
 ```
 
 "What runs automatically" and "what happens every 5 seconds" (spec §78) are answerable
-without reading source.
+without reading source, and so is "which actions are reachable only by a trigger, event or
+effect outcome" (spec 8.1 §13).

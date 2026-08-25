@@ -1,0 +1,421 @@
+{
+  "conformance": "axiom.conformance.v2",
+  "name": "timed-trigger-polling",
+  "covers": [
+    "triggers",
+    "integration query"
+  ],
+  "description": "An interval trigger fires the query and writes its result, with no real wait.",
+  "principals": {},
+  "serverIR": {
+    "contract": "axiom.server.v4",
+    "id": "conformance-integrations",
+    "name": "Conformance integrations",
+    "version": "0.8.0",
+    "entities": [
+      {
+        "id": "entity_effect_outcome",
+        "kind": "entity",
+        "fields": [
+          {
+            "id": "field_effect_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_effect_integration_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_effect_operation_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_effect_result",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          },
+          {
+            "id": "field_effect_code",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          },
+          {
+            "id": "field_effect_message",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          },
+          {
+            "id": "field_effect_retryable",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "boolean"
+            }
+          },
+          {
+            "id": "field_effect_idempotency_key",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          },
+          {
+            "id": "field_effect_correlation_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          }
+        ]
+      }
+    ],
+    "fields": {
+      "field_effect_id": {
+        "entityId": "entity_effect_outcome",
+        "field": {
+          "id": "field_effect_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_effect_integration_id": {
+        "entityId": "entity_effect_outcome",
+        "field": {
+          "id": "field_effect_integration_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_effect_operation_id": {
+        "entityId": "entity_effect_outcome",
+        "field": {
+          "id": "field_effect_operation_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_effect_result": {
+        "entityId": "entity_effect_outcome",
+        "field": {
+          "id": "field_effect_result",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_effect_code": {
+        "entityId": "entity_effect_outcome",
+        "field": {
+          "id": "field_effect_code",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_effect_message": {
+        "entityId": "entity_effect_outcome",
+        "field": {
+          "id": "field_effect_message",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_effect_retryable": {
+        "entityId": "entity_effect_outcome",
+        "field": {
+          "id": "field_effect_retryable",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "boolean"
+          }
+        }
+      },
+      "field_effect_idempotency_key": {
+        "entityId": "entity_effect_outcome",
+        "field": {
+          "id": "field_effect_idempotency_key",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_effect_correlation_id": {
+        "entityId": "entity_effect_outcome",
+        "field": {
+          "id": "field_effect_correlation_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      }
+    },
+    "states": [
+      {
+        "id": "state_status",
+        "kind": "state",
+        "name": "status",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "string"
+        },
+        "initialValue": "unknown"
+      },
+      {
+        "id": "state_message",
+        "kind": "state",
+        "name": "message",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "string"
+        },
+        "initialValue": ""
+      }
+    ],
+    "actions": {
+      "action_refresh": {
+        "id": "action_refresh",
+        "kind": "action",
+        "name": "refresh",
+        "operations": [
+          {
+            "kind": "integration-query",
+            "operationId": "integration_operation_fetch",
+            "bindAs": "scope_query",
+            "timeoutMs": 500
+          },
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_status"
+            },
+            "value": {
+              "kind": "ref",
+              "targetId": "scope_query"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_reboot": {
+        "id": "action_reboot",
+        "kind": "action",
+        "name": "reboot",
+        "operations": [
+          {
+            "kind": "integration-effect",
+            "operationId": "integration_operation_reboot",
+            "succeededEventId": "event_succeeded",
+            "failedEventId": "event_failed"
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_apply_message": {
+        "id": "action_apply_message",
+        "kind": "action",
+        "name": "apply message",
+        "invocation": {
+          "allowedSources": [
+            "system"
+          ]
+        },
+        "parameters": [
+          {
+            "id": "param_message",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_message"
+            },
+            "value": {
+              "kind": "ref",
+              "targetId": "param_message"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      }
+    },
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_status",
+      "state_message"
+    ],
+    "integrations": [
+      {
+        "id": "integration_provider",
+        "kind": "integration",
+        "name": "Provider"
+      }
+    ],
+    "integrationOperations": {
+      "integration_operation_fetch": {
+        "id": "integration_operation_fetch",
+        "kind": "integration-operation",
+        "integrationId": "integration_provider",
+        "name": "fetchStatus",
+        "mode": "query",
+        "resultType": {
+          "kind": "primitive",
+          "primitive": "string"
+        }
+      },
+      "integration_operation_reboot": {
+        "id": "integration_operation_reboot",
+        "kind": "integration-operation",
+        "integrationId": "integration_provider",
+        "name": "reboot",
+        "mode": "effect",
+        "idempotent": true,
+        "resultType": {
+          "kind": "primitive",
+          "primitive": "string"
+        }
+      }
+    },
+    "events": [
+      {
+        "id": "event_succeeded",
+        "kind": "event",
+        "payloadType": {
+          "kind": "entity",
+          "entityId": "entity_effect_outcome"
+        }
+      },
+      {
+        "id": "event_failed",
+        "kind": "event",
+        "payloadType": {
+          "kind": "entity",
+          "entityId": "entity_effect_outcome"
+        }
+      }
+    ],
+    "triggers": [
+      {
+        "id": "trigger_poll",
+        "kind": "trigger",
+        "actionId": "action_refresh",
+        "when": {
+          "kind": "interval",
+          "everyMs": 1000,
+          "overlap": "skip"
+        }
+      },
+      {
+        "id": "trigger_succeeded",
+        "kind": "trigger",
+        "actionId": "action_apply_message",
+        "when": {
+          "kind": "event",
+          "eventId": "event_succeeded"
+        },
+        "arguments": {
+          "param_message": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "trigger_succeeded"
+            },
+            "fieldId": "field_effect_result"
+          }
+        }
+      },
+      {
+        "id": "trigger_failed",
+        "kind": "trigger",
+        "actionId": "action_apply_message",
+        "when": {
+          "kind": "event",
+          "eventId": "event_failed"
+        },
+        "arguments": {
+          "param_message": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "trigger_failed"
+            },
+            "fieldId": "field_effect_message"
+          }
+        }
+      }
+    ]
+  },
+  "initialState": [
+    {
+      "stateId": "state_status",
+      "value": "unknown",
+      "revision": 1
+    }
+  ],
+  "externalAdapters": {
+    "integration_provider": {
+      "query": [
+        {
+          "result": {
+            "ok": true,
+            "value": "online"
+          }
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "kind": "advance",
+      "ms": 1000
+    }
+  ],
+  "expectedState": {
+    "state_status": "online"
+  }
+}

@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.8.0-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.8.1-alpha.1. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -130,6 +130,9 @@ Full model: [`INTEGRATIONS.md`](INTEGRATIONS.md), [`EFFECTS.md`](EFFECTS.md),
 | `TRIGGER_INTERVAL_NOT_POSITIVE` | An `interval` trigger's `everyMs`, or a `delay` trigger's `afterMs`, that is not a positive number. |
 | `UNKNOWN_EVENT` | An event id that does not resolve to an `EventDef` — a trigger's `eventId`, or an `integration-effect`'s `succeededEventId`/`failedEventId`. |
 | `TRIGGER_WRONG_AUTHORITY` | An `event` trigger targeting a client-authority action (only the server dispatches events), or a `route-enter`/`route-leave` trigger targeting a server-authority one (only the client router dispatches those). |
+| `TRIGGER_TARGET_SOURCE_MISMATCH` | A trigger — which always invokes with `source: 'system'` — targets an action whose `invocation.allowedSources` excludes `'system'`; the trigger could never succeed (spec 8.1 §3-9). |
+| `INVALID_INVOCATION_SOURCE` | `ActionDef.invocation.allowedSources` is present but empty — the action could never be invoked at all. |
+| `CLIENT_TRIGGER_UNSUPPORTED` | A client-authority trigger of a kind the intended trigger runtime does not execute — before 8.1 this validated and compiled anyway, and simply never fired (spec 8.1 §31-36). The browser trigger runtime executes no kind today. |
 
 ### UI and routing
 

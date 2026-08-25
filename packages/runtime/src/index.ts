@@ -1,4 +1,4 @@
-export { BROWSER_RENDERER_CAPABILITIES } from './runtime-types.js';
+export { BROWSER_RENDERER_CAPABILITIES, BROWSER_TRIGGER_CAPABILITIES } from './runtime-types.js';
 export * from './dom.js';
 export * from './mutation/values.js';
 export * from './mutation/store.js';

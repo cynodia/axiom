@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.8.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.8.1-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -605,12 +605,13 @@ before authoring an application that reaches an external system or reacts to tim
 event.
 
 1. **INTEGRATION INVARIANT** — external systems are accessed through typed integration operations; the graph never carries an SDK, a host name or a secret.
-2. **QUERY INVARIANT** — external queries are explicit execution, resolved before the transaction they feed opens — never a pure `Expression`.
-3. **EFFECT INVARIANT** — external effects are not rollback-capable state mutations. Reaching `integration-effect` only records intent; the adapter runs only after commit.
+2. **QUERY INVARIANT** — external queries are explicit execution, resolved before the transaction they feed opens — never a pure `Expression`. `timeoutMs` is enforced by the runtime itself, not left to adapter cooperation; a non-cooperating adapter cannot wedge the invocation past its deadline (spec 8.1 §15-25).
+3. **EFFECT INVARIANT** — external effects are not rollback-capable state mutations. Reaching `integration-effect` only records intent; the adapter runs only after commit. The outcome reaches a follow-up action as a structured envelope (`effectOutcomeEntity` — `EFFECT_ID_FIELD`/`EFFECT_OPERATION_ID_FIELD`/…), never a raw result or a formatted string requiring text parsing to correlate (spec 8.1 §37-41).
 4. **OUTBOX INVARIANT** — effect intent is committed atomically with the state write that requested it, before external execution, so a crash between the two does not lose it.
-5. **TRIGGER INVARIANT** — a trigger invokes an ordinary action, under exactly the guards, constraints, transition constraints and authorization any other caller is subject to.
+5. **TRIGGER INVARIANT** — a trigger invokes an ordinary action, under exactly the guards, constraints, transition constraints and authorization any other caller is subject to. Every invocation this authority runs — client request or trigger tick — is serialized against every other one, so simultaneous same-period triggers commit one at a time identically on the deterministic and the real host (spec 8.1 §26-30).
 6. **EVENT INVARIANT** — an event is a typed fact, validated against its declared payload type before any action sees it; an action is where work happens.
 7. **SECRET INVARIANT** — integration credentials live in host configuration (`AxiomServerOptions.integrations`), never in `ApplicationGraph`.
+8. **INVOCATION SOURCE INVARIANT** — a system-originated invocation (trigger, event, effect outcome) and an anonymous client request are distinct authoritative facts; a client cannot forge the former (`ExecutionContext.source` is server-computed, never read from protocol data), and `ActionDef.invocation.allowedSources` lets an action restrict which it accepts independently of `authorization`'s identity check (spec 8.1 §3-14).
 
 ```ts
 { kind: 'integration', id: INTEGRATION_DEVICE_PROVIDER }
@@ -630,7 +631,7 @@ event.
 
 - `mode: 'query'` may bind its result into scope (`bindAs`) for later operations in the same action; `mode: 'effect'` never runs synchronously and its outcome reaches an action only through a dispatched `succeededEventId`/`failedEventId`.
 - A trigger's target action runs where the action itself runs — server if it writes server state or calls an integration, client only for `route-enter`/`route-leave`. Derived, never declared, exactly like ordinary action authority.
-- A triggered/event-originated invocation runs with `principal: null`, `source: 'system'` — the same as an anonymous client request, never an impersonated user. Authorization still evaluates.
+- A triggered/event-originated invocation runs with `principal: null`, `source: 'system'` — the same as an anonymous client request, never an impersonated user. Authorization still evaluates, and `invocation.allowedSources` is checked before it: `{ invocation: { allowedSources: ['system'] } }` refuses a direct client `InvokeRequest` with `INVOCATION_SOURCE_NOT_ALLOWED`, which is what protects a webhook- or effect-outcome-only action from being forged by a client that guessed its id.
 - `createDeterministicServerHost().advance(ms)` fires due timers deterministically; no trigger test waits on a real clock.
 
 ```ts
@@ -639,6 +640,8 @@ agent.getActionsUsingIntegration(id) / agent.getEffectsForAction(actionId);
 agent.getTriggersForAction(actionId) / agent.getTimedTriggers();
 agent.getActionsTriggeredByEvent(eventId) / agent.getWebhookEvents();
 agent.getExternalDependencies();   // { integrations, operations } — the deployment manifest
+agent.getSystemOnlyActions() / agent.getTriggersTargetingClientOnlyActions();
+agent.isClientInvocable(actionId) / agent.isSystemOnly(actionId);
 ```
 
 Portable artifacts, for a runtime written in another language:
@@ -651,8 +654,9 @@ Portable artifacts, for a runtime written in another language:
 ```
 
 Boundary diagnostics: `UNKNOWN_SERVER_ACTION` `ARGUMENT_TYPE_MISMATCH` `AUTHORIZATION_DENIED`
-`CONCURRENCY_CONFLICT` `MALFORMED_REQUEST` `AUTHORITY_UNREACHABLE`, plus `SERVER_STATE_WRITE`
-and `REMOTE_ACTION_UNAVAILABLE` on the client.
+`INVOCATION_SOURCE_NOT_ALLOWED` `CONCURRENCY_CONFLICT` `MALFORMED_REQUEST`
+`AUTHORITY_UNREACHABLE`, plus `SERVER_STATE_WRITE` and `REMOTE_ACTION_UNAVAILABLE` on the
+client.
 
 ## Metadata classes
 

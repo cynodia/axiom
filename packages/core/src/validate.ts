@@ -3,6 +3,7 @@ import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
 import { VALIDATION_CODES } from './diagnostics.js';
 import type { RendererCapabilities } from './renderer-capabilities.js';
+import type { TriggerRuntimeCapabilities } from './trigger-capabilities.js';
 import type { ValidationIssue, ValidationResult } from './diagnostics.js';
 import type { LiteralValue } from './nodes.js';
 import { EDGE_KINDS, actionGuards, isMutationOperation } from './nodes.js';
@@ -69,6 +70,13 @@ export interface ValidateOptions {
    * real capabilities, which is where an unrenderable node kind is caught.
    */
   renderer?: RendererCapabilities;
+  /**
+   * The trigger runtime the graph is intended for. Absent, every trigger kind is accepted —
+   * a graph is not rejected for a trigger runtime nobody named. `compileToIR` supplies the
+   * browser's real (empty) capability set, which is where a client-authority trigger kind
+   * no browser runtime executes is caught, rather than silently compiling inert.
+   */
+  triggerRuntime?: TriggerRuntimeCapabilities;
 }
 
 export function validateGraph(graph: ApplicationGraph, options: ValidateOptions = {}): ValidationResult {
@@ -172,7 +180,7 @@ export function validateGraph(graph: ApplicationGraph, options: ValidateOptions 
 
   // The authority boundary. A graph that could let a client commit server state, or that
   // would make an authority read state it does not own, cannot execute safely.
-  const authority = validateAuthority(allNodes, graph.principalEntityId);
+  const authority = validateAuthority(allNodes, graph.principalEntityId, options.triggerRuntime);
   errors.push(...authority.errors);
   warnings.push(...authority.warnings);
 
@@ -311,6 +319,13 @@ function validateValue(
 function validateAction(action: ActionDef, context: Context): void {
   if (action.authorization) {
     validateExpression(action.authorization, action.id, context, new Set());
+  }
+  if (action.invocation?.allowedSources && action.invocation.allowedSources.length === 0) {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidInvocationSource,
+      message: `Action ${action.name ?? action.id} declares an empty invocation.allowedSources, so it could never be invoked`,
+      nodeId: action.id,
+    });
   }
   const local = emptyScope(new Set<NodeId>((action.parameters ?? []).map((parameter) => parameter.id)));
   for (const parameter of action.parameters ?? []) {

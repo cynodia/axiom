@@ -1,6 +1,6 @@
 # Integrations
 
-Axiom 0.8.0-alpha.1. How an application declares and calls an external system, without
+Axiom 0.8.1-alpha.1. How an application declares and calls an external system, without
 embedding a transport, an SDK or a secret in the graph. The authority boundary this
 depends on is [`AUTHORITY.md`](AUTHORITY.md#external-systems); this file is the vocabulary.
 
@@ -85,6 +85,22 @@ that does not conform is never handed to the application as `unknown` — it is 
 `INTEGRATION_RESULT_INVALID` (a runtime diagnostic; see [`RUNTIME.md`](RUNTIME.md)) before
 `ref(bindAs)` would ever resolve to it.
 
+## Timeout
+
+**The Axiom runtime enforces `timeoutMs`, not the adapter.** `queryIntegration` races
+`adapter.query(...)` against a `ServerHost.scheduleOnce(timeoutMs, ...)` deadline (spec 8.1
+§15-25) — a non-cooperating adapter whose promise never settles cannot wedge the semantic
+invocation, or by extension a polling interval trigger, forever. On timeout, the invocation
+fails with `INTEGRATION_TIMEOUT` immediately; the adapter's promise is never cancelled (Axiom
+cannot know whether that is safe for an arbitrary provider call), but if it eventually
+settles, that result is simply discarded — it can never mutate state or fire a follow-up,
+because the deadline already answered pre-transaction.
+
+An adapter MAY still race its own deadline internally (`createHttpIntegrationAdapter` does,
+via `AbortController`) to cancel the underlying provider call early, but this is an
+optimization, never a correctness requirement: the runtime's own enforcement is what a graph
+author can rely on regardless of which adapter is registered.
+
 ## Registering an adapter
 
 ```ts
@@ -113,9 +129,12 @@ REST service: a base URL, a method and a path template per operation (`{param}`
 substituted from the operation's arguments), a JSON body built from the remaining
 arguments, and a timeout via `AbortController`. It is explicitly not the canonical
 integration model — a typed `IntegrationOperationDef` is — only a way to prove one works
-without writing a bespoke adapter for a demo. `createFakeIntegrationAdapter({ query?,
-effect? })` returns deterministic, caller-supplied results: what conformance fixtures and
-tests use, since semantics must never depend on a real network call.
+without writing a bespoke adapter for a demo. `createFakeIntegrationAdapter({ query?, effect? })` returns deterministic, caller-supplied
+results: what conformance fixtures and tests use, since semantics must never depend on a
+real network call. Its callbacks receive the same `context` (`{ timeoutMs }` for a query,
+`{ idempotencyKey }` for an effect) the real `IntegrationAdapter` interface does, so a test
+can simulate a hanging call, a declared timeout, or a stable idempotency key without
+dropping to a hand-written adapter.
 
 ## Validation
 

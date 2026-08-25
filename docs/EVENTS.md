@@ -1,6 +1,6 @@
 # Events
 
-Axiom 0.8.0-alpha.1. An event is a typed fact — something that happened — never work
+Axiom 0.8.1-alpha.1. An event is a typed fact — something that happened — never work
 itself. [`AUTHORITY.md`](AUTHORITY.md#external-events) is the load-bearing statement;
 this file is the vocabulary and the webhook delivery mechanism.
 
@@ -74,6 +74,10 @@ over the exact bytes a provider signed, and it runs strictly before `decode` —
 unverified request never reaches the semantic layer at all (`WEBHOOK_VERIFICATION_FAILED`,
 401). Provider-specific protocol — headers, signing scheme, payload shape — stays entirely
 in `verify`/`decode`; nothing crosses into `ApplicationGraph`.
+
+`serveAxiomApplication({ ..., webhooks })` accepts the same option directly (spec 8.1
+§56-58) — a webhook-receiving application no longer has to drop to `createAxiomServer` +
+`serveOverHttp` just to register one.
 
 ## Duplicate delivery
 

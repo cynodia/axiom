@@ -10,7 +10,10 @@ import {
   createDeterministicServerHost,
   createFakeIntegrationAdapter,
   createMemoryPersistence,
+  createServerHost,
+  serveOverHttp,
 } from '@cynodia/axiom-server';
+import type { WebhookConfig, WebhookRequestInfo } from '@cynodia/axiom-server';
 import { createDeviceMonitorGraph, deviceMonitorIds as ids } from '@cynodia/axiom-demo/device-monitor';
 
 /**
@@ -176,4 +179,101 @@ test('a malformed status-change payload never reaches the update action', async 
   const devices = server.getState(ids.STATE_DEVICES) as Array<Record<string, unknown>>;
   assert.ok(devices.every((device) => device[ids.F_DEVICE_STATUS] === 'unknown'));
   await server.stop();
+});
+
+// --------------------------------------------- webhook delivery, over real HTTP (spec 8.1 §10)
+
+const WEBHOOK_SECRET = 'shared-secret';
+const WEBHOOK_PATH = '/webhooks/device-provider';
+
+function deviceProviderWebhook(): WebhookConfig {
+  return {
+    verify: (request: WebhookRequestInfo) => request.headers['x-webhook-secret'] === WEBHOOK_SECRET,
+    decode: (request: WebhookRequestInfo) => {
+      const body = JSON.parse(request.rawBody.toString('utf8')) as { externalId: string; status: string };
+      return {
+        eventId: ids.EVENT_DEVICE_STATUS_CHANGED,
+        payload: { [ids.F_CHANGE_EXTERNAL_ID]: body.externalId, [ids.F_CHANGE_STATUS]: body.status },
+      };
+    },
+  };
+}
+
+test('a valid signed webhook is accepted, dispatches the event and updates state (spec §10.A)', async () => {
+  const adapter = createFakeIntegrationAdapter({});
+  const server = createAxiomServer({
+    ir: compileToServerIR(createDeviceMonitorGraph()),
+    host: createServerHost(),
+    persistence: createMemoryPersistence(),
+    integrations: { [ids.INTEGRATION_DEVICE_PROVIDER]: adapter },
+  });
+  const running = await serveOverHttp({ server, port: 0, webhooks: { [WEBHOOK_PATH]: deviceProviderWebhook() } });
+  try {
+    const response = await fetch(`http://127.0.0.1:${running.port}${WEBHOOK_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-webhook-secret': WEBHOOK_SECRET },
+      body: JSON.stringify({ externalId: 'dev-1', status: 'online' }),
+    });
+    assert.equal(response.status, 200);
+
+    const devices = server.getState(ids.STATE_DEVICES) as Array<Record<string, unknown>>;
+    assert.equal(devices.find((d) => d[ids.F_DEVICE_EXTERNAL_ID] === 'dev-1')?.[ids.F_DEVICE_STATUS], 'online');
+  } finally {
+    await running.close();
+  }
+});
+
+test('an invalid webhook is rejected before any event is dispatched (spec §10.B)', async () => {
+  const adapter = createFakeIntegrationAdapter({});
+  const server = createAxiomServer({
+    ir: compileToServerIR(createDeviceMonitorGraph()),
+    host: createServerHost(),
+    persistence: createMemoryPersistence(),
+    integrations: { [ids.INTEGRATION_DEVICE_PROVIDER]: adapter },
+  });
+  const running = await serveOverHttp({ server, port: 0, webhooks: { [WEBHOOK_PATH]: deviceProviderWebhook() } });
+  try {
+    const response = await fetch(`http://127.0.0.1:${running.port}${WEBHOOK_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-webhook-secret': 'wrong-secret' },
+      body: JSON.stringify({ externalId: 'dev-1', status: 'online' }),
+    });
+    assert.equal(response.status, 401);
+
+    const devices = server.getState(ids.STATE_DEVICES) as Array<Record<string, unknown>>;
+    assert.ok(devices.every((device) => device[ids.F_DEVICE_STATUS] === 'unknown'), 'the forged delivery never reached the event pipeline');
+  } finally {
+    await running.close();
+  }
+});
+
+test('an anonymous client cannot invoke the webhook-only action directly, over real HTTP (spec §10.C)', async () => {
+  const adapter = createFakeIntegrationAdapter({});
+  const server = createAxiomServer({
+    ir: compileToServerIR(createDeviceMonitorGraph()),
+    host: createServerHost(),
+    persistence: createMemoryPersistence(),
+    integrations: { [ids.INTEGRATION_DEVICE_PROVIDER]: adapter },
+  });
+  const running = await serveOverHttp({ server, port: 0 });
+  try {
+    const response = await fetch(running.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'invoke',
+        protocol: 'axiom.protocol.v1',
+        actionId: ids.ACTION_APPLY_STATUS_CHANGE,
+        arguments: { [ids.PARAM_CHANGE_EXTERNAL_ID]: 'dev-1', [ids.PARAM_CHANGE_STATUS]: 'online' },
+      }),
+    });
+    const body = (await response.json()) as { ok: boolean; diagnostics: Array<{ code: string }> };
+    assert.equal(body.ok, false);
+    assert.equal(body.diagnostics[0]?.code, 'INVOCATION_SOURCE_NOT_ALLOWED');
+
+    const devices = server.getState(ids.STATE_DEVICES) as Array<Record<string, unknown>>;
+    assert.ok(devices.every((device) => device[ids.F_DEVICE_STATUS] === 'unknown'), 'the forged request never committed');
+  } finally {
+    await running.close();
+  }
 });

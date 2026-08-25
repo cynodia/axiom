@@ -1,4 +1,7 @@
 import {
+  allowedInvocationSources,
+  isClientInvocable as actionIsClientInvocable,
+  isSystemOnlyAction,
   isUINode,
   locationFieldIds,
   locationRootStateId,
@@ -538,6 +541,31 @@ export class GraphQueries {
         .map((trigger) => (trigger.when as { kind: 'event'; eventId: NodeId }).eventId),
     );
     return this.graph.getNodesByKind('event').filter((event) => referenced.has(event.id));
+  }
+
+  /** Whether an ordinary client `InvokeRequest` may name this action at all. */
+  isClientInvocable(actionId: NodeId): boolean {
+    const action = this.graph.getNode(actionId);
+    return action?.kind === 'action' ? actionIsClientInvocable(action) : false;
+  }
+
+  /** Whether this action accepts only trigger-, event- or effect-outcome-originated calls. */
+  isSystemOnly(actionId: NodeId): boolean {
+    const action = this.graph.getNode(actionId);
+    return action?.kind === 'action' ? isSystemOnlyAction(action) : false;
+  }
+
+  /** Every action reachable only through a trigger, event or effect outcome — never a client. */
+  getSystemOnlyActions(): ActionDef[] {
+    return this.graph.getNodesByKind('action').filter((action) => isSystemOnlyAction(action));
+  }
+
+  /** Triggers whose target action cannot accept the `'system'`-sourced invocation the trigger always makes. */
+  getTriggersTargetingClientOnlyActions(): TriggerDef[] {
+    return this.graph.getNodesByKind('trigger').filter((trigger) => {
+      const action = this.graph.getNode(trigger.actionId);
+      return action?.kind === 'action' && !allowedInvocationSources(action).includes('system');
+    });
   }
 
   protected enclosingViews(id: NodeId): ViewNode[] {

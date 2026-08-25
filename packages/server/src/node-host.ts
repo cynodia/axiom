@@ -8,6 +8,7 @@ import type { PrincipalRecord } from './host.js';
 import type { PersistenceAdapter } from './persistence.js';
 import { PROTOCOL_VERSION } from './protocol.js';
 import type { NodeId, ServerIR } from './deps.js';
+import type { IntegrationAdapter } from './integration.js';
 
 /**
  * What a webhook handler gets to verify and decode a delivery: the raw, unparsed request —
@@ -69,6 +70,11 @@ export interface NodeHostOptions {
 export interface RunningNodeHost {
   /** The port actually bound, which matters when `port: 0` was requested. */
   port: number;
+  /**
+   * The semantic endpoint's address (`POST` here is what a client speaks the protocol to) —
+   * `http://127.0.0.1:<port><path>`, `/axiom` by default. Distinct from
+   * `RunningAxiomApplication.pageUrl`, which is what a person opens in a browser.
+   */
   url: string;
   close(): Promise<void>;
 }
@@ -225,10 +231,14 @@ export async function serveOverHttp(options: NodeHostOptions): Promise<RunningNo
   return {
     port,
     url: `http://127.0.0.1:${port}${path}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
+    close: async () => {
+      // Closing only the HTTP listener left the authority's own trigger timers running
+      // forever — a resource leak, and on a real host a process that never exits.
+      await new Promise<void>((resolve, reject) => {
         http.close((error) => (error ? reject(error) : resolve()));
-      }),
+      });
+      await options.server.stop();
+    },
   };
 }
 
@@ -261,6 +271,15 @@ export interface AxiomApplicationOptions {
   port?: number;
   /** The semantic endpoint. Change it only if something else already owns `/axiom`. */
   path?: string;
+  /** One adapter per integration the Server IR declares — required if it declares any. */
+  integrations?: Record<NodeId, IntegrationAdapter>;
+  /**
+   * Webhook routes, keyed by the URL path a provider posts to. Without this, a webhook-
+   * receiving application had to drop to `createAxiomServer` + `serveOverHttp` directly
+   * just to add one (spec 8.1 §56-58) — the one-call convenience this function otherwise
+   * offers should not force that trade-off.
+   */
+  webhooks?: Record<string, WebhookConfig>;
 }
 
 export interface RunningAxiomApplication extends RunningNodeHost {
@@ -279,12 +298,14 @@ export async function serveAxiomApplication(
     ...(options.authenticate
       ? { host: createServerHost({ authenticate: options.authenticate }) }
       : {}),
+    ...(options.integrations ? { integrations: options.integrations } : {}),
   });
   const running = await serveOverHttp({
     server,
     page: options.page,
     ...(options.port === undefined ? {} : { port: options.port }),
     ...(options.path === undefined ? {} : { path: options.path }),
+    ...(options.webhooks ? { webhooks: options.webhooks } : {}),
   });
   return { ...running, pageUrl: `http://127.0.0.1:${running.port}/`, server };
 }

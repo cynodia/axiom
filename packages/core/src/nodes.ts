@@ -186,6 +186,31 @@ export interface ActionGuard {
 }
 
 /**
+ * `'client'` is an ordinary `InvokeRequest`; `'system'` is a trigger-, event- or
+ * effect-outcome-originated invocation. Server-computed and client-unforgeable — see
+ * `ExecutionContext.source` in `@cynodia/axiom-server`.
+ */
+export type InvocationSource = 'client' | 'system';
+
+export const INVOCATION_SOURCES: readonly InvocationSource[] = ['client', 'system'];
+
+/** Both sources, the default when `ActionDef.invocation` is absent (spec 8.1 §5). */
+export const DEFAULT_ALLOWED_INVOCATION_SOURCES: readonly InvocationSource[] = INVOCATION_SOURCES;
+
+/**
+ * Restricts who may invoke an action, independently of `authorization`'s identity check.
+ *
+ * `authorization` answers "may this caller invoke this action"; `invocation` answers "may
+ * an invocation reaching the authority this way invoke this action at all" — the trust
+ * boundary a trigger-only or effect-outcome-only action needs, since otherwise any anonymous
+ * client that knows its id can invoke it directly (spec 8.1 §3-9).
+ */
+export interface ActionInvocationPolicy {
+  /** Absent means both — identical to omitting `invocation` entirely. */
+  allowedSources?: readonly InvocationSource[];
+}
+
+/**
  * Behaviour expressed as data, executed as a transaction.
  *
  * An invocation proceeds: resolve the action, bind parameters, evaluate preconditions in
@@ -221,6 +246,8 @@ export interface ActionDef extends NodeBase {
   authorization?: Expression;
   /** What the confirmation says, when a plain message is not enough. */
   confirmation?: ConfirmationPresentation;
+  /** Restricts which invocation sources may reach this action. Absent means both. */
+  invocation?: ActionInvocationPolicy;
 }
 
 /**
@@ -235,6 +262,22 @@ export function actionGuards(action: ActionDef): ActionGuard[] {
     condition,
     ...(action.failureModes?.[index] ? { failureMode: action.failureModes[index] } : {}),
   }));
+}
+
+/** The invocation sources this action accepts — both, unless `invocation` restricts it. */
+export function allowedInvocationSources(action: ActionDef): readonly InvocationSource[] {
+  return action.invocation?.allowedSources ?? DEFAULT_ALLOWED_INVOCATION_SOURCES;
+}
+
+/** Whether an ordinary client `InvokeRequest` may name this action at all. */
+export function isClientInvocable(action: ActionDef): boolean {
+  return allowedInvocationSources(action).includes('client');
+}
+
+/** Whether this action accepts only trigger-, event- or effect-outcome-originated calls. */
+export function isSystemOnlyAction(action: ActionDef): boolean {
+  const sources = allowedInvocationSources(action);
+  return sources.includes('system') && !sources.includes('client');
 }
 
 export type Operation =

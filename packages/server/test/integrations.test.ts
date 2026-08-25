@@ -2,9 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   ApplicationGraph,
+  EFFECT_ID_FIELD,
+  EFFECT_INTEGRATION_ID_FIELD,
+  EFFECT_MESSAGE_FIELD,
+  EFFECT_OPERATION_ID_FIELD,
+  EFFECT_RESULT_FIELD,
   PRINCIPAL,
   binary,
   call,
+  effectOutcomeEntity,
+  entityType,
   field,
   fieldId,
   literal,
@@ -63,6 +70,10 @@ const SCOPE_QUERY = nodeId('scope_query_08');
 
 const EVENT_REBOOTED = nodeId('event_rebooted_08');
 const EVENT_REBOOT_FAILED = nodeId('event_reboot_failed_08');
+// The reserved effect-outcome field ids are graph-global (like GROUP_KEY_FIELD/
+// GROUP_ITEMS_FIELD), so one shared outcome entity covers every effect's succeeded and
+// failed event in this graph, rather than a bespoke entity per event.
+const ENTITY_EFFECT_OUTCOME = nodeId('entity_effect_outcome_08');
 const EVENT_STATUS_CHANGED = nodeId('event_status_changed_08');
 const EVENT_SELF = nodeId('event_self_08');
 
@@ -153,6 +164,10 @@ function buildGraph(): ApplicationGraph {
     id: ACTION_APPLY_MESSAGE,
     kind: 'action',
     name: 'apply message',
+    // Only the reboot effect's own succeeded/failed event should ever reach this (spec
+    // 8.1 §3-9, §11) — a client that guessed this action id could otherwise forge a fake
+    // effect outcome.
+    invocation: { allowedSources: ['system'] },
     parameters: [{ id: PARAM_MESSAGE, valueType: primitiveType('string'), required: true }],
     operations: [{ kind: 'set', target: stateLocation(STATE_LAST_MESSAGE), value: ref(PARAM_MESSAGE) }],
   });
@@ -161,6 +176,9 @@ function buildGraph(): ApplicationGraph {
     id: ACTION_APPLY_STATUS,
     kind: 'action',
     name: 'apply status',
+    // Only the verified `EVENT_STATUS_CHANGED` webhook event should ever reach this (spec
+    // 8.1 §3-9, §10).
+    invocation: { allowedSources: ['system'] },
     parameters: [{ id: PARAM_STATUS, valueType: primitiveType('string'), required: true }],
     operations: [{ kind: 'set', target: stateLocation(STATE_STATUS), value: ref(PARAM_STATUS) }],
   });
@@ -173,10 +191,21 @@ function buildGraph(): ApplicationGraph {
     operations: [{ kind: 'set', target: stateLocation(STATE_LAST_MESSAGE), value: literal('admin ran it') }],
   });
 
-  graph.addNode<EventDef>({ id: EVENT_REBOOTED, kind: 'event', payloadType: primitiveType('string') });
-  graph.addNode<EventDef>({ id: EVENT_REBOOT_FAILED, kind: 'event', payloadType: primitiveType('string') });
+  graph.addNode(effectOutcomeEntity(ENTITY_EFFECT_OUTCOME, primitiveType('string')));
+  graph.addNode<EventDef>({
+    id: EVENT_REBOOTED,
+    kind: 'event',
+    payloadType: entityType(ENTITY_EFFECT_OUTCOME),
+  });
+  graph.addNode<EventDef>({
+    id: EVENT_REBOOT_FAILED,
+    kind: 'event',
+    payloadType: entityType(ENTITY_EFFECT_OUTCOME),
+  });
   graph.addNode<EventDef>({ id: EVENT_STATUS_CHANGED, kind: 'event', payloadType: primitiveType('string') });
-  graph.addNode<EventDef>({ id: EVENT_SELF, kind: 'event', payloadType: primitiveType('string') });
+  // The same shared outcome entity: this is also an effect-success outcome, of the same
+  // OP_REBOOT operation, just re-dispatched deliberately to form the depth-guard cycle.
+  graph.addNode<EventDef>({ id: EVENT_SELF, kind: 'event', payloadType: entityType(ENTITY_EFFECT_OUTCOME) });
 
   graph.addNode<ActionDef>({
     id: ACTION_REBOOT_LOOP,
@@ -197,14 +226,14 @@ function buildGraph(): ApplicationGraph {
     kind: 'trigger',
     actionId: ACTION_APPLY_MESSAGE,
     when: { kind: 'event', eventId: EVENT_REBOOTED },
-    arguments: { [String(PARAM_MESSAGE)]: ref(TRIGGER_REBOOTED) },
+    arguments: { [String(PARAM_MESSAGE)]: field(ref(TRIGGER_REBOOTED), EFFECT_RESULT_FIELD) },
   });
   graph.addNode<TriggerDef>({
     id: TRIGGER_REBOOT_FAILED,
     kind: 'trigger',
     actionId: ACTION_APPLY_MESSAGE,
     when: { kind: 'event', eventId: EVENT_REBOOT_FAILED },
-    arguments: { [String(PARAM_MESSAGE)]: ref(TRIGGER_REBOOT_FAILED) },
+    arguments: { [String(PARAM_MESSAGE)]: field(ref(TRIGGER_REBOOT_FAILED), EFFECT_MESSAGE_FIELD) },
   });
   graph.addNode<TriggerDef>({
     id: TRIGGER_STATUS_CHANGED,
@@ -353,7 +382,7 @@ test('a failed effect dispatches its failure event, and committed state stays co
   await server.start();
 
   await server.handle({ kind: 'invoke', protocol: 'axiom.protocol.v1', actionId: ACTION_REBOOT });
-  await waitUntil(() => server.getState(STATE_LAST_MESSAGE) === 'DEVICE_UNREACHABLE: no route to device');
+  await waitUntil(() => server.getState(STATE_LAST_MESSAGE) === 'no route to device');
   await server.stop();
 });
 
@@ -454,6 +483,64 @@ test('a system-triggered action still evaluates authorization, and can be refuse
   await server.stop();
 });
 
+// ------------------------------------------------------- invocation source (spec 8.1 §3-14)
+
+test('an anonymous client cannot directly invoke an effect-outcome-only action (spec §11)', async () => {
+  const adapter = createFakeIntegrationAdapter({});
+  const { server } = buildServer(adapter);
+  await server.start();
+
+  const response = (await server.handle({
+    kind: 'invoke',
+    protocol: 'axiom.protocol.v1',
+    actionId: ACTION_APPLY_MESSAGE,
+    arguments: { [String(PARAM_MESSAGE)]: 'forged: reboot succeeded' },
+  })) as { ok: boolean; diagnostics: Array<{ code: string }> };
+
+  assert.equal(response.ok, false);
+  assert.equal(response.diagnostics[0]?.code, 'INVOCATION_SOURCE_NOT_ALLOWED');
+  assert.equal(server.getState(STATE_LAST_MESSAGE), '', 'the forged message never committed');
+  await server.stop();
+});
+
+test('an anonymous client cannot directly invoke a webhook-only action (spec §10.C)', async () => {
+  const adapter = createFakeIntegrationAdapter({});
+  const { server } = buildServer(adapter);
+  await server.start();
+
+  const response = (await server.handle({
+    kind: 'invoke',
+    protocol: 'axiom.protocol.v1',
+    actionId: ACTION_APPLY_STATUS,
+    arguments: { [String(PARAM_STATUS)]: 'online' },
+  })) as { ok: boolean; diagnostics: Array<{ code: string }> };
+
+  assert.equal(response.ok, false);
+  assert.equal(response.diagnostics[0]?.code, 'INVOCATION_SOURCE_NOT_ALLOWED');
+  assert.equal(server.getState(STATE_STATUS), 'unknown', 'the forged status change never committed');
+  await server.stop();
+});
+
+test('a client cannot forge system source through protocol data (spec §65-66)', async () => {
+  const adapter = createFakeIntegrationAdapter({});
+  const { server } = buildServer(adapter);
+  await server.start();
+
+  const response = (await server.handle({
+    kind: 'invoke',
+    protocol: 'axiom.protocol.v1',
+    actionId: ACTION_APPLY_STATUS,
+    arguments: { [String(PARAM_STATUS)]: 'online' },
+    // InvokeRequest has no `source` field to forge in the first place; a client that sends
+    // one anyway (as raw, untyped JSON reaching `handle`) must find it silently ignored.
+    ...({ source: 'system' } as Record<string, unknown>),
+  } as never)) as { ok: boolean; diagnostics: Array<{ code: string }> };
+
+  assert.equal(response.ok, false);
+  assert.equal(response.diagnostics[0]?.code, 'INVOCATION_SOURCE_NOT_ALLOWED');
+  await server.stop();
+});
+
 test('missing integration adapters fail startup clearly, not at first invocation (spec §116)', async () => {
   const ir = compileToServerIR(buildGraph());
   const server = createAxiomServer({ ir, host: createDeterministicServerHost(), persistence: createMemoryPersistence() });
@@ -465,7 +552,17 @@ test('an event-dispatch cycle is stopped rather than recursing unboundedly (spec
   const { server, events } = buildServer(adapter);
   await server.start();
 
-  await server.handle({ kind: 'event', protocol: 'axiom.protocol.v1', eventId: EVENT_SELF, payload: 'go' });
+  await server.handle({
+    kind: 'event',
+    protocol: 'axiom.protocol.v1',
+    eventId: EVENT_SELF,
+    payload: {
+      [String(EFFECT_ID_FIELD)]: 'seed',
+      [String(EFFECT_INTEGRATION_ID_FIELD)]: String(INTEGRATION),
+      [String(EFFECT_OPERATION_ID_FIELD)]: String(OP_REBOOT),
+      [String(EFFECT_RESULT_FIELD)]: 'go',
+    },
+  });
   // Each cascade round is a real, separately-scheduled effect dispatch, so this genuinely
   // waits across all of them rather than racing the last one.
   await waitUntil(

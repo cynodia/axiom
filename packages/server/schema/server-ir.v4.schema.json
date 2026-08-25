@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cynodia.github.io/axiom/schema/server-ir.v2.schema.json",
-  "title": "Axiom Server IR v2",
-  "description": "The normative structure of an `axiom.server.v2` document. Structure only: what a conforming runtime must *do* with it is the semantic contract, and the conformance fixtures are the executable statement of that.",
-  "contract": "axiom.server.v2",
+  "$id": "https://cynodia.github.io/axiom/schema/server-ir.v4.schema.json",
+  "title": "Axiom Server IR v4",
+  "description": "The normative structure of an `axiom.server.v4` document. Structure only: what a conforming runtime must *do* with it is the semantic contract, and the conformance fixtures are the executable statement of that.",
+  "contract": "axiom.server.v4",
   "release": "0.8.1-alpha.1",
   "type": "object",
   "required": [
@@ -22,7 +22,7 @@
   "additionalProperties": false,
   "properties": {
     "contract": {
-      "const": "axiom.server.v2"
+      "const": "axiom.server.v4"
     },
     "id": {
       "type": "string"
@@ -84,6 +84,30 @@
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/ExpressionDef"
+      }
+    },
+    "integrations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/IntegrationDef"
+      }
+    },
+    "integrationOperations": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/IntegrationOperationDef"
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EventDef"
+      }
+    },
+    "triggers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TriggerDef"
       }
     }
   },
@@ -1033,7 +1057,7 @@
       "additionalProperties": false
     },
     "Operation": {
-      "description": "Every operation kind: set, insert, remove, for-each, invoke, navigate, native.",
+      "description": "Every operation kind: set, insert, remove, for-each, invoke, navigate, native, integration-query, integration-effect.",
       "oneOf": [
         {
           "$ref": "#/$defs/MutationOperation"
@@ -1142,6 +1166,71 @@
           "required": [
             "kind",
             "implementationId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "integration-query"
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "arguments": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Expression"
+              }
+            },
+            "bindAs": {
+              "type": "string",
+              "minLength": 1
+            },
+            "timeoutMs": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId",
+            "bindAs"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "integration-effect"
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "arguments": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Expression"
+              }
+            },
+            "idempotencyKey": {
+              "$ref": "#/$defs/Expression"
+            },
+            "succeededEventId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "failedEventId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "operationId"
           ],
           "additionalProperties": false
         }
@@ -1449,6 +1538,280 @@
         "id",
         "kind",
         "expression"
+      ],
+      "additionalProperties": false
+    },
+    "IntegrationDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "integration"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "IntegrationOperationParameter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/TypeRef"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "valueType"
+      ],
+      "additionalProperties": false
+    },
+    "RetryPolicy": {
+      "type": "object",
+      "properties": {
+        "policy": {
+          "enum": [
+            "none",
+            "fixed",
+            "exponential"
+          ]
+        },
+        "maxAttempts": {
+          "type": "number"
+        },
+        "delayMs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "policy"
+      ],
+      "additionalProperties": false
+    },
+    "IntegrationOperationDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "integration-operation"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "integrationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "enum": [
+            "query",
+            "effect"
+          ]
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IntegrationOperationParameter"
+          }
+        },
+        "resultType": {
+          "$ref": "#/$defs/TypeRef"
+        },
+        "clientSafe": {
+          "type": "boolean"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryPolicy"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "integrationId",
+        "mode",
+        "resultType"
+      ],
+      "additionalProperties": false
+    },
+    "EventDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "event"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "payloadType": {
+          "$ref": "#/$defs/TypeRef"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "payloadType"
+      ],
+      "additionalProperties": false
+    },
+    "TriggerSpec": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "interval"
+            },
+            "everyMs": {
+              "type": "number"
+            },
+            "overlap": {
+              "enum": [
+                "skip",
+                "queue"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "everyMs"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "delay"
+            },
+            "afterMs": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "afterMs"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "lifecycle"
+            },
+            "event": {
+              "enum": [
+                "application-start",
+                "runtime-ready",
+                "route-enter",
+                "route-leave"
+              ]
+            },
+            "routeId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "event"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "event"
+            },
+            "eventId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "eventId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TriggerDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "trigger"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "actionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "when": {
+          "$ref": "#/$defs/TriggerSpec"
+        },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "enabledWhen": {
+          "$ref": "#/$defs/Expression"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "actionId",
+        "when"
       ],
       "additionalProperties": false
     }

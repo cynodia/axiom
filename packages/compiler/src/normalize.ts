@@ -37,8 +37,8 @@ import type {
   ValidationResult,
 } from '@cynodia/axiom-core';
 import { isUINode, stripAuthoringMetadata } from '@cynodia/axiom-core';
-import type { RendererCapabilities } from '@cynodia/axiom-core';
-import { BROWSER_RENDERER_CAPABILITIES } from '@cynodia/axiom-runtime';
+import type { RendererCapabilities, TriggerRuntimeCapabilities } from '@cynodia/axiom-core';
+import { BROWSER_RENDERER_CAPABILITIES, BROWSER_TRIGGER_CAPABILITIES } from '@cynodia/axiom-runtime';
 
 export class GraphValidationError extends Error {
   readonly problems: ValidationIssue[];
@@ -71,6 +71,12 @@ export interface CompileOptions {
    * rejected at compile time rather than discovered on screen.
    */
   renderer?: RendererCapabilities;
+  /**
+   * The trigger runtime the IR is being compiled for. Defaults to the browser's real (empty)
+   * capability set, because the browser runtime implements no trigger kind — so a
+   * client-authority trigger is rejected at compile time rather than compiled inert.
+   */
+  triggerRuntime?: TriggerRuntimeCapabilities;
 }
 
 function compileRoute(route: RouteDef): CompiledRoute {
@@ -105,6 +111,8 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
   if (options.validate !== false) {
     const result = validateGraph(graph, {
       renderer: options.renderer ?? (BROWSER_RENDERER_CAPABILITIES as RendererCapabilities),
+      triggerRuntime:
+        options.triggerRuntime ?? (BROWSER_TRIGGER_CAPABILITIES as TriggerRuntimeCapabilities),
     });
     if (!result.valid) {
       throw new GraphValidationError(result);

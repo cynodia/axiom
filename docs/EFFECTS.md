@@ -1,6 +1,6 @@
 # Effects
 
-Axiom 0.8.0-alpha.1. External effects are not rollback-capable state mutations. This file
+Axiom 0.8.1-alpha.1. External effects are not rollback-capable state mutations. This file
 is the delivery model; [`AUTHORITY.md`](AUTHORITY.md#external-effects) is the load-bearing
 statement of why, and [`INTEGRATIONS.md`](INTEGRATIONS.md) is the operation vocabulary this
 builds on.
@@ -79,6 +79,10 @@ doubles it each time. The wait uses the host's own scheduling
 (`ServerHost.scheduleOnce`), so a test can drive it with `createDeterministicServerHost()`
 + `advance(ms)` and never wait on a real clock.
 
+**`IntegrationFailure.retryable: false` is control flow, not metadata.** It stops the
+remaining retry policy immediately, regardless of `maxAttempts` — an adapter that always
+answers `retryable: false` never retries at all, whatever `policy` says (spec 8.1 §73).
+
 ## Effect status and observability
 
 ```ts
@@ -107,12 +111,37 @@ mutation, and mixing the two would misrepresent what actually happened (spec §7
 An effect's outcome is never folded back into the transaction that requested it. Instead,
 `succeededEventId`/`failedEventId` — ordinary `EventDef` nodes — are dispatched through
 the same event pipeline an external webhook uses (see [`EVENTS.md`](EVENTS.md)), once the
-outcome is known:
+outcome is known, as a **structured envelope** (spec 8.1 §37-41):
 
-- **Success payload** is the effect operation's own `resultType` value — the adapter's
-  returned result, unchanged.
-- **Failure payload** is the error formatted as text, `"<code>: <message>"` — declare
-  `failedEventId`'s `payloadType` as `primitiveType('string')` to receive it.
+```ts
+import { EFFECT_ID_FIELD, EFFECT_OPERATION_ID_FIELD, EFFECT_RESULT_FIELD, effectOutcomeEntity } from '@cynodia/axiom-core';
+
+graph.addNode(effectOutcomeEntity(ENTITY_EFFECT_OUTCOME, primitiveType('string')));   // the operation's resultType
+graph.addNode<EventDef>({ id: EVENT_SUCCEEDED, kind: 'event', payloadType: entityType(ENTITY_EFFECT_OUTCOME) });
+graph.addNode<EventDef>({ id: EVENT_FAILED, kind: 'event', payloadType: entityType(ENTITY_EFFECT_OUTCOME) });
+```
+
+One shape covers both outcomes — field ids are graph-global, so two entities could not both
+declare `effectId`/`operationId`/`integrationId` without colliding:
+
+| Field | Present on success | Present on failure |
+| --- | --- | --- |
+| `EFFECT_ID_FIELD` | always | always |
+| `EFFECT_INTEGRATION_ID_FIELD` | always | always |
+| `EFFECT_OPERATION_ID_FIELD` | always | always |
+| `EFFECT_IDEMPOTENCY_KEY_FIELD` | when declared | when declared |
+| `EFFECT_CORRELATION_ID_FIELD` | when the action's transaction has one | when the action's transaction has one |
+| `EFFECT_RESULT_FIELD` | the operation's own `resultType` value | absent |
+| `EFFECT_CODE_FIELD` | absent | the adapter's failure code |
+| `EFFECT_MESSAGE_FIELD` | absent | the adapter's failure message |
+| `EFFECT_RETRYABLE_FIELD` | absent | whether a retry might have succeeded |
+
+A follow-up action correlates the outcome to the effect that caused it through
+`EFFECT_ID_FIELD`/`EFFECT_OPERATION_ID_FIELD` — never by parsing text. Before 8.1, the
+success payload was the raw `resultType` value with no envelope, and the failure payload
+was a single formatted string `"<code>: <message>"`; an application still declaring
+`primitiveType('string')` as either event's `payloadType` now fails validation, because the
+dispatched value is always this entity shape.
 
 Both are checked against the declared `EventDef.payloadType` the same way any event is,
 so a mismatched declaration is caught rather than silently dropped.

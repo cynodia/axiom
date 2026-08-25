@@ -45,24 +45,26 @@ export function createFakeIntegrationAdapter(options: {
   query?(
     operation: IntegrationOperationDef,
     args: Record<string, unknown>,
+    context: { timeoutMs?: number },
   ): IntegrationResult | Promise<IntegrationResult>;
   effect?(
     operation: IntegrationOperationDef,
     args: Record<string, unknown>,
+    context: { idempotencyKey?: string },
   ): IntegrationResult | Promise<IntegrationResult>;
 }): IntegrationAdapter {
   return {
-    async query(operation, args) {
+    async query(operation, args, context) {
       if (!options.query) {
         return { ok: false, code: 'NOT_IMPLEMENTED', message: `No fake query behaviour registered for ${operation.id}` };
       }
-      return options.query(operation, args);
+      return options.query(operation, args, context);
     },
-    async effect(operation, args) {
+    async effect(operation, args, context) {
       if (!options.effect) {
         return { ok: false, code: 'NOT_IMPLEMENTED', message: `No fake effect behaviour registered for ${operation.id}` };
       }
-      return options.effect(operation, args);
+      return options.effect(operation, args, context);
     },
   };
 }

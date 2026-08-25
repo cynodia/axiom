@@ -14,9 +14,11 @@ const core = await import(path.join(repoRoot, 'packages/core/dist/index.js'));
 const compiler = await import(path.join(repoRoot, 'packages/compiler/dist/index.js'));
 
 const {
-  ApplicationGraph, PRINCIPAL, binary, call, collectionType, entityType, field, fieldId,
-  fieldLocation, find, forEach, identitySelector, itemLocation, literal, nodeId, object,
-  primitiveType, ref, stateLocation, validateGraph,
+  ApplicationGraph, PRINCIPAL, binary, call, collectionType, effectOutcomeEntity, entityType,
+  field, fieldId, fieldLocation, find, forEach, identitySelector, itemLocation, literal,
+  nodeId, object, primitiveType, ref, stateLocation, validateGraph,
+  EFFECT_ID_FIELD, EFFECT_INTEGRATION_ID_FIELD, EFFECT_MESSAGE_FIELD, EFFECT_OPERATION_ID_FIELD,
+  EFFECT_RESULT_FIELD,
 } = core;
 
 const E_USER = nodeId('entity_user');
@@ -129,6 +131,84 @@ if (!validation.valid) {
   process.exit(1);
 }
 const serverIR = compiler.compileToServerIR(graph);
+
+// --------------------------------------------------------------------------------------
+// v3/v4 vocabulary: integrations, effects, triggers and invocation-source restriction.
+// A second, independent graph — the v1 suite above stays byte-identical (spec 8.1 §50-52,
+// "do not widen frozen contracts silently").
+// --------------------------------------------------------------------------------------
+
+const INT_STATE_STATUS = nodeId('state_status');
+const INT_STATE_MESSAGE = nodeId('state_message');
+const INT_INTEGRATION = nodeId('integration_provider');
+const INT_OP_FETCH = nodeId('integration_operation_fetch');
+const INT_OP_REBOOT = nodeId('integration_operation_reboot');
+const INT_ENTITY_OUTCOME = nodeId('entity_effect_outcome');
+const INT_EVENT_SUCCEEDED = nodeId('event_succeeded');
+const INT_EVENT_FAILED = nodeId('event_failed');
+const INT_ACTION_REFRESH = nodeId('action_refresh');
+const INT_ACTION_REBOOT = nodeId('action_reboot');
+const INT_ACTION_APPLY_MESSAGE = nodeId('action_apply_message');
+const INT_PARAM_MESSAGE = nodeId('param_message');
+const INT_SCOPE_QUERY = nodeId('scope_query');
+const INT_TRIGGER_POLL = nodeId('trigger_poll');
+const INT_TRIGGER_SUCCEEDED = nodeId('trigger_succeeded');
+const INT_TRIGGER_FAILED = nodeId('trigger_failed');
+
+/** Every operation/trigger/effect-outcome/invocation-source construct 8.1 hardens. */
+function buildIntegrationGraph() {
+  const graph = new ApplicationGraph('conformance-integrations', 'Conformance integrations');
+
+  graph.addNode({ id: INT_STATE_STATUS, kind: 'state', name: 'status', authority: 'server',
+    valueType: primitiveType('string'), initialValue: 'unknown' });
+  graph.addNode({ id: INT_STATE_MESSAGE, kind: 'state', name: 'message', authority: 'server',
+    valueType: primitiveType('string'), initialValue: '' });
+
+  graph.addNode({ id: INT_INTEGRATION, kind: 'integration', name: 'Provider' });
+  graph.addNode({ id: INT_OP_FETCH, kind: 'integration-operation', integrationId: INT_INTEGRATION,
+    name: 'fetchStatus', mode: 'query', resultType: primitiveType('string') });
+  graph.addNode({ id: INT_OP_REBOOT, kind: 'integration-operation', integrationId: INT_INTEGRATION,
+    name: 'reboot', mode: 'effect', idempotent: true, resultType: primitiveType('string') });
+
+  graph.addNode(effectOutcomeEntity(INT_ENTITY_OUTCOME, primitiveType('string')));
+  graph.addNode({ id: INT_EVENT_SUCCEEDED, kind: 'event', payloadType: entityType(INT_ENTITY_OUTCOME) });
+  graph.addNode({ id: INT_EVENT_FAILED, kind: 'event', payloadType: entityType(INT_ENTITY_OUTCOME) });
+
+  graph.addNode({ id: INT_ACTION_REFRESH, kind: 'action', name: 'refresh',
+    operations: [
+      { kind: 'integration-query', operationId: INT_OP_FETCH, bindAs: INT_SCOPE_QUERY, timeoutMs: 500 },
+      { kind: 'set', target: stateLocation(INT_STATE_STATUS), value: ref(INT_SCOPE_QUERY) }] });
+
+  graph.addNode({ id: INT_ACTION_REBOOT, kind: 'action', name: 'reboot',
+    operations: [
+      { kind: 'integration-effect', operationId: INT_OP_REBOOT,
+        succeededEventId: INT_EVENT_SUCCEEDED, failedEventId: INT_EVENT_FAILED }] });
+
+  graph.addNode({ id: INT_ACTION_APPLY_MESSAGE, kind: 'action', name: 'apply message',
+    // System-only (spec 8.1 §3-9): only the effect outcome events above may reach this.
+    invocation: { allowedSources: ['system'] },
+    parameters: [{ id: INT_PARAM_MESSAGE, valueType: primitiveType('string'), required: true }],
+    operations: [{ kind: 'set', target: stateLocation(INT_STATE_MESSAGE), value: ref(INT_PARAM_MESSAGE) }] });
+
+  graph.addNode({ id: INT_TRIGGER_POLL, kind: 'trigger', actionId: INT_ACTION_REFRESH,
+    when: { kind: 'interval', everyMs: 1000, overlap: 'skip' } });
+  graph.addNode({ id: INT_TRIGGER_SUCCEEDED, kind: 'trigger', actionId: INT_ACTION_APPLY_MESSAGE,
+    when: { kind: 'event', eventId: INT_EVENT_SUCCEEDED },
+    arguments: { [INT_PARAM_MESSAGE]: field(ref(INT_TRIGGER_SUCCEEDED), EFFECT_RESULT_FIELD) } });
+  graph.addNode({ id: INT_TRIGGER_FAILED, kind: 'trigger', actionId: INT_ACTION_APPLY_MESSAGE,
+    when: { kind: 'event', eventId: INT_EVENT_FAILED },
+    arguments: { [INT_PARAM_MESSAGE]: field(ref(INT_TRIGGER_FAILED), EFFECT_MESSAGE_FIELD) } });
+
+  return graph;
+}
+
+const integrationGraph = buildIntegrationGraph();
+const integrationValidation = validateGraph(integrationGraph);
+if (!integrationValidation.valid) {
+  console.error(integrationValidation.errors.map((e) => `[${e.code}] ${e.message}`).join('\n'));
+  process.exit(1);
+}
+const integrationServerIR = compiler.compileToServerIR(integrationGraph);
 
 const principals = {
   clerk: { [F_USER_ID]: 'u1', [F_USER_ROLE]: 'clerk' },
@@ -273,6 +353,106 @@ const fixtures = [
   },
 ];
 
+/**
+ * v3/v4 fixtures — integrations, effects, triggers, invocation source. `steps`/
+ * `externalAdapters` are `axiom.conformance.v2` vocabulary: a fixture format extension a v1
+ * consumer never needs, exactly as `axiom.server.v2`/`v3`/`v4` extend the IR itself.
+ *
+ * `externalAdapters` scripts a fake adapter purely as data: an ordered list of responses per
+ * operation, consumed one per call (the last one repeats once exhausted). `{ neverSettle:
+ * true }` models a non-cooperating provider. `steps` drives a deterministic clock: `invoke`/
+ * `event` start a request without necessarily waiting on it yet, `advance` moves virtual
+ * time forward (letting a `timeoutMs` deadline or a trigger's schedule fire), and every
+ * started request is awaited and checked once every step has run.
+ */
+const integrationFixtures = [
+  {
+    name: 'integration-query-success',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['integration query'],
+    description: 'A successful integration query binds its result and commits.',
+    initialState: [{ stateId: INT_STATE_STATUS, value: 'unknown', revision: 1 }],
+    externalAdapters: {
+      [INT_INTEGRATION]: { query: [{ result: { ok: true, value: 'online' } }] },
+    },
+    steps: [
+      { kind: 'invoke', actionId: INT_ACTION_REFRESH,
+        expect: { ok: true, changedStates: [INT_STATE_STATUS] } },
+    ],
+    expectedState: { [INT_STATE_STATUS]: 'online' },
+  },
+  {
+    name: 'integration-query-timeout',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['integration query', 'timeout'],
+    description:
+      'A non-cooperating adapter cannot wedge the invocation past its declared timeoutMs; the runtime enforces the deadline itself.',
+    initialState: [{ stateId: INT_STATE_STATUS, value: 'unknown', revision: 1 }],
+    externalAdapters: {
+      [INT_INTEGRATION]: { query: [{ neverSettle: true }] },
+    },
+    steps: [
+      { kind: 'invoke', actionId: INT_ACTION_REFRESH,
+        expect: { ok: false, diagnosticCodes: ['INTEGRATION_TIMEOUT'] } },
+      { kind: 'advance', ms: 500 },
+    ],
+    expectedState: { [INT_STATE_STATUS]: 'unknown' },
+  },
+  {
+    name: 'timed-trigger-polling',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['triggers', 'integration query'],
+    description: 'An interval trigger fires the query and writes its result, with no real wait.',
+    initialState: [{ stateId: INT_STATE_STATUS, value: 'unknown', revision: 1 }],
+    externalAdapters: {
+      [INT_INTEGRATION]: { query: [{ result: { ok: true, value: 'online' } }] },
+    },
+    steps: [{ kind: 'advance', ms: 1000 }],
+    expectedState: { [INT_STATE_STATUS]: 'online' },
+  },
+  {
+    name: 'effect-success-event',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['effects', 'events', 'invocation source'],
+    description:
+      "A succeeded effect dispatches its structured outcome to a system-only follow-up action — never reachable by a client directly.",
+    initialState: [{ stateId: INT_STATE_MESSAGE, value: '', revision: 1 }],
+    externalAdapters: {
+      [INT_INTEGRATION]: { effect: [{ result: { ok: true, value: 'rebooted' } }] },
+    },
+    steps: [
+      { kind: 'invoke', actionId: INT_ACTION_REBOOT, expect: { ok: true } },
+    ],
+    expectedState: { [INT_STATE_MESSAGE]: 'rebooted' },
+  },
+  {
+    name: 'system-only-action-rejects-client',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['invocation source'],
+    description:
+      'An anonymous client cannot directly invoke an action reachable only by a trigger, event or effect outcome.',
+    initialState: [{ stateId: INT_STATE_MESSAGE, value: '', revision: 1 }],
+    // Never called in this fixture — registered only so `start()`'s "every declared
+    // integration has an adapter" check (spec §116) does not itself refuse the graph.
+    externalAdapters: { [INT_INTEGRATION]: {} },
+    steps: [
+      { kind: 'invoke', actionId: INT_ACTION_APPLY_MESSAGE, arguments: { [INT_PARAM_MESSAGE]: 'forged' },
+        expect: { ok: false, diagnosticCodes: ['INVOCATION_SOURCE_NOT_ALLOWED'] } },
+    ],
+    expectedState: { [INT_STATE_MESSAGE]: '' },
+  },
+];
+
 const directory = path.join(repoRoot, 'packages/server/conformance');
 await mkdir(directory, { recursive: true });
 for (const existing of await readdir(directory).catch(() => [])) {
@@ -283,18 +463,20 @@ for (const existing of await readdir(directory).catch(() => [])) {
 
 const written = [];
 const manifestEntries = [];
-for (const fixture of fixtures) {
+for (const fixture of [...fixtures, ...integrationFixtures]) {
   const document = {
-    conformance: 'axiom.conformance.v1',
+    conformance: fixture.conformance ?? 'axiom.conformance.v1',
     name: fixture.name,
     covers: fixture.covers,
     description: fixture.description,
-    principals,
-    serverIR,
+    principals: fixture.principals ?? principals,
+    serverIR: fixture.serverIR ?? serverIR,
     initialState: fixture.initialState,
     ...(fixture.concurrent ? { concurrent: true } : {}),
     ...(fixture.restartAndReassert ? { restartAndReassert: true } : {}),
-    invocations: fixture.invocations,
+    ...(fixture.invocations ? { invocations: fixture.invocations } : {}),
+    ...(fixture.externalAdapters ? { externalAdapters: fixture.externalAdapters } : {}),
+    ...(fixture.steps ? { steps: fixture.steps } : {}),
     ...(fixture.expect ? { expect: fixture.expect } : {}),
     expectedState: fixture.expectedState,
   };
@@ -306,9 +488,11 @@ for (const fixture of fixtures) {
     file: `${fixture.name}.json`,
     covers: fixture.covers,
     description: fixture.description,
+    conformance: document.conformance,
+    contract: document.serverIR.contract,
     concurrent: Boolean(fixture.concurrent),
     restartAndReassert: Boolean(fixture.restartAndReassert),
-    invocations: fixture.invocations.length,
+    invocations: (fixture.invocations ?? fixture.steps ?? []).length,
   });
 }
 
@@ -327,7 +511,7 @@ const manifest = {
     'Portable conformance fixtures for the Axiom Server IR. Each entry is a self-contained ' +
     'JSON document: the Server IR, the state to start from, the principals, the invocations ' +
     'to perform and the results required. Running them needs no part of this implementation.',
-  areas: [...new Set(fixtures.flatMap((fixture) => fixture.covers))].sort(),
+  areas: [...new Set([...fixtures, ...integrationFixtures].flatMap((fixture) => fixture.covers))].sort(),
   fixtures: manifestEntries,
 };
 await writeFile(

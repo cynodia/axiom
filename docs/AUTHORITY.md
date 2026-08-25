@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.8.0-alpha.1. How an application crosses the trust boundary.
+Axiom 0.8.1-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -39,6 +39,7 @@ describes both halves, so there is no backend to write.
 18. **TRIGGER** — a trigger invokes an ordinary action, under the same guards, constraints, transition constraints and authorization any other caller is subject to. See [Triggers](#triggers).
 19. **EVENT** — an event is a typed fact, validated against its declared payload type before any action sees it; an action is where work happens. See [External events](#external-events).
 20. **SECRET** — integration credentials live in host configuration, never in `ApplicationGraph`. See [External systems](#external-systems).
+21. **INVOCATION SOURCE** — a system-originated invocation (trigger, event, effect outcome) and an anonymous client request are distinct authoritative facts; a client cannot forge the former, and an action may restrict which it accepts independently of caller identity. See [Invocation source](#invocation-source).
 
 ## Authority and persistence are different questions
 
@@ -88,7 +89,48 @@ claim that validation already happened.
 | Forge an action id | resolved from the authority's own IR → `UNKNOWN_SERVER_ACTION` |
 | Send an argument of the wrong shape | checked against the declared type → `ARGUMENT_TYPE_MISMATCH` |
 | Invoke without permission | `authorization`, evaluated on the authority → `AUTHORIZATION_DENIED` |
+| Invoke an action reachable only by a trigger, event or effect outcome | `invocation.allowedSources` → `INVOCATION_SOURCE_NOT_ALLOWED` |
+| Claim to be a trigger, event or effect outcome | `context.source` is server-computed; no protocol field lets a request supply it |
 | Read server-only state | it is not in the client IR, the snapshot or any answer |
+
+## Invocation source
+
+`authorization` answers *who* may invoke an action; invocation source answers *how the
+invocation reached the authority at all* — a distinct question, because the two can diverge.
+An action meant only as a webhook's target, or only as an `integration-effect`'s
+`succeededEventId`/`failedEventId` handler, may declare no `authorization` at all — it was
+never meant to need one, since only the trigger runtime was ever supposed to call it. Before
+this existed, any client that guessed the action's id could invoke it directly, forging a
+fake webhook delivery or a fake effect outcome (spec 8.1 §3-9).
+
+```ts
+{
+  id: ACTION_APPLY_STATUS_CHANGE,
+  kind: 'action',
+  invocation: { allowedSources: ['system'] },   // a client InvokeRequest is refused
+  operations: [ /* … */ ],
+}
+```
+
+`allowedSources` is `['client', 'system']` — both — unless declared otherwise, so every
+existing graph keeps its current behavior. `'system'` covers every trigger kind (interval,
+delay, lifecycle, event) and every effect-outcome dispatch; there is no finer distinction,
+because a trigger invokes an action "through the same semantics as any other caller"
+([TRIGGER](#load-bearing-server-invariants)) and does not get a different one here either.
+
+The source itself is `ExecutionContext.source`, computed by the authority and never read
+from client-supplied protocol data — `InvokeRequest` and `EventRequest` carry no `source`
+field to forge in the first place. A client request is always `'client'`; a trigger-, event-
+or effect-outcome-originated invocation is always `'system'`, with `principal: null` exactly
+as an anonymous client's is, so `authorization` still evaluates and cannot be bypassed by a
+trigger either (spec §69,104) — invocation source and principal are deliberately separate
+questions, and a system invocation is not a stand-in identity.
+
+`checkInvocationSource` runs before `authorization`, before argument-driven work, and before
+any transaction opens: a refusal changes nothing, commits nothing, and dispatches no effect
+or event. `validateGraph` also catches the case a graph author can state statically — a
+trigger targeting an action whose `allowedSources` excludes `'system'` could never succeed —
+with `TRIGGER_TARGET_SOURCE_MISMATCH`.
 
 ## Server IR
 
@@ -435,6 +477,7 @@ does for a local failure.
 | `INTEGRATION_ADAPTER_MISSING` | The Server IR requires an integration with no registered adapter — refused at `start()`, never deferred to first invocation. |
 | `EVENT_DISPATCH_DEPTH_EXCEEDED` | An event → action → effect → event chain was stopped before it could recurse unboundedly. |
 | `WEBHOOK_VERIFICATION_FAILED` | A webhook delivery failed provider signature verification and was refused before an event was ever constructed. |
+| `INVOCATION_SOURCE_NOT_ALLOWED` | The action's `invocation.allowedSources` does not include this invocation's source (spec 8.1 §3-9) — refused before `authorization` is even evaluated, because no caller reaching the authority this way may invoke the action at all. |
 
 Two client-side codes belong to the boundary as well:
 
@@ -725,7 +768,7 @@ Stated plainly rather than left to discovery:
 - **Generated values cannot be bound within an action, in general.** An operation cannot name a value an earlier operation produced: `uuid()` evaluated in one `insert` cannot be referred to by a later `insert` in the same action. Give the record an identity the action already has — a parameter, or a field of something it read — or perform the second write in a second action. 0.8 adds exactly one narrow, purpose-built exception: an `integration-query`'s `bindAs` result, resolved before the transaction opens (see [External systems](#external-systems)) — not a general operation-result binding mechanism.
 - **Read authorization per caller or per record.** Visibility is per state.
 - **Absolute/cron schedules.** `interval` and `delay` triggers cover "every N milliseconds" and "once after N milliseconds"; a calendar schedule ("every day at 09:00") is not modeled.
-- **Client-side execution of interval, delay and lifecycle triggers.** `ApplicationIR.triggers` carries client-authority triggers for inspection, but the browser runtime does not yet schedule or dispatch them itself — only the authoritative runtime does. A client-authority trigger declared in a graph today is compiled and analyzable, not executed.
+- **Client-side execution of interval, delay and lifecycle triggers.** The browser runtime implements no trigger kind at all. Before spec 8.1 a client-authority trigger silently compiled into `ApplicationIR.triggers` and simply never fired; now `validateGraph`/`compileToIR` reject it with `CLIENT_TRIGGER_UNSUPPORTED` instead, so the gap is a compile-time error rather than a runtime discovery. Only the authoritative runtime executes triggers today.
 - **Durable effect delivery beyond the two shipped `PersistenceAdapter`s.** At-least-once delivery across a restart is real for `createMemoryPersistence` (within the process) and `createSqlitePersistence`; a third adapter earns the same claim only by implementing `loadPendingEffects`/`recordEffectAttempt` itself.
 - **Realtime synchronization**, subscriptions and collaboration. Request/response only.
 - **Query semantics.** Authoritative collections are loaded into runtime state; large-data querying needs its own design.

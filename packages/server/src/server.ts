@@ -1,13 +1,25 @@
 import {
   DEFAULT_THEME,
+  EFFECT_CODE_FIELD,
+  EFFECT_CORRELATION_ID_FIELD,
+  EFFECT_ID_FIELD,
+  EFFECT_IDEMPOTENCY_KEY_FIELD,
+  EFFECT_INTEGRATION_ID_FIELD,
+  EFFECT_MESSAGE_FIELD,
+  EFFECT_OPERATION_ID_FIELD,
+  EFFECT_RESULT_FIELD,
+  EFFECT_RETRYABLE_FIELD,
   PRINCIPAL,
   SERVER_IR_CONTRACTS,
+  allowedInvocationSources,
   optionalType,
   entityType,
   maxContract,
   requiredServerContract,
   serverIRExpressions,
   usesIntegrationVocabulary,
+  usesInvocationVocabulary,
+  usesV4Semantics,
   validateValueAgainstType,
 } from '@cynodia/axiom-core';
 import type {
@@ -31,7 +43,7 @@ import type { EffectRecord, PersistenceAdapter } from './persistence.js';
 import { createServerHost } from './host.js';
 import type { ExecutionContext, PrincipalRecord, ServerEvent, ServerHost } from './host.js';
 import { createEffectRunner } from './effects.js';
-import type { IntegrationAdapterRegistry } from './integration.js';
+import type { IntegrationAdapter, IntegrationAdapterRegistry, IntegrationResult } from './integration.js';
 import { createTriggerRuntime } from './triggers.js';
 import type { TriggerRuntime } from './triggers.js';
 import { PROTOCOL_VERSION } from './protocol.js';
@@ -77,6 +89,13 @@ export const SERVER_DIAGNOSTIC_CODES = {
   EVENT_DISPATCH_DEPTH_EXCEEDED: 'EVENT_DISPATCH_DEPTH_EXCEEDED',
   /** A webhook delivery failed provider signature verification and was refused. */
   WEBHOOK_VERIFICATION_FAILED: 'WEBHOOK_VERIFICATION_FAILED',
+  /**
+   * The action's `invocation.allowedSources` does not include this invocation's source
+   * (spec 8.1 §3-9) — e.g. an ordinary client `InvokeRequest` naming a system-only action.
+   * Distinct from `AUTHORIZATION_DENIED`: this is refused before identity is even
+   * consulted, because no caller reaching the authority this way may invoke it at all.
+   */
+  INVOCATION_SOURCE_NOT_ALLOWED: 'INVOCATION_SOURCE_NOT_ALLOWED',
 } as const;
 
 export type ServerDiagnosticCode =
@@ -215,6 +234,48 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   const adapters: IntegrationAdapterRegistry = options.integrations ?? {};
   const eventsById = new Map<NodeId, EventDef>((ir.events ?? []).map((event) => [event.id, event]));
 
+  /**
+   * Races the adapter's query against `context.timeoutMs`, enforced by the runtime rather
+   * than left to adapter cooperation (spec 8.1 §15-25) — a non-cooperating adapter whose
+   * `Promise` never settles must not wedge the semantic invocation, and by extension a
+   * polling interval trigger (§22), forever.
+   *
+   * The adapter's promise is never cancelled — Axiom cannot know whether that is safe for an
+   * arbitrary provider call — but its eventual settlement is discarded once the deadline has
+   * already answered, so a late result can never mutate state (§20-21), and `.catch` on it
+   * prevents an unhandled rejection.
+   */
+  async function queryWithTimeout(
+    adapter: IntegrationAdapter,
+    operation: IntegrationOperationDef,
+    args: Record<string, unknown>,
+    context: { timeoutMs?: number },
+  ): Promise<IntegrationResult> {
+    const adapterPromise = adapter.query(operation, args, context);
+    if (context.timeoutMs === undefined) {
+      return adapterPromise;
+    }
+    let timer: ReturnType<ServerHost['scheduleOnce']> | undefined;
+    const timeout = new Promise<IntegrationResult>((resolve) => {
+      timer = host.scheduleOnce(context.timeoutMs as number, () => {
+        resolve({
+          ok: false,
+          code: 'INTEGRATION_TIMEOUT',
+          message: `${operation.name ?? operation.id} did not answer within ${context.timeoutMs}ms`,
+          retryable: true,
+        });
+      });
+    });
+    try {
+      return await Promise.race([adapterPromise, timeout]);
+    } finally {
+      timer?.cancel();
+      // The adapter may still resolve or reject after the deadline. Its value is simply
+      // never read again; the `.catch` only prevents an unhandled rejection.
+      adapterPromise.catch(() => undefined);
+    }
+  }
+
   /** Bridges an `integration-query` operation to its registered adapter, result-typed. */
   async function queryIntegration(
     operationId: string,
@@ -233,7 +294,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         message: `No adapter registered for ${operation.integrationId}`,
       };
     }
-    const result = await adapter.query(operation, args, context);
+    const result = await queryWithTimeout(adapter, operation, args, context);
     if (!result.ok) {
       return result;
     }
@@ -339,6 +400,27 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       }
     }
     return problems;
+  }
+
+  /**
+   * The trust boundary itself: may an invocation reaching this authority *this way* invoke
+   * this action at all — independent of, and evaluated before, `authorize`'s identity check
+   * (spec 8.1 §3-9). `context.source` is server-computed in `invoke`/`invokeSystem` and never
+   * read from client-supplied protocol data, so a client cannot forge `'system'` (spec §65).
+   */
+  function checkInvocationSource(
+    action: ActionDef,
+    context: ExecutionContext,
+  ): RuntimeDiagnostic | null {
+    const source = context.source ?? 'client';
+    if (allowedInvocationSources(action).includes(source)) {
+      return null;
+    }
+    return diagnostic(
+      SERVER_DIAGNOSTIC_CODES.INVOCATION_SOURCE_NOT_ALLOWED,
+      `${action.name ?? action.id} does not accept '${source}'-sourced invocations`,
+      { actionId: action.id, source },
+    );
   }
 
   /** Authorization, evaluated here and nowhere else. */
@@ -504,6 +586,12 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     if (argumentProblems.length > 0) {
       report({ kind: 'reject', actionId: action.id, ok: false, diagnostics: argumentProblems });
       return refusal(argumentProblems, requestId);
+    }
+
+    const sourceRejection = checkInvocationSource(action, context);
+    if (sourceRejection) {
+      report({ kind: 'reject', actionId: action.id, ok: false, diagnostics: [sourceRejection] });
+      return refusal([sourceRejection], requestId);
     }
 
     const denial = authorize(action, context);
@@ -727,6 +815,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     host,
     evaluate: evaluateForTrigger,
     invoke: invokeFromTrigger,
+    serialize,
     report: (event) => {
       const kind =
         event.kind === 'skipped-overlap'
@@ -745,14 +834,31 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     if (!eventId) {
       return;
     }
-    // The success payload is the effect operation's own declared result; the failure
-    // payload is its error, formatted as text — both must match what the graph declared
+    // A structured envelope, not a raw result or a formatted string — spec 8.1 §37-41: a
+    // follow-up action correlates the outcome to the effect that caused it (`effectId`,
+    // `operationId`) without parsing text. Both shapes must match what the graph declared
     // for the corresponding `EventDef.payloadType`, checked the same way any event is.
+    const integrationId = integrationOperations[record.operationId]?.integrationId;
+    const envelope: Record<string, unknown> = {
+      [EFFECT_ID_FIELD]: record.id,
+      [EFFECT_OPERATION_ID_FIELD]: record.operationId,
+      ...(integrationId !== undefined ? { [EFFECT_INTEGRATION_ID_FIELD]: integrationId } : {}),
+      ...(record.idempotencyKey !== undefined ? { [EFFECT_IDEMPOTENCY_KEY_FIELD]: record.idempotencyKey } : {}),
+      ...(record.transactionId !== undefined ? { [EFFECT_CORRELATION_ID_FIELD]: record.transactionId } : {}),
+    };
     const payload =
       record.status === 'succeeded'
-        ? record.result
-        : `${record.lastError?.code ?? 'EFFECT_FAILED'}: ${record.lastError?.message ?? 'unknown error'}`;
-    await dispatchEvent(eventId, payload, (record.dispatchDepth ?? 0) + 1);
+        ? { ...envelope, [EFFECT_RESULT_FIELD]: record.result }
+        : {
+            ...envelope,
+            [EFFECT_CODE_FIELD]: record.lastError?.code ?? 'EFFECT_FAILED',
+            [EFFECT_MESSAGE_FIELD]: record.lastError?.message ?? 'unknown error',
+            [EFFECT_RETRYABLE_FIELD]: record.lastError?.retryable === true,
+          };
+    // An effect outcome is a genuinely independent, detached entry into the authority —
+    // never nested inside a client request's own already-claimed turn — so it needs its
+    // own serialized turn exactly as a host-timer-driven trigger tick does (spec 8.1 §26-30).
+    await serialize(() => dispatchEvent(eventId, payload, (record.dispatchDepth ?? 0) + 1));
   }
 
   const effectRunner = createEffectRunner({
@@ -891,10 +997,14 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
  * disagree about the same file.
  */
 function understatedContract(ir: ServerIR): ServerIRContract | undefined {
-  const required = maxContract(
-    ir.expressionDefs ? 'axiom.server.v2' : requiredServerContract(serverIRExpressions(ir)),
+  const candidates: ServerIRContract[] = [
+    ir.expressionDefs || usesInvocationVocabulary(ir)
+      ? 'axiom.server.v2'
+      : requiredServerContract(serverIRExpressions(ir)),
     usesIntegrationVocabulary(ir) ? 'axiom.server.v3' : 'axiom.server.v1',
-  );
+    usesV4Semantics(ir) ? 'axiom.server.v4' : 'axiom.server.v1',
+  ];
+  const required = candidates.reduce(maxContract);
   const order = SERVER_IR_CONTRACTS as readonly string[];
   return order.indexOf(required) > order.indexOf(String(ir.contract)) ? required : undefined;
 }

@@ -29,7 +29,12 @@ import type { TriggerDef } from './triggers.js';
  * Every existing application therefore still compiles to a byte-identical
  * `axiom.server.v1` document, and the frozen conformance fixtures stay frozen.
  */
-export const SERVER_IR_CONTRACTS = ['axiom.server.v1', 'axiom.server.v2', 'axiom.server.v3'] as const;
+export const SERVER_IR_CONTRACTS = [
+  'axiom.server.v1',
+  'axiom.server.v2',
+  'axiom.server.v3',
+  'axiom.server.v4',
+] as const;
 
 export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
 
@@ -37,7 +42,7 @@ export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
 export const SERVER_IR_CONTRACT: ServerIRContract = 'axiom.server.v1';
 
 /** The newest contract this implementation produces and executes. */
-export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v3';
+export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v4';
 
 /** Expression kinds that `axiom.server.v1` does not contain. */
 export const SERVER_IR_V2_EXPRESSION_KINDS: readonly string[] = ['group', 'expression-ref'];
@@ -77,6 +82,39 @@ export function usesIntegrationVocabulary(ir: {
     (ir.events?.length ?? 0) > 0 ||
     (ir.triggers?.length ?? 0) > 0
   );
+}
+
+/**
+ * Whether any action declares `invocation` at all, restrictive or not — `axiom.server.v1`
+ * is frozen and its schema carries no such property, so even a redundant, fully-permissive
+ * `invocation: { allowedSources: ['client', 'system'] }` requires at least `v2`, the same
+ * tier a document that merely uses `group`/`expression-ref` requires.
+ */
+export function usesInvocationVocabulary(ir: { actions: Record<string, ActionDef> }): boolean {
+  return Object.values(ir.actions).some((action) => action.invocation !== undefined);
+}
+
+/**
+ * Whether a document restricts any action's invocation sources, or gives it a structured
+ * effect-outcome payload — both incompatible changes to `axiom.server.v3` execution
+ * semantics (spec 8.1 §50-52): a v3 runtime that ignored `invocation.allowedSources` would
+ * let a client forge a system-only action, and one expecting the v3 string/raw effect
+ * payload would misread the v4 structured envelope. Computed from the document, the same
+ * way `usesIntegrationVocabulary` decides v3 — a document that uses neither still labels
+ * itself `axiom.server.v3`.
+ */
+export function usesV4Semantics(ir: {
+  actions: Record<string, ActionDef>;
+  integrationOperations?: Record<string, IntegrationOperationDef>;
+}): boolean {
+  const restrictsInvocation = Object.values(ir.actions).some((action) => {
+    const sources = action.invocation?.allowedSources;
+    return sources !== undefined && sources.length < 2;
+  });
+  const usesEffects = Object.values(ir.integrationOperations ?? {}).some(
+    (operation) => operation.mode === 'effect',
+  );
+  return restrictsInvocation || usesEffects;
 }
 
 /** The higher of two contracts, ordered by `SERVER_IR_CONTRACTS`. */

@@ -114,4 +114,10 @@ export const VALIDATION_CODES = {
   unknownEvent: 'UNKNOWN_EVENT',
   /** An `event` trigger targeting a client-authority action, or a `route-enter`/`route-leave` trigger targeting a server-authority one. */
   triggerWrongAuthority: 'TRIGGER_WRONG_AUTHORITY',
+  /** A trigger — which always invokes with `source: 'system'` — targets an action whose `invocation.allowedSources` excludes `'system'`; the trigger could never succeed. */
+  triggerTargetSourceMismatch: 'TRIGGER_TARGET_SOURCE_MISMATCH',
+  /** `ActionDef.invocation.allowedSources` is present but empty — the action could never be invoked at all. */
+  invalidInvocationSource: 'INVALID_INVOCATION_SOURCE',
+  /** A client-authority trigger of a kind the intended trigger runtime does not execute — it would validate and compile but never fire (spec 8.1 §31-36). */
+  clientTriggerUnsupported: 'CLIENT_TRIGGER_UNSUPPORTED',
 } as const;

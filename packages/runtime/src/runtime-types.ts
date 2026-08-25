@@ -73,3 +73,15 @@ export const BROWSER_RENDERER_CAPABILITIES = {
     'dialog',
   ],
 } as const;
+
+/**
+ * The trigger kinds the browser runtime executes: none. `runtime.ts` implements no trigger
+ * handling at all, so a client-authority trigger of any kind would otherwise validate,
+ * compile into `ApplicationIR.triggers`, and silently never fire (spec 8.1 §31-36). Naming
+ * the empty set explicitly, rather than leaving trigger capabilities unspecified, is what
+ * makes `validateGraph`/`compileToIR` reject such a graph instead of shipping it inert.
+ */
+export const BROWSER_TRIGGER_CAPABILITIES = {
+  target: 'browser',
+  supportedTriggerKinds: [],
+} as const;

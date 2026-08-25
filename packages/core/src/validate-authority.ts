@@ -5,6 +5,9 @@ import { VALIDATION_CODES } from './diagnostics.js';
 import type { ValidationIssue } from './diagnostics.js';
 import type { NodeId } from './ids.js';
 import { locationRootStateId } from './location.js';
+import { allowedInvocationSources } from './nodes.js';
+import { ALL_TRIGGER_KINDS_SUPPORTED } from './trigger-capabilities.js';
+import type { TriggerRuntimeCapabilities } from './trigger-capabilities.js';
 import type { AnyNode } from './types.js';
 import { isUINode } from './ui.js';
 
@@ -19,6 +22,7 @@ import { isUINode } from './ui.js';
 export function validateAuthority(
   nodes: readonly AnyNode[],
   principalEntityId: NodeId | undefined,
+  triggerRuntime: TriggerRuntimeCapabilities = ALL_TRIGGER_KINDS_SUPPORTED,
 ): { errors: ValidationIssue[]; warnings: ValidationIssue[] } {
   const errors: ValidationIssue[] = [];
   const warnings: ValidationIssue[] = [];
@@ -179,6 +183,30 @@ export function validateAuthority(
         message: `Trigger ${node.name ?? node.id} fires on ${node.when.event}, which only the client router dispatches, but ${target.name ?? target.id} is server-authority`,
         nodeId: node.id,
         details: { actionId: target.id, authority },
+      });
+    }
+
+    // A trigger of any kind always invokes with `source: 'system'` (spec 8.1 §3-9). An
+    // action that has opted out of system invocation could never be reached by it.
+    if (!allowedInvocationSources(target).includes('system')) {
+      errors.push({
+        code: VALIDATION_CODES.triggerTargetSourceMismatch,
+        message: `Trigger ${node.name ?? node.id} targets ${target.name ?? target.id}, which does not accept 'system'-sourced invocations, so this trigger could never invoke it`,
+        nodeId: node.id,
+        details: { actionId: target.id },
+      });
+    }
+
+    // A client-authority trigger executes in the trigger runtime the graph is compiled
+    // for. A kind that runtime does not implement would validate, compile, and then
+    // silently never fire (spec 8.1 §31-36) — exactly what a renderer capability gate
+    // already prevents for UI node kinds.
+    if (authority === 'client' && !triggerRuntime.supportedTriggerKinds.includes(node.when.kind)) {
+      errors.push({
+        code: VALIDATION_CODES.clientTriggerUnsupported,
+        message: `Trigger ${node.name ?? node.id} is a client-authority '${node.when.kind}' trigger, which the ${triggerRuntime.target} trigger runtime does not execute`,
+        nodeId: node.id,
+        details: { actionId: target.id, kind: node.when.kind, target: triggerRuntime.target },
       });
     }
   }
