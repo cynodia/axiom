@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom",
-  "version": "0.9.0-alpha.1",
+  "version": "0.9.0-alpha.2",
   "description": "AI-native semantic web application framework.",
   "license": "MIT",
   "author": "AskTech AS",
@@ -21,6 +21,8 @@
     "dist/**/*.d.ts",
     "docs/*.md",
     "README.md",
+    "AGENTS.md",
+    "llms.txt",
     "LICENSE"
   ],
   "main": "./dist/index.js",
@@ -32,10 +34,10 @@
     }
   },
   "dependencies": {
-    "@cynodia/axiom-core": "0.9.0-alpha.1",
-    "@cynodia/axiom-runtime": "0.9.0-alpha.1",
-    "@cynodia/axiom-compiler": "0.9.0-alpha.1",
-    "@cynodia/axiom-agent-api": "0.9.0-alpha.1"
+    "@cynodia/axiom-core": "0.9.0-alpha.2",
+    "@cynodia/axiom-runtime": "0.9.0-alpha.2",
+    "@cynodia/axiom-compiler": "0.9.0-alpha.2",
+    "@cynodia/axiom-agent-api": "0.9.0-alpha.2"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json"

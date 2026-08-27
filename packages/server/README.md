@@ -5,6 +5,10 @@ framework.
 
 **Status: experimental / alpha.** The API may change between alpha releases.
 
+**AI agents:** read `docs/AGENT_REFERENCE.md` and `docs/AUTHORITY.md` inside the installed
+`@cynodia/axiom` package before authoring an application. This package's semantics are
+contracted there, and both ship in that tarball.
+
 The authoritative runtime. It executes a **Server IR** — the half of an application graph
 that decides things — with the same semantic engine the client runs, so transaction
 boundaries, provisional writes, `for-each` ordering, constraints, transition constraints

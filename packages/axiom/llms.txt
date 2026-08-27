@@ -1,0 +1,65 @@
+# Axiom
+
+> AI-native semantic application framework, version 0.9.0-alpha.2. An Axiom application is a
+> typed semantic graph — state, behavior, constraints, UI structure, presentation and
+> authority as structured data — executed by generic runtimes. The JavaScript, HTML and CSS
+> that reach a browser are compiler output and are never authored or edited. The primary
+> author of an Axiom application is an AI coding agent.
+
+Start with docs/AGENT_REFERENCE.md. Every path below is relative to this package root and
+resolves inside the installed package: no repository access, web search or framework source
+inspection is required to obtain the contract.
+
+Escalation order: docs/AGENT_REFERENCE.md → the `.d.ts` declarations in dist/ → the focused
+document for the topic → a minimal public-API probe (build the smallest graph, call
+`validateGraph`, read the codes). Framework implementation source is for debugging Axiom
+itself, not for authoring an application.
+
+## Start here
+
+- [docs/AGENT_REFERENCE.md](docs/AGENT_REFERENCE.md): The compressed operational contract for application authors. Read first, in full.
+- [AGENTS.md](AGENTS.md): Short routing and prohibition list for coding agents.
+- [README.md](README.md): Mental model, load-bearing invariants, one runnable minimal application, the documentation map.
+- [docs/ANTI_PATTERNS.md](docs/ANTI_PATTERNS.md): Mistakes that compile but are wrong. Read before a second attempt.
+
+## API contract
+
+- dist/index.d.ts: The public TypeScript declarations. Authoritative for signatures, unions and branded types.
+- [docs/SEMANTIC_CONTRACT.md](docs/SEMANTIC_CONTRACT.md): The runtime guarantees, stated formally.
+- [docs/VALIDATION.md](docs/VALIDATION.md): Every authoring-time validation code and what rejects a graph.
+- [docs/RUNTIME.md](docs/RUNTIME.md): The runtime API, startup lifecycle and every runtime diagnostic code.
+
+## Semantics
+
+- [docs/GRAPH_MODEL.md](docs/GRAPH_MODEL.md): Graph, node kinds, ids, structured types, entity value representation.
+- [docs/EXPRESSIONS.md](docs/EXPRESSIONS.md): Every expression kind, builtin, scope rule, presence and collection-null semantics.
+- [docs/LOCATIONS.md](docs/LOCATIONS.md): Addressing writable positions. Expressions produce values; locations name where a value lives.
+- [docs/STATE.md](docs/STATE.md): Stored, derived, draft and ephemeral state.
+- [docs/ACTIONS_TRANSACTIONS.md](docs/ACTIONS_TRANSACTIONS.md): Actions, operations, guards, transactions, `for-each` iteration.
+- [docs/CONSTRAINTS.md](docs/CONSTRAINTS.md): Constraints over proposed state and transition constraints over a change.
+
+## UI and presentation
+
+- [docs/UI.md](docs/UI.md): Semantic UI node kinds, interaction primitives, input bindings, pattern authoring.
+- [docs/PRESENTATION.md](docs/PRESENTATION.md): Semantic UX intent, roles, tokens, device classes, themes, value formatting. No CSS in the graph.
+
+## Server, external world, tooling
+
+- [docs/AUTHORITY.md](docs/AUTHORITY.md): State authority, the trust boundary, Server IR, the semantic protocol, persistence, authorization, deployment, conformance.
+- [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md): Integration definitions, query operations, adapters, secrets.
+- [docs/EFFECTS.md](docs/EFFECTS.md): Post-commit effects, the transactional outbox, retries, delivery guarantees, effect outcomes.
+- [docs/EVENTS.md](docs/EVENTS.md): Typed event definitions, webhooks, the event dispatch pipeline.
+- [docs/TRIGGERS.md](docs/TRIGGERS.md): Interval, delay, lifecycle and event triggers invoking actions under a system principal.
+- [docs/SUBSCRIPTIONS.md](docs/SUBSCRIPTIONS.md): Live inbound streams, the six-state lifecycle, at-least-once delivery, deduplication, backpressure.
+- [docs/STORAGE.md](docs/STORAGE.md): Portable binary object storage, `BlobRef`, staged-then-committed uploads, read and upload authorization, orphans.
+- [docs/AGENT_API.md](docs/AGENT_API.md): Machine queries over a graph, mutation-impact analysis, transactional graph transformations.
+
+## Packages
+
+- @cynodia/axiom: This package. Re-exports the graph, compiler, runtime and agent API. Installing it is normally enough.
+- @cynodia/axiom-server: The authoritative runtime. Install separately, only if the application declares server-owned state.
+- @cynodia/axiom-ui: Semantic UI authoring patterns, expanded into canonical nodes at build time. Install separately, needed only while authoring.
+
+## Optional
+
+- [docs/AGENT_REFERENCE.md](docs/AGENT_REFERENCE.md): Also the index of the vocabulary tables — expression kinds, operation kinds, diagnostic codes, presentation tokens.
