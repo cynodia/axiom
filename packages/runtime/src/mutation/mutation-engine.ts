@@ -108,6 +108,12 @@ export function createMutationEngine(options: MutationEngineOptions): MutationEn
         }
 
         case 'remove': {
+          if (operation.target.kind === 'provider-record') {
+            // The authority rewrites a provider-record target to a `collection-item` over a
+            // staging collection before this engine runs (spec 0.10 §38). Reaching here
+            // means that rewrite did not happen.
+            throw new Error('A provider-record remove target is authority-only');
+          }
           const collection = resolveLocation(operation.target.collection, scope, runtime);
           const current = collection.read();
           const items = Array.isArray(current) ? current : [];

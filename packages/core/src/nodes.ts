@@ -1,5 +1,5 @@
 import type { Expression } from './expressions.js';
-import type { CollectionItemLocation, Location } from './location.js';
+import type { CollectionItemLocation, Location, ProviderRecordLocation } from './location.js';
 import type { EdgeId, FieldId, NodeId } from './ids.js';
 import type { TypeRef } from './type-ref.js';
 import type { ConfirmationPresentation } from './presentation.js';
@@ -360,7 +360,8 @@ export interface InsertOperation {
  */
 export interface RemoveOperation {
   kind: 'remove';
-  target: CollectionItemLocation;
+  /** A collection item, or one `provider-record` addressed by identity (spec 0.10 §37-39). */
+  target: CollectionItemLocation | ProviderRecordLocation;
 }
 
 /**

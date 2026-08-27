@@ -20,6 +20,7 @@ export type {
   IntegrationOperationDef,
   LiteralValue,
   NodeId,
+  Operation,
   QueryAggregate,
   QueryAggregateFunction,
   QueryDef,

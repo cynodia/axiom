@@ -75,9 +75,17 @@ import type {
   SnapshotResponse,
   StateSnapshot,
 } from './protocol.js';
-import type { DataProvider, DataProviderRegistry } from './data-provider.js';
+import type { DataProvider, DataProviderRegistry, ProviderMutation } from './data-provider.js';
 import { requiredCapabilities } from './data-provider.js';
 import { buildProviderQuery, policyForQuery } from './query-runtime.js';
+import {
+  diffRows,
+  identityValuesToLoad,
+  providerEntitiesWritten,
+  rewriteForStaging,
+  stagingStateDef,
+  stagingStateId,
+} from './provider-record-runtime.js';
 import {
   cursorMatchesContext,
   fingerprint,
@@ -990,6 +998,81 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       : { ok: false, code: providerFailureCode(result.code), message: result.message };
   }
 
+  interface StagedEntity {
+    entityId: NodeId;
+    identityFieldId: string;
+    provider: DataProvider;
+    original: Record<string, LiteralValue>[];
+  }
+
+  /**
+   * Loads the provider-backed rows an action's `provider-record` targets name into their
+   * staging collections, so the rewritten action can mutate them through the ordinary
+   * engine. Returns the loaded entities for the later diff, or a diagnostic if a provider
+   * is missing or a load fails.
+   */
+  async function loadProviderRecordStaging(
+    action: ActionDef,
+    args: Record<string, unknown>,
+  ): Promise<{ staged: StagedEntity[] } | { error: RuntimeDiagnostic }> {
+    const toLoad = identityValuesToLoad(action, args, activePrincipal);
+    const staged: StagedEntity[] = [];
+    for (const [entityId, values] of toLoad) {
+      const provider = providerFor(entityId);
+      if (!provider) {
+        return {
+          error: diagnostic(
+            SERVER_DIAGNOSTIC_CODES.QUERY_PROVIDER_MISSING,
+            `No data provider is registered for ${String(entityId)}`,
+            { entityId },
+          ),
+        };
+      }
+      const identityFieldId = String(entities.get(entityId)?.identityFieldId ?? '');
+      const loaded = await provider.loadByIdentity(entityId, identityFieldId as never, values);
+      if (!loaded.ok) {
+        return {
+          error: diagnostic(SERVER_DIAGNOSTIC_CODES.QUERY_PROVIDER_FAILURE, loaded.message, { entityId }),
+        };
+      }
+      runtime.hydrateState(stagingStateId(entityId), loaded.value);
+      staged.push({ entityId, identityFieldId, provider, original: loaded.value });
+    }
+    return { staged };
+  }
+
+  /** Diffs each staging collection against what was loaded and commits the changes to the provider, atomically. */
+  async function commitProviderRecordStaging(staged: StagedEntity[]): Promise<RuntimeDiagnostic | null> {
+    const byProvider = new Map<DataProvider, ProviderMutation[]>();
+    for (const entry of staged) {
+      const after = (runtime.getState(stagingStateId(entry.entityId)) as Record<string, LiteralValue>[]) ?? [];
+      const mutations = diffRows(entry.entityId, entry.identityFieldId, entry.original, after);
+      if (mutations.length === 0) {
+        continue;
+      }
+      byProvider.set(entry.provider, [...(byProvider.get(entry.provider) ?? []), ...mutations]);
+    }
+    for (const [provider, mutations] of byProvider) {
+      if (!provider.applyMutations) {
+        return diagnostic(
+          SERVER_DIAGNOSTIC_CODES.QUERY_CAPABILITY_UNSUPPORTED,
+          'The data provider does not support writes',
+        );
+      }
+      const applied = await provider.applyMutations(mutations);
+      if (!applied.ok) {
+        return diagnostic(SERVER_DIAGNOSTIC_CODES.QUERY_PROVIDER_FAILURE, applied.message);
+      }
+    }
+    return null;
+  }
+
+  function clearProviderRecordStaging(staged: StagedEntity[]): void {
+    for (const entry of staged) {
+      runtime.hydrateState(stagingStateId(entry.entityId), []);
+    }
+  }
+
   function providerFailureCode(code: string): ServerDiagnosticCode {
     if (code === 'QUERY_CAPABILITY_UNSUPPORTED') {
       return SERVER_DIAGNOSTIC_CODES.QUERY_CAPABILITY_UNSUPPORTED;
@@ -1078,6 +1161,20 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       return refusal([denial], requestId);
     }
 
+    // Provider-backed records this action mutates are loaded into their staging collections
+    // now, so the rewritten action (its targets already rewritten to point at staging) can
+    // operate on them through the ordinary engine (spec 0.10 §37-39).
+    const stagesProviderRecords = providerEntitiesWritten(action).length > 0;
+    let stagedEntities: StagedEntity[] = [];
+    if (stagesProviderRecords) {
+      const loaded = await loadProviderRecordStaging(action, args);
+      if ('error' in loaded) {
+        report({ kind: 'reject', actionId: action.id, ok: false, diagnostics: [loaded.error] });
+        return refusal([loaded.error], requestId);
+      }
+      stagedEntities = loaded.staged;
+    }
+
     // Everything the transaction might touch, as it stands now, so a refused commit can be
     // undone exactly.
     const before = new Map<NodeId, LiteralValue>();
@@ -1097,6 +1194,21 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     runtime.clearDiagnostics();
     const result = await runtime.invokeActionAsync(action.id, args);
 
+    // The rewritten action committed (or rolled back) against the staging collections. If it
+    // committed, diff each staging collection against what was loaded and hand the changes
+    // to the provider, atomically (spec 0.10 §42, §44). A rollback sends the provider
+    // nothing. Staging is scratch and is always cleared.
+    let providerFailure: RuntimeDiagnostic | null = null;
+    if (stagesProviderRecords) {
+      if (result.ok) {
+        providerFailure = await commitProviderRecordStaging(stagedEntities);
+        if (!providerFailure) {
+          storeRevision += 1;
+        }
+      }
+      clearProviderRecordStaging(stagedEntities);
+    }
+
     const written = new Set<NodeId>();
     for (const entry of runtime.getMutationLog().slice(mutationMark)) {
       if (entry.outcome === 'committed') {
@@ -1109,17 +1221,19 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       .slice(effectMark)
       .filter((entry) => entry.outcome === 'committed');
 
-    if (!result.ok || (writes.length === 0 && committedIntents.length === 0)) {
-      const response = respond(result.ok, result.diagnostics, {}, requestId);
+    if (!result.ok || providerFailure || (writes.length === 0 && committedIntents.length === 0)) {
+      const ok = result.ok && !providerFailure;
+      const diagnostics = providerFailure ? [providerFailure] : result.diagnostics;
+      const response = respond(ok, diagnostics, {}, requestId);
       report({
         kind: 'invoke',
         actionId: action.id,
-        ok: result.ok,
+        ok,
         principal: principalIdentity(context.principal),
         requestId,
         durationMs: Date.now() - startedAt,
         revision: storeRevision,
-        diagnostics: result.diagnostics,
+        diagnostics,
         committed: [],
       });
       if (replayKey) {
@@ -1797,6 +1911,36 @@ function buildRuntime(
   }
 
   const states = [...ir.states];
+
+  // Provider-record staging: every action that mutates a provider-backed row runs a version
+  // of itself with the `provider-record` targets rewritten to a `collection-item` over a
+  // synthetic staging collection, and one ephemeral staging state is added per source
+  // entity (spec 0.10 §38). `ir.states` and `ir.actions` — the persisted / contract sets —
+  // are untouched; only the runtime's own copy is rewritten.
+  const runtimeActions: Record<NodeId, ActionDef> = { ...ir.actions };
+  const stagingEntityIds = new Set<NodeId>();
+  for (const action of Object.values(ir.actions)) {
+    const written = providerEntitiesWritten(action);
+    if (written.length === 0) {
+      continue;
+    }
+    for (const entityId of written) {
+      stagingEntityIds.add(entityId);
+    }
+    const rewritten = rewriteForStaging(action);
+    runtimeActions[action.id] = rewritten;
+    nodes[action.id] = rewritten;
+  }
+  for (const entityId of stagingEntityIds) {
+    const entity = ir.entities.find((candidate) => candidate.id === entityId);
+    if (!entity) {
+      continue;
+    }
+    const staging = stagingStateDef(entity) as unknown as StateDef;
+    states.push(staging);
+    nodes[staging.id] = staging;
+  }
+
   if (ir.principalEntityId) {
     // The caller is bound through an ordinary state so that `ref(PRINCIPAL)` resolves with
     // the existing scope rules. It is never persisted and never observable.
@@ -1820,7 +1964,7 @@ function buildRuntime(
     fields: ir.fields,
     entities: ir.entities,
     states,
-    actions: ir.actions,
+    actions: runtimeActions,
     uiNodes: {},
     constraints: ir.constraints,
     transitionConstraints: ir.transitionConstraints,
