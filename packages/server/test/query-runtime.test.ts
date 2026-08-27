@@ -220,7 +220,10 @@ const accounts = [
   { [F_ACC_ID]: 'a2', [F_ACC_NAME]: 'Globex' },
 ] as Record<string, unknown>[];
 
-async function server(opts: { provider?: boolean } = {}) {
+let lastProviderCalls = { query: 0, aggregate: 0 };
+
+async function server(opts: { provider?: boolean; queryCache?: boolean } = {}) {
+  lastProviderCalls = { query: 0, aggregate: 0 };
   const s = createAxiomServer({
     ir: compileToServerIR(graph()),
     host: createDeterministicServerHost({
@@ -234,12 +237,17 @@ async function server(opts: { provider?: boolean } = {}) {
               : null,
     }),
     cursorSecret: 'test-secret',
+    ...(opts.queryCache !== undefined ? { queryCache: opts.queryCache } : {}),
     ...(opts.provider === false
       ? {}
       : {
           dataProvider: createMemoryDataProvider({
             rows: { [ENTITY_ORDER]: orders as never, [ENTITY_ACCOUNT]: accounts as never },
             maxPageSize: 50,
+            onProviderCall: (kind) => {
+              if (kind === 'query') lastProviderCalls.query += 1;
+              if (kind === 'aggregate') lastProviderCalls.aggregate += 1;
+            },
           }),
         }),
   });
@@ -396,4 +404,62 @@ test('a query operation inside an action resolves rows and folds them, read poli
     credential: 'a1',
   });
   assert.equal((s2.getState(STATE_REPORT) as unknown[]).length, 6);
+});
+
+// --------------------------------------------------------------- query result cache
+
+test('a repeated query is served from the cache, not re-executed by the provider', async () => {
+  const s = await server();
+  await s.handle(rows({ pageSize: 3 }, 'admin'));
+  const afterFirst = lastProviderCalls.query;
+  await s.handle(rows({ pageSize: 3 }, 'admin'));
+  assert.equal(lastProviderCalls.query, afterFirst, 'the provider was not called the second time');
+  assert.equal(s.queryCacheStats().hits, 1);
+  assert.ok(s.queryCacheStats().entries >= 1);
+});
+
+test('a committed mutation clears the whole query cache', async () => {
+  const s = await server();
+  await s.handle(rows({ pageSize: 3 }, 'admin')); // caches
+  await s.handle(rows({ pageSize: 3 }, 'admin')); // cache hit
+  const hitsBefore = s.queryCacheStats().hits;
+  assert.equal(hitsBefore, 1);
+
+  await s.handle({
+    kind: 'invoke',
+    protocol: PROTOCOL_VERSION,
+    actionId: ACTION_BUILD_REPORT,
+    credential: 'a1',
+  });
+
+  await s.handle(rows({ pageSize: 3 }, 'admin')); // must miss — the entry was invalidated
+  assert.equal(s.queryCacheStats().hits, hitsBefore, 'no new cache hit after the mutation');
+});
+
+test('a cache entry never crosses the trust boundary: B gets B data, never A data', async () => {
+  const s = await server();
+  const a1 = (await s.handle(rows({ pageSize: 10 }, 'a1'))) as QueryResponse;
+  const a2 = (await s.handle(rows({ pageSize: 10 }, 'a2'))) as QueryResponse;
+  // Same queryId, same arguments — but different principals, so different cache identity.
+  assert.ok(a1.page!.items.every((row) => row[F_SUM_ACC] === 'Acme'));
+  assert.ok(a2.page!.items.every((row) => row[F_SUM_ACC] === 'Globex'));
+  // The second call was a genuine execution for a2, not a1's cached page replayed.
+  assert.notDeepEqual(a2.page!.items, a1.page!.items);
+});
+
+test('the cache can be disabled', async () => {
+  const s = await server({ queryCache: false });
+  await s.handle(rows({ pageSize: 3 }, 'admin'));
+  const before = lastProviderCalls.query;
+  await s.handle(rows({ pageSize: 3 }, 'admin'));
+  assert.equal(lastProviderCalls.query, before + 1, 'every request re-executes when the cache is off');
+  assert.equal(s.queryCacheStats().enabled, false);
+});
+
+test('clearQueryCache() drops every entry', async () => {
+  const s = await server();
+  await s.handle(rows({ pageSize: 3 }, 'admin'));
+  assert.ok(s.queryCacheStats().entries >= 1);
+  s.clearQueryCache();
+  assert.equal(s.queryCacheStats().entries, 0);
 });

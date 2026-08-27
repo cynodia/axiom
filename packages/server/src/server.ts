@@ -212,6 +212,13 @@ export interface AxiomServerOptions {
    * so a cursor issued by one instance verifies on another.
    */
   cursorSecret?: string;
+  /**
+   * The query result cache. `true` (the default) or `{ maxEntries }` enables it; `false`
+   * disables it. Cache identity always includes a principal and read-policy fingerprint, so
+   * no entry can cross the trust boundary (spec 0.10 §69-70). Any committed mutation clears
+   * the whole cache (§72).
+   */
+  queryCache?: boolean | { maxEntries?: number };
 }
 
 export interface AxiomServer {
@@ -266,6 +273,10 @@ export interface AxiomServer {
     principal: PrincipalRecord | null,
     upload: { data: Uint8Array; mediaType: string; filename?: string },
   ): Promise<{ ok: true; ref: Record<string, LiteralValue> } | { ok: false; diagnostic: RuntimeDiagnostic }>;
+  /** Drops every cached query result. A host calls this after an out-of-band data change. */
+  clearQueryCache(): void;
+  /** Cache observability: how many entries are held and how many reads it has served. */
+  queryCacheStats(): { entries: number; hits: number; enabled: boolean };
   stop(): Promise<void>;
 }
 
@@ -382,6 +393,31 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   const dataProviders: DataProviderRegistry = options.dataProviders ?? {};
   const defaultDataProvider = options.dataProvider;
   const cursorSecret = options.cursorSecret ?? randomCursorSecret();
+
+  /**
+   * A conservative, correctness-first query result cache (spec 0.10 §68-72).
+   *
+   * Cache identity is **every** semantic factor that could change a result: the query, its
+   * arguments, the page context, and — critically — a fingerprint of the principal and of
+   * the read policy in force (§69). Principal A's cached `ownOrders` can never be served to
+   * principal B, because B's key differs in `principalFingerprint` (§70).
+   *
+   * Invalidation is deliberately blunt: any committed mutation clears the whole cache. Over-
+   * invalidation is acceptable (§72); a known-stale result is not. A future incremental
+   * engine can narrow this without changing the identity model.
+   */
+  const cacheEnabled = options.queryCache !== false;
+  const cacheMaxEntries =
+    typeof options.queryCache === 'object' && options.queryCache.maxEntries !== undefined
+      ? options.queryCache.maxEntries
+      : 128;
+  const queryCache = new Map<string, QueryResponse>();
+  let queryCacheHits = 0;
+  const invalidateQueryCache = (): void => {
+    if (cacheEnabled) {
+      queryCache.clear();
+    }
+  };
   const providerFor = (sourceEntityId: NodeId): DataProvider | undefined =>
     dataProviders[sourceEntityId] ?? defaultDataProvider;
   /** The caller of the action currently running, so a `query` operation's policy binds them. */
@@ -843,6 +879,27 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       after = payload.pos;
     }
 
+    // Cache identity: every semantic factor that could change the result (spec §69).
+    const cacheKey = cacheEnabled
+      ? JSON.stringify([
+          String(query.id),
+          argsFingerprint,
+          principalFingerprint,
+          policyFingerprint,
+          String(ir.contract),
+          request.cursor ?? null,
+          pageSize,
+          request.offset ?? null,
+        ])
+      : undefined;
+    if (cacheKey !== undefined) {
+      const cached = queryCache.get(cacheKey);
+      if (cached) {
+        queryCacheHits += 1;
+        return structuredClone(cached);
+      }
+    }
+
     const sourceIdentityFieldId = entities.get(query.source)?.identityFieldId;
     const providerQuery = buildProviderQuery({
       query,
@@ -878,6 +935,19 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       );
     }
 
+    const remember = (response: QueryResponse): QueryResponse => {
+      if (cacheKey !== undefined && response.ok) {
+        if (queryCache.size >= cacheMaxEntries) {
+          const oldest = queryCache.keys().next().value;
+          if (oldest !== undefined) {
+            queryCache.delete(oldest);
+          }
+        }
+        queryCache.set(cacheKey, structuredClone(response));
+      }
+      return response;
+    };
+
     if (queryIsAggregate(query)) {
       const result = await provider.aggregate(providerQuery);
       if (!result.ok) {
@@ -887,14 +957,14 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
           { queryId: query.id },
         );
       }
-      return {
+      return remember({
         kind: 'query-result',
         protocol: PROTOCOL_VERSION,
         ok: true,
         diagnostics: [],
         aggregate: { rows: result.value.rows },
         revision: storeRevision,
-      };
+      });
     }
 
     const result = await provider.query(providerQuery);
@@ -915,14 +985,14 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         cursorSecret,
       );
     }
-    return {
+    return remember({
       kind: 'query-result',
       protocol: PROTOCOL_VERSION,
       ok: true,
       diagnostics: [],
       page: { items: result.value.items, nextCursor, hasMore: result.value.hasMore },
       revision: storeRevision,
-    };
+    });
   }
 
   /**
@@ -1204,6 +1274,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         providerFailure = await commitProviderRecordStaging(stagedEntities);
         if (!providerFailure) {
           storeRevision += 1;
+          invalidateQueryCache();
         }
       }
       clearProviderRecordStaging(stagedEntities);
@@ -1279,6 +1350,8 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     }
 
     storeRevision = outcome.revision;
+    // A committed mutation may have changed any query's result. Conservative and correct.
+    invalidateQueryCache();
     for (const stateId of writes) {
       revisions.set(stateId, outcome.revision);
     }
@@ -1723,6 +1796,8 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     subscriptionStatus: (id: NodeId) => subscriptionRuntime.statusOf(id),
     blobLog: () =>
       [...effectRecords.values()].filter((entry) => entry.storage !== undefined).map((entry) => ({ ...entry })),
+    clearQueryCache: invalidateQueryCache,
+    queryCacheStats: () => ({ entries: queryCache.size, hits: queryCacheHits, enabled: cacheEnabled }),
 
     async authorizeBlobRead(storageId, key, principal) {
       const storage = storagesById[storageId];
