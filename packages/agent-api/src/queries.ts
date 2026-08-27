@@ -8,6 +8,13 @@ import {
   locationSelectorFieldIds,
   referencedIds,
 } from '@cynodia/axiom-core';
+import {
+  expressionFieldIds,
+  queryExpressions,
+  queryIsAggregate,
+  queryRowEntityId,
+  sortKeyDirection,
+} from '@cynodia/axiom-core';
 import type {
   ActionDef,
   AnyNode,
@@ -25,6 +32,11 @@ import type {
   IntegrationOperationDef,
   Location,
   NodeId,
+  QueryAggregate,
+  QueryDef,
+  QueryParameter,
+  ReadPolicyDef,
+  RelationshipDef,
   StateDef,
   StorageDef,
   SubscriptionDef,
@@ -61,6 +73,11 @@ export interface MutationImpact {
   affectedTransitionConstraints: TransitionConstraintDef[];
   affectedViews: ViewNode[];
   /**
+   * Registered queries a write to this location may invalidate — conservatively, every
+   * query that reads an entity stored in the affected state (spec 0.10 §72-74).
+   */
+  affectedQueries: QueryDef[];
+  /**
    * False when something in the graph cannot be analyzed — a native operation that does
    * not declare its effects, for instance. An incomplete answer says so rather than
    * presenting itself as exhaustive.
@@ -68,6 +85,34 @@ export interface MutationImpact {
   analysisComplete: boolean;
   /** Why the analysis is incomplete, when it is. */
   analysisGaps: string[];
+}
+
+/** A structured, agent-readable account of what a query does (spec 0.10 §86). */
+export interface QueryExplanation {
+  queryId: NodeId;
+  /** The authoritative source entity. */
+  source: NodeId;
+  parameters: QueryParameter[];
+  /** The requested predicate, in prose-free structural form. Absent means "every row". */
+  filter?: Expression;
+  /** The read policy predicate AND-ed into the effective filter, if one governs the source. */
+  readPolicyPredicate?: Expression;
+  /** Sort keys, most significant first, plus the appended canonical-identity tie-breaker. */
+  sort: Array<{ key: Expression; direction: 'asc' | 'desc'; nulls: 'first' | 'last' }>;
+  identityTieBreaker?: FieldId;
+  /** Relationship traversals: relationship id, cardinality, bound alias. */
+  relationships: Array<{ relationshipId: NodeId; cardinality: 'to-one' | 'to-many'; bindAs: NodeId }>;
+  /** Projected result fields, or `undefined` for a query that returns whole source rows. */
+  projection?: { entityId: NodeId; fields: FieldId[] };
+  aggregates: QueryAggregate[];
+  groupBy: Expression[];
+  pagination: { strategy: 'cursor' | 'offset'; maxPageSize: number };
+  /** Entities the query reads, transitively through its relationships. */
+  entities: NodeId[];
+  /** Fields the query reads across all its clauses. */
+  fields: FieldId[];
+  /** Actions that may invalidate this query when they commit. */
+  invalidatingActions: NodeId[];
 }
 
 function edgeFieldIds(edge: GraphEdge): FieldId[] {
@@ -385,6 +430,10 @@ export class GraphQueries {
       .filter((constraint) => entityIds.has(constraint.entityId));
     const gaps = this.analysisGaps();
 
+    const affectedQueries = this.listQueries().filter((query) =>
+      this.queryReadEntities(query).some((entityId) => entityIds.has(entityId)),
+    );
+
     return {
       location,
       rootStateId,
@@ -394,8 +443,212 @@ export class GraphQueries {
       affectedConstraints,
       affectedTransitionConstraints,
       affectedViews: [...views.values()],
+      affectedQueries,
       analysisComplete: gaps.length === 0,
       analysisGaps: gaps,
+    };
+  }
+
+  // ------------------------------------------------- queries, relationships, read policies
+
+  /** Every registered query the application declares (spec 0.10 §85). */
+  listQueries(): QueryDef[] {
+    return this.graph.getNodesByKind('query');
+  }
+
+  getQuery(id: NodeId): QueryDef | undefined {
+    const node = this.graph.getNode(id);
+    return node?.kind === 'query' ? node : undefined;
+  }
+
+  /** Every explicit entity-to-entity relationship. */
+  listRelationships(): RelationshipDef[] {
+    return this.graph.getNodesByKind('relationship');
+  }
+
+  getRelationship(id: NodeId): RelationshipDef | undefined {
+    const node = this.graph.getNode(id);
+    return node?.kind === 'relationship' ? node : undefined;
+  }
+
+  /** Relationships that start from or reach an entity. */
+  getRelationshipsForEntity(entityId: NodeId): RelationshipDef[] {
+    return this.listRelationships().filter(
+      (relationship) => relationship.from.entityId === entityId || relationship.to.entityId === entityId,
+    );
+  }
+
+  /** Every row-level read policy. */
+  listReadPolicies(): ReadPolicyDef[] {
+    return this.graph.getNodesByKind('read-policy');
+  }
+
+  /** The read policy governing an entity's rows, if one is declared. */
+  getReadPolicyForEntity(entityId: NodeId): ReadPolicyDef | undefined {
+    return this.listReadPolicies().find((policy) => policy.entityId === entityId);
+  }
+
+  /** The read policy a query's rows are filtered by — named on the query, or over its source. */
+  getReadPolicyForQuery(id: NodeId): ReadPolicyDef | undefined {
+    const query = this.getQuery(id);
+    if (!query) {
+      return undefined;
+    }
+    if (query.readPolicyId) {
+      const policy = this.graph.getNode(query.readPolicyId);
+      return policy?.kind === 'read-policy' ? policy : undefined;
+    }
+    return this.getReadPolicyForEntity(query.source);
+  }
+
+  getQueryParameters(id: NodeId): QueryParameter[] {
+    return this.getQuery(id)?.parameters ?? [];
+  }
+
+  /** Whether this query reduces rows to aggregate scalars rather than returning them. */
+  isAggregateQuery(id: NodeId): boolean {
+    const query = this.getQuery(id);
+    return query ? queryIsAggregate(query) : false;
+  }
+
+  /** The entity a non-aggregate result row conforms to (the projection entity, else the source). */
+  getQueryResultEntity(id: NodeId): NodeId | undefined {
+    const query = this.getQuery(id);
+    return query ? queryRowEntityId(query) : undefined;
+  }
+
+  /** Every entity a query reads, including relationship targets it traverses. */
+  getQueryEntities(id: NodeId): EntityDef[] {
+    const query = this.getQuery(id);
+    if (!query) {
+      return [];
+    }
+    return this.queryReadEntities(query)
+      .map((entityId) => this.graph.getNode(entityId))
+      .filter((node): node is EntityDef => node?.kind === 'entity');
+  }
+
+  private queryReadEntities(query: QueryDef): NodeId[] {
+    const entities = new Set<NodeId>([query.source]);
+    for (const use of query.relationships ?? []) {
+      const relationship = this.getRelationship(use.relationshipId);
+      if (relationship) {
+        entities.add(relationship.to.entityId);
+      }
+    }
+    return [...entities];
+  }
+
+  /** Relationships a query traverses. */
+  getQueryRelationships(id: NodeId): RelationshipDef[] {
+    const query = this.getQuery(id);
+    if (!query) {
+      return [];
+    }
+    return (query.relationships ?? [])
+      .map((use) => this.getRelationship(use.relationshipId))
+      .filter((relationship): relationship is RelationshipDef => Boolean(relationship));
+  }
+
+  /** Every field a query reads across its filter, sort, projection, group and aggregate clauses. */
+  getQueryFields(id: NodeId): FieldId[] {
+    const query = this.getQuery(id);
+    if (!query) {
+      return [];
+    }
+    const fields = new Set<FieldId>();
+    for (const expression of queryExpressions(query)) {
+      for (const fieldId of expressionFieldIds(expression)) {
+        fields.add(fieldId);
+      }
+    }
+    return [...fields];
+  }
+
+  /**
+   * Actions that may invalidate a query's results when they commit — conservatively, every
+   * action that writes a state holding an entity the query reads, or that mutates a
+   * provider-backed row of one (spec 0.10 §73-74). Over-inclusion is acceptable; a
+   * known-stale result is not (spec §72).
+   */
+  getActionsInvalidatingQuery(id: NodeId): ActionDef[] {
+    const query = this.getQuery(id);
+    if (!query) {
+      return [];
+    }
+    const readEntities = new Set(this.queryReadEntities(query));
+    return this.graph.getNodesByKind('action').filter((action) => {
+      for (const edge of this.graph.getOutgoingEdges(action.id, { kinds: WRITE_KINDS })) {
+        if (readEntities.has(edge.to)) {
+          return true; // a provider-record write links the action straight to the entity
+        }
+        const target = this.graph.getNode(edge.to);
+        if (target?.kind !== 'state') {
+          continue;
+        }
+        const holds = this.graph
+          .getOutgoingEdges(target.id, { kinds: ['references'] })
+          .some((reference) => readEntities.has(reference.to));
+        if (holds) {
+          return true;
+        }
+      }
+      return false;
+    });
+  }
+
+  /** The inverse: every query an action's commit may invalidate. */
+  getQueriesInvalidatedByAction(actionId: NodeId): QueryDef[] {
+    return this.listQueries().filter((query) =>
+      this.getActionsInvalidatingQuery(query.id).some((action) => action.id === actionId),
+    );
+  }
+
+  /**
+   * A structured explanation of a query — source, effective filter (with the read-policy
+   * conjunct called out), ordering with its identity tie-breaker, projection, pagination,
+   * the entities and fields it reads, and the actions that can invalidate it (spec §86).
+   */
+  explainQuery(id: NodeId): QueryExplanation | undefined {
+    const query = this.getQuery(id);
+    if (!query) {
+      return undefined;
+    }
+    const source = this.graph.getNode(query.source);
+    const identityTieBreaker =
+      source?.kind === 'entity' ? source.identityFieldId : undefined;
+    return {
+      queryId: query.id,
+      source: query.source,
+      parameters: query.parameters ?? [],
+      ...(query.filter ? { filter: query.filter } : {}),
+      ...(this.getReadPolicyForQuery(id)
+        ? { readPolicyPredicate: this.getReadPolicyForQuery(id)!.predicate }
+        : {}),
+      sort: (query.sort ?? []).map((key) => ({
+        key: key.key,
+        direction: sortKeyDirection(key),
+        nulls: key.nulls ?? (sortKeyDirection(key) === 'asc' ? 'last' : 'first'),
+      })),
+      ...(identityTieBreaker ? { identityTieBreaker } : {}),
+      relationships: (query.relationships ?? []).flatMap((use) => {
+        const relationship = this.getRelationship(use.relationshipId);
+        return relationship
+          ? [{ relationshipId: use.relationshipId, cardinality: relationship.cardinality, bindAs: use.bindAs }]
+          : [];
+      }),
+      ...(query.projection
+        ? { projection: { entityId: query.projection.entityId, fields: query.projection.fields.map((field) => field.id) } }
+        : {}),
+      aggregates: query.aggregate ?? [],
+      groupBy: query.groupBy ?? [],
+      pagination: {
+        strategy: query.pagination?.strategy ?? 'cursor',
+        maxPageSize: query.pagination?.maxPageSize ?? 100,
+      },
+      entities: this.queryReadEntities(query),
+      fields: this.getQueryFields(id),
+      invalidatingActions: this.getActionsInvalidatingQuery(id).map((action) => action.id),
     };
   }
 
