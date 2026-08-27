@@ -16,6 +16,9 @@ import type { IntegrationDef, IntegrationOperationDef } from './integrations.js'
 import type { TriggerDef } from './triggers.js';
 import type { SubscriptionDef } from './subscriptions.js';
 import type { StorageDef } from './storage.js';
+import type { QueryDef } from './query.js';
+import type { RelationshipDef } from './relationships.js';
+import type { ReadPolicyDef } from './read-policy.js';
 
 export type SemanticNodeKind =
   | 'entity'
@@ -30,7 +33,10 @@ export type SemanticNodeKind =
   | 'event'
   | 'trigger'
   | 'subscription'
-  | 'storage';
+  | 'storage'
+  | 'query'
+  | 'relationship'
+  | 'read-policy';
 
 /** Every semantic node kind, enumerated so tests can walk them. */
 export const SEMANTIC_NODE_KINDS: readonly SemanticNodeKind[] = [
@@ -47,6 +53,9 @@ export const SEMANTIC_NODE_KINDS: readonly SemanticNodeKind[] = [
   'trigger',
   'subscription',
   'storage',
+  'query',
+  'relationship',
+  'read-policy',
 ];
 
 export type NodeKind = SemanticNodeKind | UINodeKind;
@@ -65,6 +74,9 @@ export type AnyNode =
   | TriggerDef
   | SubscriptionDef
   | StorageDef
+  | QueryDef
+  | RelationshipDef
+  | ReadPolicyDef
   | UINode;
 
 export type NodeOfKind<K extends NodeKind> = Extract<AnyNode, { kind: K }>;

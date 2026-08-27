@@ -134,4 +134,35 @@ export const VALIDATION_CODES = {
   invalidBlobEntity: 'INVALID_BLOB_ENTITY',
   /** A blob operation that cannot execute as written — inside a `for-each`, or with no readable key. */
   invalidBlobOperation: 'INVALID_BLOB_OPERATION',
+
+  // Semantic data access & query layer (0.10). `validateGraph` rejects a query that could
+  // not execute, rather than letting it validate and then fail at the provider.
+  /** A `QueryDef.source`, a `RelationshipDef` endpoint entity, or a `ReadPolicyDef.entityId` that does not resolve to an entity. */
+  unknownQueryEntity: 'UNKNOWN_QUERY_ENTITY',
+  /** A `QueryRelationshipUse.relationshipId`, or a `query` operation's `queryId`, that does not resolve. */
+  unknownRelationship: 'UNKNOWN_RELATIONSHIP',
+  /** A `RelationshipDef` whose endpoints are inconsistent — a to-one whose `to.fieldId` is not the target's identity, a field not on its stated entity. */
+  invalidRelationship: 'INVALID_RELATIONSHIP',
+  /** A `QueryDef.readPolicyId` that does not resolve to a `read-policy` node. */
+  unknownReadPolicy: 'UNKNOWN_READ_POLICY',
+  /** A malformed `ReadPolicyDef` — non-boolean predicate, missing entity, or a scope that collides. */
+  invalidReadPolicy: 'INVALID_READ_POLICY',
+  /** More than one `ReadPolicyDef` governing the same entity. */
+  duplicateReadPolicy: 'DUPLICATE_READ_POLICY',
+  /** A `QueryDef.filter` that is not a boolean expression, or reads outside `rowScopeId` / parameters / `PRINCIPAL`. */
+  invalidQueryPredicate: 'INVALID_QUERY_PREDICATE',
+  /** A `QuerySortKey` whose projected key is not an orderable type. */
+  invalidQuerySort: 'INVALID_QUERY_SORT',
+  /** A projected field that is not on the projection entity, or whose value type is incompatible. */
+  invalidQueryProjection: 'INVALID_QUERY_PROJECTION',
+  /** A `sum`/`average` aggregate over a non-numeric key, a `count` carrying a key, or a missing `as`. */
+  invalidQueryAggregate: 'INVALID_QUERY_AGGREGATE',
+  /** `groupBy` without `aggregate`, or a group key that is not comparable. */
+  invalidQueryGrouping: 'INVALID_QUERY_GROUPING',
+  /** A duplicate parameter id, an invalid parameter `TypeRef`, or a parameter id colliding with a node. */
+  invalidQueryParameter: 'INVALID_QUERY_PARAMETER',
+  /** Cursor pagination whose ordering is not provably deterministic — no unique key and no usable identity tie-breaker. */
+  unstablePagination: 'UNSTABLE_PAGINATION',
+  /** A `query` operation used where it cannot execute — inside a `for-each`. */
+  invalidQueryOperation: 'INVALID_QUERY_OPERATION',
 } as const;

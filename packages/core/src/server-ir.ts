@@ -15,6 +15,10 @@ import type { IntegrationDef, IntegrationOperationDef } from './integrations.js'
 import type { TriggerDef } from './triggers.js';
 import type { SubscriptionDef } from './subscriptions.js';
 import type { StorageDef } from './storage.js';
+import type { QueryDef } from './query.js';
+import { queryExpressions } from './query.js';
+import type { RelationshipDef } from './relationships.js';
+import type { ReadPolicyDef } from './read-policy.js';
 
 /**
  * The contracts a Server IR may declare. A runtime that does not recognize the value MUST
@@ -37,6 +41,7 @@ export const SERVER_IR_CONTRACTS = [
   'axiom.server.v3',
   'axiom.server.v4',
   'axiom.server.v5',
+  'axiom.server.v6',
 ] as const;
 
 export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
@@ -45,7 +50,7 @@ export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
 export const SERVER_IR_CONTRACT: ServerIRContract = 'axiom.server.v1';
 
 /** The newest contract this implementation produces and executes. */
-export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v5';
+export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v6';
 
 /** Operation kinds no contract before `axiom.server.v5` contains. */
 export const SERVER_IR_V5_OPERATION_KINDS: readonly string[] = [
@@ -150,6 +155,34 @@ export function usesExternalIOVocabulary(ir: {
   );
 }
 
+/**
+ * Whether a document uses 0.10's semantic data-access vocabulary — a `QueryDef`, a
+ * `RelationshipDef`, a `ReadPolicyDef`, or a `query` operation inside an action. A v5
+ * runtime knows none of it: it would accept a document that promises demand-driven,
+ * read-authorized, paginated access to a large dataset and silently execute none of it. Any
+ * of it present requires `axiom.server.v6`, computed the same way `usesExternalIOVocabulary`
+ * decides v5 — a document that uses none of it still labels itself v5 or lower.
+ */
+export function usesQueryVocabulary(ir: {
+  queries?: readonly unknown[];
+  relationships?: readonly unknown[];
+  readPolicies?: readonly unknown[];
+  actions: Record<string, ActionDef>;
+}): boolean {
+  if (
+    (ir.queries?.length ?? 0) > 0 ||
+    (ir.relationships?.length ?? 0) > 0 ||
+    (ir.readPolicies?.length ?? 0) > 0
+  ) {
+    return true;
+  }
+  // A `query` operation inside an action is also v6 vocabulary — folded in with the rest of
+  // the operation walk once `QueryOperation` joins the `Operation` union (0.10 action phase).
+  return Object.values(ir.actions).some((action) =>
+    (action.operations ?? []).some((operation) => (operation.kind as string) === 'query'),
+  );
+}
+
 /** The higher of two contracts, ordered by `SERVER_IR_CONTRACTS`. */
 export function maxContract(a: ServerIRContract, b: ServerIRContract): ServerIRContract {
   return SERVER_IR_CONTRACTS.indexOf(b) > SERVER_IR_CONTRACTS.indexOf(a) ? b : a;
@@ -165,6 +198,8 @@ export function serverIRExpressions(ir: {
   triggers?: readonly TriggerDef[];
   subscriptions?: readonly SubscriptionDef[];
   storages?: readonly StorageDef[];
+  queries?: readonly QueryDef[];
+  readPolicies?: readonly ReadPolicyDef[];
 }): Expression[] {
   const found: Expression[] = [];
   for (const state of ir.states) {
@@ -200,6 +235,12 @@ export function serverIRExpressions(ir: {
     if (storage.uploadAuthorization) {
       found.push(storage.uploadAuthorization);
     }
+  }
+  for (const query of ir.queries ?? []) {
+    found.push(...queryExpressions(query));
+  }
+  for (const policy of ir.readPolicies ?? []) {
+    found.push(policy.predicate);
   }
   return found;
 }
@@ -318,4 +359,18 @@ export interface ServerIR {
    * provider that holds the bytes.
    */
   storages?: StorageDef[];
+  /**
+   * Registered demand-driven reads over authoritative data. Absent below `axiom.server.v6`,
+   * which has no way to describe one. Portable semantic IR — clauses and expression leaves,
+   * never SQL, an ORM entity or a provider instance.
+   */
+  queries?: QueryDef[];
+  /** Explicit entity-to-entity links the queries above may traverse. */
+  relationships?: RelationshipDef[];
+  /**
+   * Row-level read policies. Their predicates are AND-ed into the effective filter of every
+   * query over the governed entity, on the authority — a client never receives them and
+   * cannot satisfy one by claiming to.
+   */
+  readPolicies?: ReadPolicyDef[];
 }
