@@ -19,8 +19,15 @@ export type {
   IntegrationDef,
   IntegrationOperationDef,
   LiteralValue,
+  MigrationDef,
+  MigrationOperation,
+  MigrationOperationKind,
   NodeId,
   Operation,
+  SchemaChangeClass,
+  SchemaDiff,
+  SchemaDiffEntry,
+  SchemaProjection,
   QueryAggregate,
   QueryAggregateFunction,
   QueryDef,
@@ -55,6 +62,22 @@ export type {
 } from '@cynodia/axiom-runtime';
 
 export { PRINCIPAL, RUNTIME_DIAGNOSTIC_CODES, SERVER_IR_CONTRACT } from './runtime-deps.js';
+export {
+  MIGRATION_OLD_SCOPE,
+  MIGRATION_OPERATION_KINDS,
+  diffSchema,
+  fingerprintProjection,
+  migrationCoversDiff,
+  migrationExpressions,
+  migrationOperationEntityId,
+  migrationOperationExpressions,
+  migrationOperationFieldIds,
+  migrationOperationReadFieldIds,
+  migrationPath,
+  schemaFingerprint,
+  schemaProjection,
+  sortMigrations,
+} from '@cynodia/axiom-core';
 export {
   BLOB_CHECKSUM_FIELD,
   BLOB_FILENAME_FIELD,

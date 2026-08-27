@@ -94,6 +94,7 @@ import {
   sealCursor,
 } from './query-cursor.js';
 import type { CursorPayload } from './query-cursor.js';
+import { MIGRATION_DIAGNOSTIC_CODES } from './migration.js';
 
 /**
  * Diagnostic codes the authority adds to the runtime vocabulary. They describe failures of
@@ -173,6 +174,10 @@ export const SERVER_DIAGNOSTIC_CODES = {
   QUERY_RESULT_TYPE_MISMATCH: 'QUERY_RESULT_TYPE_MISMATCH',
   /** No `DataProvider` is registered for this query's source entity. */
   QUERY_PROVIDER_MISSING: 'QUERY_PROVIDER_MISSING',
+
+  // Schema evolution & semantic migrations (spec11 §76). Defined in `migration.ts` and
+  // spread in here so a migration failure crossing the boundary is one of this vocabulary.
+  ...MIGRATION_DIAGNOSTIC_CODES,
 } as const;
 
 export type ServerDiagnosticCode =

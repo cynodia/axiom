@@ -497,6 +497,20 @@ does for a local failure.
 | `QUERY_PROVIDER_FAILURE` | The provider reported a failure executing the query or applying a provider-record mutation. Carries no state value. |
 | `QUERY_RESULT_TYPE_MISMATCH` | The provider returned rows that do not conform to the query's declared result shape. |
 | `QUERY_PROVIDER_MISSING` | No `DataProvider` is registered for this query's source entity (`AxiomServerOptions.dataProvider` / `dataProviders`). |
+| `SCHEMA_MIGRATION_REQUIRED` | Persisted canonical data is at an older semantic schema than the graph requires; a migration must run before the authority will serve traffic (spec11 §12). |
+| `SCHEMA_INCOMPATIBLE` | Persisted data cannot be reconciled with the graph — a stored schema version ahead of the graph's, or no migration path to it. |
+| `MIGRATION_IN_PROGRESS` | A migration is already running: a migration lock is held with a valid lease, by this instance or another (spec11 §66). |
+| `MIGRATION_STATE_CORRUPTED` | The provider's stored migration metadata is internally inconsistent — a fingerprint or completed-step history that does not add up. |
+| `MIGRATION_PATH_NOT_FOUND` | No contiguous `MigrationDef` chain connects the persisted schema version to the required one (spec11 §13). |
+| `MIGRATION_APPROVAL_REQUIRED` | The plan contains destructive operations and the `executeMigration` call did not name them in `approveDestructive` (spec11 §21). |
+| `MIGRATION_DESTRUCTIVE` | Reported by planning for each operation that discards persisted information — surfaced before execution (spec11 §20). |
+| `MIGRATION_PROVIDER_UNSUPPORTED` | The configured provider cannot execute a capability the plan requires. Refused before any write (spec11 §79). |
+| `MIGRATION_TRANSFORM_FAILED` | A migration transform expression threw, or produced a value that does not satisfy the target field. The target schema version was not committed. |
+| `MIGRATION_VALIDATION_FAILED` | Post-migration validation found persisted data that does not satisfy the target semantic schema (spec11 §37). |
+| `MIGRATION_CHECKPOINT_INVALID` | A resume was attempted from a checkpoint that does not match the current plan or schema fingerprint. |
+| `MIGRATION_FINGERPRINT_MISMATCH` | The persisted schema fingerprint does not match the origin of the resolved migration path — the stored data is not the shape the chain expects. |
+| `MIGRATION_NOT_AUTHORIZED` | The caller is not the host-controlled migration principal. Naming a migration id over the client protocol does nothing (spec11 §73, §74). |
+| `MIGRATION_FAILED` | A migration failed for a reason with no more specific code; the target schema version was not committed and the recovery state is defined. |
 
 Two client-side codes belong to the boundary as well:
 
