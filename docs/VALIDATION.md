@@ -36,7 +36,7 @@ non-numeric collections, and obviously incompatible assignments.
 
 ## Codes
 
-96 codes, exported as `VALIDATION_CODES`. Every one is reachable.
+105 codes, exported as `VALIDATION_CODES`. Every one is reachable.
 
 ### Ids and references
 
@@ -169,6 +169,26 @@ execute rather than letting it validate and then fail at the provider (spec 0.10
 | `UNSTABLE_PAGINATION` | Cursor pagination over a source entity with no `identityFieldId` — there is no deterministic tie-breaker, so pages could repeat or skip rows (spec §11). |
 | `INVALID_QUERY_OPERATION` | A `query` operation with a missing required argument, or an argument the query declares no parameter for. |
 | `INVALID_PROVIDER_RECORD_LOCATION` | A `provider-record` location whose `sourceEntityId` does not resolve, or whose `identityFieldId` is not that entity's identity field. |
+
+### Schema evolution & semantic migrations (0.11)
+
+`validateGraph` rejects an internally inconsistent migration declaration before any
+persisted data could be touched (spec11 §77, §78). A graph declares the schema it requires
+with `graph.schemaVersion` (a monotonic integer, default `1`); a `MigrationDef` chain must
+connect schema 1 to it. A migration transform reads the old record through the reserved
+`MIGRATION_OLD_SCOPE` id.
+
+| Code | Raised when |
+| --- | --- |
+| `INVALID_MIGRATION_VERSION` | A `MigrationDef` whose `fromSchema`/`toSchema` are not consecutive positive integers (`from == to`, a downgrade, or a jump of more than one), or a migration whose `fromSchema` is at or beyond `graph.schemaVersion`. |
+| `MIGRATION_PATH_NOT_FOUND` | No contiguous `MigrationDef` chain connects schema 1 to the declared `graph.schemaVersion` — a step is missing (spec11 §13). |
+| `MIGRATION_CHAIN_FORK` | Two `MigrationDef` nodes upgrade from the same schema version — the upgrade path would be ambiguous. |
+| `DUPLICATE_MIGRATION_OPERATION_ID` | Two migration operations share an `id`; `approveDestructive` could not address them unambiguously. |
+| `MIGRATION_REQUIRED_FIELD_WITHOUT_DEFAULT` | An `add-field` operation adds a `required` field with no `populate` expression — existing rows cannot be made valid, and Axiom does not invent a value (spec11 §18). |
+| `MIGRATION_DESTRUCTIVE_UNMARKED` | A `remove-field` or `remove-entity` operation not marked `destructive: true` — dropping persisted data is acknowledged, never silent (spec11 §19, §20, §77). |
+| `INVALID_MIGRATION_OPERATION` | A structurally malformed operation — an empty `change-field.to`, a `transform-record.produce` that is not an `object` expression, or a relationship operation naming no relationship. |
+| `MIGRATION_TRANSFORM_IMPURE` | A migration transform expression that calls `now` or `uuid`, or reads a scope other than the old record (`MIGRATION_OLD_SCOPE`) and the operation's declared constants (spec11 §25, §26). |
+| `MIGRATION_TRANSFORM_TYPE_MISMATCH` | A `transform-field` whose declared `toType` does not match the field's type in the target schema (spec11 §77). |
 
 ### UI and routing
 

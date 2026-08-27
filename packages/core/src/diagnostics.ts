@@ -167,4 +167,25 @@ export const VALIDATION_CODES = {
   invalidQueryOperation: 'INVALID_QUERY_OPERATION',
   /** A `provider-record` location whose entity does not resolve, or whose identity field is not that entity's identity. */
   invalidProviderRecordLocation: 'INVALID_PROVIDER_RECORD_LOCATION',
+
+  // Schema evolution & semantic migrations (0.11). `validateGraph` rejects an internally
+  // inconsistent migration declaration before any persisted data is touched (spec11 §77, §78).
+  /** A `MigrationDef` whose `fromSchema`/`toSchema` are not consecutive positive integers, or a migration whose `fromSchema` is at or beyond `graph.schemaVersion`. */
+  invalidMigrationVersion: 'INVALID_MIGRATION_VERSION',
+  /** No contiguous `MigrationDef` chain connects schema 1 to `graph.schemaVersion` — a step is missing (spec11 §13). */
+  migrationPathNotFound: 'MIGRATION_PATH_NOT_FOUND',
+  /** Two `MigrationDef` nodes share the same `fromSchema` — the upgrade path would be ambiguous. */
+  migrationChainFork: 'MIGRATION_CHAIN_FORK',
+  /** Two migration operations share an `id` — `approveDestructive` could not address them unambiguously. */
+  duplicateMigrationOperationId: 'DUPLICATE_MIGRATION_OPERATION_ID',
+  /** An `add-field` operation adds a `required` field with no `populate` expression — existing rows cannot become valid, and Axiom does not invent a value (spec11 §18). */
+  migrationRequiredFieldWithoutDefault: 'MIGRATION_REQUIRED_FIELD_WITHOUT_DEFAULT',
+  /** A `remove-field` / `remove-entity` / narrowing operation not marked `destructive: true` — dropping persisted data must be acknowledged, never silent (spec11 §19, §20, §77). */
+  migrationDestructiveUnmarked: 'MIGRATION_DESTRUCTIVE_UNMARKED',
+  /** A structurally malformed migration operation — an empty `change-field.to`, a `transform-record.produce` that is not an `object` expression, a relationship operation with no relationship. */
+  invalidMigrationOperation: 'INVALID_MIGRATION_OPERATION',
+  /** A migration transform expression that is not pure — it calls `now` or `uuid`, or reads a scope other than the old record and declared constants (spec11 §25, §26). */
+  migrationTransformImpure: 'MIGRATION_TRANSFORM_IMPURE',
+  /** A `transform-field` whose declared `toType` does not match the field's type in the target schema, or an `add-field` `populate` whose value cannot satisfy the field (spec11 §77). */
+  migrationTransformTypeMismatch: 'MIGRATION_TRANSFORM_TYPE_MISMATCH',
 } as const;

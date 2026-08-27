@@ -33,7 +33,7 @@ import { queryPaginationStrategy, sortKeyDirection } from './query.js';
 import type { RelationshipDef } from './relationships.js';
 import { relationshipIsToOne } from './relationships.js';
 import type { ReadPolicyDef } from './read-policy.js';
-import type { MigrationDef } from './migration.js';
+import { validateMigrations } from './validate-migration.js';
 import { collectionType, entityType } from './type-ref.js';
 import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD, isGroupFieldId } from './group.js';
 import type { TypeRef } from './type-ref.js';
@@ -198,6 +198,12 @@ export function validateGraph(graph: ApplicationGraph, options: ValidateOptions 
   errors.push(...authority.errors);
   warnings.push(...authority.warnings);
 
+  // Schema evolution: an internally inconsistent migration declaration is rejected before
+  // any persisted data could be touched (spec11 §77, §78).
+  const migration = validateMigrations(allNodes, graph.schemaVersion);
+  errors.push(...migration.errors);
+  warnings.push(...migration.warnings);
+
   return { valid: errors.length === 0, errors, warnings };
 }
 
@@ -256,11 +262,9 @@ function validateNode(node: AnyNode, context: Context): void {
       validateReadPolicy(node, context);
       return;
     case 'migration':
-      // Full semantic validation (chain contiguity, transform purity and result types,
-      // destructive classification, coverage against the schema diff) lands in the
-      // migration-validation pass; structural acceptance here keeps a `MigrationDef` a
-      // first-class node in the meantime.
-      validateMigration(node, context);
+      // A `MigrationDef` is validated by the graph-level `validateMigrations` pass, which
+      // needs every migration and `graph.schemaVersion` at once — chain contiguity and
+      // fork detection are cross-node properties.
       return;
     default:
       context.errors.push({
@@ -1043,16 +1047,6 @@ function validateReadPolicy(policy: ReadPolicyDef, context: Context): void {
       nodeId: policy.id,
     });
   }
-}
-
-/**
- * Structural acceptance of a `MigrationDef`. The full semantic pass — chain contiguity
- * against `graph.schemaVersion`, transform-expression purity and result-type checking,
- * destructive-operation classification, and coverage against the schema diff — is the
- * migration-validation stage and reports its own `MIGRATION_*` codes.
- */
-function validateMigration(_migration: MigrationDef, _context: Context): void {
-  // Intentionally minimal at this layer; see `validateMigrations` in the migration pass.
 }
 
 /** Builds the single-row scope a read policy or a query filter is evaluated in. */

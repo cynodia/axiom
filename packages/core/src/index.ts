@@ -29,6 +29,7 @@ export * from './context.js';
 export * from './validate-location.js';
 export * from './resolve-presentation.js';
 export * from './validate.js';
+export * from './validate-migration.js';
 export * from './validate-presentation.js';
 export * from './validate-authority.js';
 export * from './validate-value.js';

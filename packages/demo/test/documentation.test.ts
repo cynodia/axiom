@@ -257,6 +257,10 @@ test('every validation code is documented, and every documented code exists', ()
     'SERVER_IR_V6_OPERATION_KINDS', 'DATA_PROVIDER_CAPABILITIES', 'QUERY_LIFECYCLE_STATES',
     'QUERY_SORT_DIRECTIONS', 'QUERY_NULLS_ORDERS', 'QUERY_PAGINATION_STRATEGIES',
     'QUERY_AGGREGATE_FUNCTIONS', 'RELATIONSHIP_CARDINALITIES', 'ORDER_STATUSES',
+    // Schema evolution & semantic migrations (0.11): exported vocabulary and constants, not codes.
+    'MIGRATION_OLD_SCOPE', 'MIGRATION_OPERATION_KINDS', 'MIGRATION_REVERSIBILITIES',
+    'SCHEMA_FINGERPRINT_VERSION', 'DEFAULT_SCHEMA_VERSION', 'MIGRATION_PHASES',
+    'MIGRATION_PROVIDER_CAPABILITIES',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });
