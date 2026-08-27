@@ -13,7 +13,7 @@ Design authority: `reports/AXIOM_0_10_QUERY_RESEARCH.md` (the §4 decision).
 | 1 | `core` vocabulary: `query.ts` / `relationships.ts` / `read-policy.ts`, type/index wiring, diagnostics codes, `axiom.server.v6` contract + `serverIRExpressions` + `ServerIR` fields | ✅ committed |
 | 2 | `core` validation (`validate.ts`) for QueryDef/RelationshipDef/ReadPolicyDef + `derive-edges.ts` read/reference edges + `query.test.ts` (18 tests). **`Location` `provider-record` extension moved to phase 6** (it touches the runtime mutation subsystem — belongs with the action/mutation work). | ✅ committed |
 | 3 | `compiler`: `compileToServerIR` emits queries/relationships/readPolicies + `axiom.server.v6` via `usesQueryVocabulary` + `compileToIR` strips all three kinds from client IR + `authorityContext`/`serverStateClosure` extended for query/policy state reads + `query-compile.test.ts` (3). **Effective-filter policy-conjunct construction moved to phase 5** (per-request, needs PRINCIPAL binding + scope substitution — belongs in the server runtime). | ✅ committed |
-| 4 | `DataProvider` contract + capabilities + deterministic memory provider + `QueryPlan` inspection type (in `server`) | ⬜ |
+| 4 | `server`: `data-provider.ts` (DataProvider / ProviderCapabilities / ProviderQuery / ProviderPage / QueryPlan / ProviderMutation / requiredCapabilities), `query-eval.ts` (pure query-subset evaluator + frozen null/collation/code-point semantics), `memory-data-provider.ts` (deterministic reference provider: filter, multi-key sort, null ordering, keyset + offset pagination, projection, **batched** to-one/to-many traversal, count/sum/min/max/average, first-seen grouping, loadByIdentity, atomic applyMutations, explain). `data-provider.test.ts` (10). | ✅ committed |
 | 5 | server runtime: query execution, **effective-filter = And(filter, policy.predicate) with policy rowScope substituted to the query rowScope + PRINCIPAL bound per request**, cursor encode/verify (fingerprints), page-size enforcement, aggregate/group, relationship batching (no N+1) | ⬜ |
 | 6 | `query` operation wired into `Operation` union + `OPERATION_KINDS` + runtime execution + **`Location` `provider-record` selector** (`location.ts` + `validate-location.ts` + `resolve-location.ts` + `authority.ts` root-state handling) + transactional provider reads/writes | ⬜ |
 | 7 | SQLite reference provider + parametrized SQL builder + memory/SQL parity harness | ⬜ |
@@ -34,8 +34,13 @@ Design authority: `reports/AXIOM_0_10_QUERY_RESEARCH.md` (the §4 decision).
 - `demo/documentation.test.ts` "every Server IR contract has a row in AUTHORITY.md" — `axiom.server.v6`. Fixed in **phase 16**.
 - `server/schema.test.ts` — expects `server-ir.v6.schema.json`. Fixed in **phase 9**.
 
-Baseline before phase 1: 803 pass / 0 fail. After phase 2: 3 known-red (above), rest green;
-core suite 175 → 193 (new `query.test.ts`).
+Baseline before phase 1: 803 pass / 0 fail. After phase 4: 3 known-red (above), rest green.
+Suites: core 175→193, compiler 139→142, server 165→175.
+
+Deferred within phases: `starts-with` / `startsWith` portable text predicate not added to
+core `BUILTIN_FUNCTIONS` yet — `contains` covers spec §26's minimum. Add in phase 14 if the
+reference app needs prefix search (touches core builtins + runtime eval + collections
+enumeration test).
 
 ## Design decisions locked (from the research doc)
 
