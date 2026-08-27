@@ -410,6 +410,127 @@ function describeOperation(operation: MigrationOperation): string {
   }
 }
 
-// Referenced by phase 7+ so the transform-leaf walk stays consistent between planning and
+// ---------------------------------------------------------------------------
+// Provider physical plan (spec11 §51-53).
+// ---------------------------------------------------------------------------
+
+/**
+ * How a provider realizes a semantic migration physically. Inspectable without SQL
+ * (spec11 §53) — a test or a tool can tell whether the migration is a bulk rewrite, batched,
+ * atomic, or bounded in memory, without the raw statements.
+ */
+export type MigrationExecutionStrategy =
+  | 'atomic-ddl'
+  | 'table-rebuild'
+  | 'batched-transform'
+  | 'in-memory';
+
+export interface ProviderMigrationStep {
+  operationId: string;
+  kind: MigrationOperation['kind'];
+  strategy: MigrationExecutionStrategy;
+  /** True when this step processes rows a batch at a time (spec11 §30). */
+  batched: boolean;
+  /** A short human/agent-readable description of the physical action — never SQL. */
+  describe: string;
+}
+
+export interface MigrationProviderPlan {
+  strategy: MigrationExecutionStrategy;
+  atomic: boolean;
+  batched: boolean;
+  /** True when execution never materializes a whole table in memory (spec11 §29). */
+  boundedMemory: boolean;
+  steps: ProviderMigrationStep[];
+  /**
+   * Capabilities the plan needs that this provider does not have. Non-empty means the
+   * migration is **refused before any write** (spec11 §79) — `MIGRATION_PROVIDER_UNSUPPORTED`.
+   */
+  unsupported: MigrationProviderCapability[];
+}
+
+/**
+ * The contract a `DataProvider` / persistence adapter implements to be migrated. Optional
+ * on the base `DataProvider`; a provider that does not implement it cannot host a schema
+ * that requires a migration, and the startup gate says so rather than failing later.
+ */
+export interface MigrationCapableProvider {
+  readonly migrationCapabilities: readonly MigrationProviderCapability[];
+  /** Produce the physical plan for a semantic plan. Pure — no execution, no I/O. */
+  planPhysicalMigration(plan: SemanticMigrationPlan): MigrationProviderPlan;
+}
+
+/** Whether a provider advertises the migration contract. */
+export function isMigrationCapable(provider: unknown): provider is MigrationCapableProvider {
+  return (
+    typeof provider === 'object' &&
+    provider !== null &&
+    Array.isArray((provider as MigrationCapableProvider).migrationCapabilities) &&
+    typeof (provider as MigrationCapableProvider).planPhysicalMigration === 'function'
+  );
+}
+
+const SCHEMA_STRATEGY_BY_KIND: Partial<Record<MigrationOperation['kind'], MigrationExecutionStrategy>> = {
+  'add-entity': 'atomic-ddl',
+  'remove-entity': 'atomic-ddl',
+  'add-field': 'atomic-ddl',
+  'remove-field': 'atomic-ddl',
+  'change-field': 'atomic-ddl',
+  'add-relationship': 'atomic-ddl',
+  'remove-relationship': 'atomic-ddl',
+  'populate-field': 'batched-transform',
+  'transform-field': 'batched-transform',
+  'transform-record': 'batched-transform',
+};
+
+/**
+ * A default physical planner (spec11 §51). A provider may override with its own — a shadow
+ * table, a table rebuild — but this covers the common shape: schema changes are atomic DDL,
+ * transforms are batched, and a required capability the provider lacks lands in
+ * `unsupported` so the migration is refused before any write (spec11 §79).
+ *
+ * `add-field` with a `populate` needs both the DDL and a batched fill; it is reported as a
+ * `batched-transform` step because the fill is the part that can be interrupted.
+ */
+export function planPhysicalMigration(
+  plan: SemanticMigrationPlan,
+  capabilities: readonly MigrationProviderCapability[],
+): MigrationProviderPlan {
+  const have = new Set(capabilities);
+  const steps: ProviderMigrationStep[] = [];
+  const operations = plan.steps.flatMap((step) => step.operations);
+
+  for (const operation of operations) {
+    const isTransform =
+      operation.kind === 'populate-field' ||
+      operation.kind === 'transform-field' ||
+      operation.kind === 'transform-record' ||
+      (operation.kind === 'add-field' && operation.populate !== undefined);
+    const strategy: MigrationExecutionStrategy = isTransform
+      ? 'batched-transform'
+      : (SCHEMA_STRATEGY_BY_KIND[operation.kind] ?? 'atomic-ddl');
+    steps.push({
+      operationId: String(operation.id),
+      kind: operation.kind,
+      strategy,
+      batched: isTransform,
+      describe: describeOperation(operation),
+    });
+  }
+
+  const unsupported = plan.providerCapabilitiesRequired.filter((capability) => !have.has(capability));
+  const anyBatched = steps.some((step) => step.batched);
+  return {
+    strategy: anyBatched ? 'batched-transform' : 'atomic-ddl',
+    atomic: !anyBatched && have.has('transactional-ddl'),
+    batched: anyBatched,
+    boundedMemory: true,
+    steps,
+    unsupported,
+  };
+}
+
+// Referenced by phase 8+ so the transform-leaf walk stays consistent between planning and
 // execution.
 export { migrationOperationExpressions };
+
