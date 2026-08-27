@@ -13,6 +13,13 @@ export { createMinimalGraph, runMinimalExample } from './minimal.js';
 export { createSeatingGraph, runSeatingExample } from './minimal-server.js';
 export { createOrderServerGraph, orderServerIds } from './order-server.js';
 export { createDeviceMonitorGraph, deviceMonitorIds } from './device-monitor.js';
+export {
+  createOrderManagementGraph,
+  generateOrderManagementDataset,
+  orderManagementIds,
+  ORDER_STATUSES,
+} from './order-management.js';
+export type { OrderManagementDataset } from './order-management.js';
 
 export interface DemoApplication {
   slug: string;
