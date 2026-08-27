@@ -263,6 +263,15 @@ export function queryIsGrouped(query: QueryDef): boolean {
 }
 
 /**
+ * The entity a non-aggregate result row conforms to: the projection entity when the query
+ * projects, otherwise the source entity itself. For an aggregate query the result shape is
+ * the aggregate `as` fields (plus any group keys), not an entity.
+ */
+export function queryRowEntityId(query: QueryDef): NodeId {
+  return query.projection?.entityId ?? query.source;
+}
+
+/**
  * Every `Expression` leaf a query contains, in no particular order. Used by dependency
  * analysis, by Server IR contract computation and by validation, so a query's read edges
  * are attributed exactly like any other node's.

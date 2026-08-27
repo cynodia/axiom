@@ -25,6 +25,8 @@ import { isUINode } from './ui.js';
 import type { UINode } from './ui.js';
 import type { AnyNode } from './types.js';
 import type { ApplicationGraph } from './graph.js';
+import type { RelationshipDef } from './relationships.js';
+import { queryExpressions } from './query.js';
 
 /**
  * Ids a `ref` expression mentions anywhere in the tree.
@@ -123,6 +125,12 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
   }
   const entityScope = (entityId: NodeId): ScopeBindings =>
     new Map([...rootScope, [entityId, statesByEntity.get(entityId) ?? []]]);
+
+  const relationshipsById = new Map<NodeId, RelationshipDef>(
+    nodes
+      .filter((node): node is RelationshipDef => node.kind === 'relationship')
+      .map((node) => [node.id, node]),
+  );
 
   const link = (from: NodeId, to: NodeId, kind: EdgeKind, fieldIds: readonly FieldId[] = []): void => {
     if (from === to || !known.has(from) || !known.has(to)) {
@@ -241,6 +249,39 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
         if (node.uploadAuthorization) {
           reads(node.id, node.uploadAuthorization, rootScope);
         }
+        break;
+      case 'query': {
+        link(node.id, node.source, 'references');
+        if (node.readPolicyId) {
+          link(node.id, node.readPolicyId, 'depends-on');
+        }
+        const scope = new Map<NodeId, readonly NodeId[]>([
+          ...rootScope,
+          [node.rowScopeId, statesByEntity.get(node.source) ?? []],
+        ]);
+        for (const use of node.relationships ?? []) {
+          link(node.id, use.relationshipId, 'references');
+          const relationship = relationshipsById.get(use.relationshipId);
+          if (relationship) {
+            scope.set(use.bindAs, statesByEntity.get(relationship.to.entityId) ?? []);
+          }
+        }
+        for (const expression of queryExpressions(node)) {
+          reads(node.id, expression, scope);
+        }
+        break;
+      }
+      case 'relationship':
+        link(node.id, node.from.entityId, 'references', [node.from.fieldId]);
+        link(node.id, node.to.entityId, 'references', [node.to.fieldId]);
+        break;
+      case 'read-policy':
+        link(node.id, node.entityId, 'constrains');
+        reads(
+          node.id,
+          node.predicate,
+          new Map([...rootScope, [node.rowScopeId, statesByEntity.get(node.entityId) ?? []]]),
+        );
         break;
       case 'integration':
       case 'event':

@@ -11,11 +11,11 @@ Design authority: `reports/AXIOM_0_10_QUERY_RESEARCH.md` (the §4 decision).
 | - | ----- | ----- |
 | 0 | Research doc — §4 three-way comparison + decision | ✅ committed `9d4f1fd` |
 | 1 | `core` vocabulary: `query.ts` / `relationships.ts` / `read-policy.ts`, type/index wiring, diagnostics codes, `axiom.server.v6` contract + `serverIRExpressions` + `ServerIR` fields | ✅ committed |
-| 2 | `core` validation (`validate.ts`) for QueryDef/RelationshipDef/ReadPolicyDef + `infer.ts` result typing + `derive-edges.ts` read/reference edges + `validate-location.ts` for `provider-record` + `Location` extension | ⬜ |
+| 2 | `core` validation (`validate.ts`) for QueryDef/RelationshipDef/ReadPolicyDef + `derive-edges.ts` read/reference edges + `query.test.ts` (18 tests). **`Location` `provider-record` extension moved to phase 6** (it touches the runtime mutation subsystem — belongs with the action/mutation work). | ✅ committed |
 | 3 | `compiler`: `compileToServerIR` emits queries/relationships/readPolicies + contract computation via `usesQueryVocabulary` + `compileToIR` strips them from client IR + effective-filter (policy conjunct) construction | ⬜ |
 | 4 | `DataProvider` contract + capabilities + deterministic memory provider + `QueryPlan` inspection type (in `server`) | ⬜ |
 | 5 | server runtime: query execution, cursor encode/verify (fingerprints), page-size enforcement, read-policy injection, aggregate/group, relationship batching (no N+1) | ⬜ |
-| 6 | `query` operation wired into `Operation` union + `OPERATION_KINDS` + runtime execution + `provider-record` location resolution + transactional provider reads/writes | ⬜ |
+| 6 | `query` operation wired into `Operation` union + `OPERATION_KINDS` + runtime execution + **`Location` `provider-record` selector** (`location.ts` + `validate-location.ts` + `resolve-location.ts` + `authority.ts` root-state handling) + transactional provider reads/writes | ⬜ |
 | 7 | SQLite reference provider + parametrized SQL builder + memory/SQL parity harness | ⬜ |
 | 8 | portable conformance fixtures (≥18, `axiom.conformance.v4`) + `runConformanceFixture` wiring + `conformance:generate` | ⬜ |
 | 9 | `schema:generate` → `server-ir.v6.schema.json` + protocol schema (`QueryRequest`/`QueryResponse`) | ⬜ |
@@ -34,7 +34,8 @@ Design authority: `reports/AXIOM_0_10_QUERY_RESEARCH.md` (the §4 decision).
 - `demo/documentation.test.ts` "every Server IR contract has a row in AUTHORITY.md" — `axiom.server.v6`. Fixed in **phase 16**.
 - `server/schema.test.ts` — expects `server-ir.v6.schema.json`. Fixed in **phase 9**.
 
-Baseline before phase 1: 803 pass / 0 fail. After phase 1: 3 known-red (above), rest green.
+Baseline before phase 1: 803 pass / 0 fail. After phase 2: 3 known-red (above), rest green;
+core suite 175 → 193 (new `query.test.ts`).
 
 ## Design decisions locked (from the research doc)
 

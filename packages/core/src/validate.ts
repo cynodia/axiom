@@ -28,7 +28,12 @@ import {
 import type { SubscriptionDef } from './subscriptions.js';
 import { BLOB_REF_FIELDS } from './storage.js';
 import type { StorageDef } from './storage.js';
-import { entityType } from './type-ref.js';
+import type { QueryDef } from './query.js';
+import { queryPaginationStrategy, sortKeyDirection } from './query.js';
+import type { RelationshipDef } from './relationships.js';
+import { relationshipIsToOne } from './relationships.js';
+import type { ReadPolicyDef } from './read-policy.js';
+import { collectionType, entityType } from './type-ref.js';
 import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD, isGroupFieldId } from './group.js';
 import type { TypeRef } from './type-ref.js';
 import { isUINode, uiChildIds } from './ui.js';
@@ -239,6 +244,15 @@ function validateNode(node: AnyNode, context: Context): void {
       return;
     case 'storage':
       validateStorage(node, context);
+      return;
+    case 'query':
+      validateQuery(node, context);
+      return;
+    case 'relationship':
+      validateRelationship(node, context);
+      return;
+    case 'read-policy':
+      validateReadPolicy(node, context);
       return;
     default:
       context.errors.push({
@@ -957,6 +971,367 @@ function validateStorage(storage: StorageDef, context: Context): void {
   if (storage.uploadAuthorization) {
     validateExpression(storage.uploadAuthorization, storage.id, context, emptyScope());
   }
+}
+
+/**
+ * A read policy's own declaration: it governs a real entity, its predicate is boolean, and
+ * its row scope does not collide. Whether the predicate may read `PRINCIPAL` is the
+ * authority boundary's job, checked in `validate-authority.ts`.
+ */
+function validateReadPolicy(policy: ReadPolicyDef, context: Context): void {
+  requireKind(policy.entityId, 'entity', policy.id, context, VALIDATION_CODES.unknownQueryEntity);
+  const entity = context.nodes.get(policy.entityId);
+
+  // At most one read policy per entity — two would mean the effective filter depends on
+  // which the compiler happened to pick.
+  const governing = [...context.nodes.values()].filter(
+    (node): node is ReadPolicyDef => node.kind === 'read-policy' && node.entityId === policy.entityId,
+  );
+  if (governing.length > 1 && governing[0].id !== policy.id) {
+    context.errors.push({
+      code: VALIDATION_CODES.duplicateReadPolicy,
+      message: `Read policy ${policy.id} governs ${policy.entityId}, which is already governed by ${governing[0].id}`,
+      nodeId: policy.id,
+      details: { entityId: String(policy.entityId), first: String(governing[0].id) },
+    });
+  }
+
+  const scope = policyRowScope(policy.rowScopeId, policy.entityId, policy.id, context, entity);
+  validateExpression(policy.predicate, policy.id, context, scope);
+  if (isKnownNonBoolean(inferExpressionType(policy.predicate, context.semantics, scope.types))) {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidReadPolicy,
+      message: `Read policy ${policy.id}'s predicate is ${describeType(inferExpressionType(policy.predicate, context.semantics, scope.types))}, not a boolean`,
+      nodeId: policy.id,
+    });
+  }
+}
+
+/** Builds the single-row scope a read policy or a query filter is evaluated in. */
+function policyRowScope(
+  rowScopeId: NodeId,
+  entityId: NodeId,
+  ownerId: NodeId,
+  context: Context,
+  entity: AnyNode | undefined,
+): Scoped {
+  if (context.nodes.has(rowScopeId)) {
+    context.errors.push({
+      code: VALIDATION_CODES.scopeCollidesWithNode,
+      message: `Row scope ${rowScopeId} in ${ownerId} has the same id as a graph node`,
+      nodeId: ownerId,
+    });
+  }
+  const scope = emptyScope(new Set([rowScopeId]));
+  if (entity?.kind === 'entity') {
+    scope.types.set(rowScopeId, entityType(entityId));
+  }
+  return scope;
+}
+
+/**
+ * A relationship's own declaration: two real entities, two real fields on them, and
+ * endpoints consistent with the declared cardinality. Axiom never *infers* a link, so this
+ * is where an inconsistent explicit one is caught.
+ */
+function validateRelationship(relationship: RelationshipDef, context: Context): void {
+  const fromEntity = requireRelationshipEndpoint(relationship.from, relationship.id, context);
+  const toEntity = requireRelationshipEndpoint(relationship.to, relationship.id, context);
+
+  // A to-one traversal that did not land on the target's identity could match many rows;
+  // a to-many traversal's source key must be the source identity for the same reason.
+  if (relationshipIsToOne(relationship)) {
+    if (toEntity && toEntity.identityFieldId !== relationship.to.fieldId) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidRelationship,
+        message: `Relationship ${relationship.id} is to-one but ${relationship.to.fieldId} is not ${relationship.to.entityId}'s identity field`,
+        nodeId: relationship.id,
+      });
+    }
+  } else if (fromEntity && fromEntity.identityFieldId !== relationship.from.fieldId) {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidRelationship,
+      message: `Relationship ${relationship.id} is to-many but ${relationship.from.fieldId} is not ${relationship.from.entityId}'s identity field`,
+      nodeId: relationship.id,
+    });
+  }
+
+  // The linked fields must be comparable — a foreign key and an identity of different
+  // primitive types can never match.
+  const fromType = resolveKnownType(fieldTypeOf(relationship.from.fieldId, context));
+  const toType = resolveKnownType(fieldTypeOf(relationship.to.fieldId, context));
+  if (
+    fromType?.kind === 'primitive' &&
+    toType?.kind === 'primitive' &&
+    fromType.primitive !== toType.primitive
+  ) {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidRelationship,
+      message: `Relationship ${relationship.id} links ${describeType(fromType)} to ${describeType(toType)}; the two sides can never be equal`,
+      nodeId: relationship.id,
+    });
+  }
+}
+
+function requireRelationshipEndpoint(
+  endpoint: RelationshipDef['from'],
+  ownerId: NodeId,
+  context: Context,
+): EntityDef | undefined {
+  const node = context.nodes.get(endpoint.entityId);
+  if (!node || node.kind !== 'entity') {
+    context.errors.push({
+      code: VALIDATION_CODES.unknownQueryEntity,
+      message: `Relationship ${ownerId} names ${endpoint.entityId}, which is not an entity`,
+      nodeId: ownerId,
+    });
+    return undefined;
+  }
+  if (context.fields.get(endpoint.fieldId) !== endpoint.entityId) {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidRelationship,
+      message: `Relationship ${ownerId} names ${endpoint.fieldId}, which is not a field of ${endpoint.entityId}`,
+      nodeId: ownerId,
+      fieldId: endpoint.fieldId,
+    });
+  }
+  return node;
+}
+
+function fieldTypeOf(fieldId: FieldId, context: Context): TypeRef | undefined {
+  const owner = context.fields.get(fieldId);
+  const entity = owner ? context.nodes.get(owner) : undefined;
+  if (entity?.kind !== 'entity') {
+    return undefined;
+  }
+  return entity.fields.find((field) => field.id === fieldId)?.valueType;
+}
+
+/**
+ * A query's own declaration. `validateGraph` rejects a query that could not execute rather
+ * than letting it validate and fail at the provider (spec 0.10 §83-84): a dangling source,
+ * a non-boolean filter, an unorderable sort key, a projection field that is not on the
+ * projection entity, an aggregate over the wrong type, grouping without aggregation, an
+ * unstable cursor ordering.
+ */
+function validateQuery(query: QueryDef, context: Context): void {
+  requireKind(query.source, 'entity', query.id, context, VALIDATION_CODES.unknownQueryEntity);
+  const source = context.nodes.get(query.source);
+  const sourceEntity = source?.kind === 'entity' ? source : undefined;
+
+  // The base scope every query expression is evaluated in: one source row, plus the typed
+  // parameters. `PRINCIPAL` is resolvable through `context.scopes`.
+  const scope = policyRowScope(query.rowScopeId, query.source, query.id, context, source);
+  const seenParameters = new Set<string>();
+  for (const parameter of query.parameters ?? []) {
+    const key = String(parameter.id);
+    if (seenParameters.has(key)) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidQueryParameter,
+        message: `Query ${query.id} declares parameter ${parameter.id} more than once`,
+        nodeId: query.id,
+      });
+    }
+    seenParameters.add(key);
+    if (context.nodes.has(parameter.id) || context.scopes.has(parameter.id) || scope.ids.has(parameter.id)) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidQueryParameter,
+        message: `Query ${query.id} parameter ${parameter.id} collides with an existing id`,
+        nodeId: query.id,
+      });
+    }
+    validateTypeRef(parameter.valueType, query.id, context);
+    scope.ids.add(parameter.id);
+    scope.types.set(parameter.id, parameter.valueType);
+  }
+
+  // Relationships bind before the expression clauses that read them.
+  for (const use of query.relationships ?? []) {
+    requireKind(use.relationshipId, 'relationship', query.id, context, VALIDATION_CODES.unknownRelationship);
+    const relationship = context.nodes.get(use.relationshipId);
+    if (context.nodes.has(use.bindAs) || scope.ids.has(use.bindAs)) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidQueryParameter,
+        message: `Query ${query.id} relationship bind ${use.bindAs} collides with an existing id`,
+        nodeId: query.id,
+      });
+    }
+    if (relationship?.kind === 'relationship') {
+      if (relationship.from.entityId !== query.source) {
+        context.errors.push({
+          code: VALIDATION_CODES.invalidRelationship,
+          message: `Query ${query.id} traverses ${use.relationshipId}, which starts from ${relationship.from.entityId}, not the query source ${query.source}`,
+          nodeId: query.id,
+        });
+      }
+      const target = entityType(relationship.to.entityId);
+      scope.ids.add(use.bindAs);
+      scope.types.set(use.bindAs, relationshipIsToOne(relationship) ? target : collectionType(target));
+    }
+  }
+
+  if (query.filter) {
+    validateExpression(query.filter, query.id, context, scope);
+    if (isKnownNonBoolean(inferExpressionType(query.filter, context.semantics, scope.types))) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidQueryPredicate,
+        message: `Query ${query.id}'s filter is ${describeType(inferExpressionType(query.filter, context.semantics, scope.types))}, not a boolean`,
+        nodeId: query.id,
+      });
+    }
+  }
+
+  for (const key of query.sort ?? []) {
+    validateExpression(key.key, query.id, context, scope);
+    const keyType = resolveKnownType(inferExpressionType(key.key, context.semantics, scope.types));
+    if (keyType && !isOrderableType(keyType)) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidQuerySort,
+        message: `Query ${query.id} sorts by ${describeType(keyType)}, which has no ordering`,
+        nodeId: query.id,
+      });
+    }
+    void sortKeyDirection(key);
+  }
+
+  if (query.projection) {
+    requireKind(query.projection.entityId, 'entity', query.id, context, VALIDATION_CODES.invalidQueryProjection);
+    for (const projected of query.projection.fields) {
+      if (context.fields.get(projected.id) !== query.projection.entityId) {
+        context.errors.push({
+          code: VALIDATION_CODES.invalidQueryProjection,
+          message: `Query ${query.id} projects ${projected.id}, which is not a field of ${query.projection.entityId}`,
+          nodeId: query.id,
+          fieldId: projected.id,
+        });
+      }
+      validateExpression(projected.value, query.id, context, scope);
+      const declaredType = fieldTypeOf(projected.id, context);
+      const valueType = inferExpressionType(projected.value, context.semantics, scope.types);
+      if (isObviouslyIncompatible(declaredType, valueType)) {
+        context.errors.push({
+          code: VALIDATION_CODES.invalidQueryProjection,
+          message: `Query ${query.id} projects ${describeType(valueType)} into ${projected.id} (${describeType(declaredType)})`,
+          nodeId: query.id,
+          fieldId: projected.id,
+        });
+      }
+    }
+  }
+
+  if ((query.groupBy?.length ?? 0) > 0 && (query.aggregate?.length ?? 0) === 0) {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidQueryGrouping,
+      message: `Query ${query.id} declares groupBy but no aggregate to compute per group`,
+      nodeId: query.id,
+    });
+  }
+  for (const key of query.groupBy ?? []) {
+    validateExpression(key, query.id, context, scope);
+    const keyType = resolveKnownType(inferExpressionType(key, context.semantics, scope.types));
+    if (keyType && !isOrderableType(keyType)) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidQueryGrouping,
+        message: `Query ${query.id} groups by ${describeType(keyType)}, which cannot be a group key`,
+        nodeId: query.id,
+      });
+    }
+  }
+
+  for (const aggregate of query.aggregate ?? []) {
+    if (aggregate.function === 'count') {
+      if (aggregate.key) {
+        context.errors.push({
+          code: VALIDATION_CODES.invalidQueryAggregate,
+          message: `Query ${query.id}'s count aggregate carries a key; count reduces rows, not a projection`,
+          nodeId: query.id,
+        });
+      }
+    } else if (!aggregate.key) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidQueryAggregate,
+        message: `Query ${query.id}'s ${aggregate.function} aggregate needs a key expression to reduce`,
+        nodeId: query.id,
+      });
+    } else {
+      validateExpression(aggregate.key, query.id, context, scope);
+      const keyType = resolveKnownType(inferExpressionType(aggregate.key, context.semantics, scope.types));
+      const numericOnly = aggregate.function === 'sum' || aggregate.function === 'average';
+      if (numericOnly && keyType && !(keyType.kind === 'primitive' && keyType.primitive === 'number')) {
+        context.errors.push({
+          code: VALIDATION_CODES.invalidQueryAggregate,
+          message: `Query ${query.id}'s ${aggregate.function} aggregate reduces ${describeType(keyType)}, which is not numeric`,
+          nodeId: query.id,
+        });
+      }
+      if (!numericOnly && keyType && !isOrderableType(keyType)) {
+        context.errors.push({
+          code: VALIDATION_CODES.invalidQueryAggregate,
+          message: `Query ${query.id}'s ${aggregate.function} aggregate reduces ${describeType(keyType)}, which has no ordering`,
+          nodeId: query.id,
+        });
+      }
+    }
+    if (!aggregate.as) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidQueryAggregate,
+        message: `Query ${query.id} has an aggregate with no result field`,
+        nodeId: query.id,
+      });
+    }
+  }
+
+  // Cursor pagination requires a deterministic total order. Axiom appends canonical
+  // identity as the tie-breaker (spec §11), so a source with no identity field and no
+  // provably-unique sort key cannot paginate stably.
+  const maxPageSize = query.pagination?.maxPageSize;
+  if (maxPageSize !== undefined && !(maxPageSize > 0)) {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidQueryParameter,
+      message: `Query ${query.id} declares a non-positive maxPageSize`,
+      nodeId: query.id,
+    });
+  }
+  if (queryPaginationStrategy(query) === 'cursor' && sourceEntity && !sourceEntity.identityFieldId) {
+    context.errors.push({
+      code: VALIDATION_CODES.unstablePagination,
+      message: `Query ${query.id} uses cursor pagination but ${query.source} has no identity field to break ties on`,
+      nodeId: query.id,
+    });
+  }
+
+  if (query.readPolicyId !== undefined) {
+    requireKind(query.readPolicyId, 'read-policy', query.id, context, VALIDATION_CODES.unknownReadPolicy);
+    const policy = context.nodes.get(query.readPolicyId);
+    if (policy?.kind === 'read-policy' && policy.entityId !== query.source) {
+      context.errors.push({
+        code: VALIDATION_CODES.invalidReadPolicy,
+        message: `Query ${query.id} names read policy ${query.readPolicyId}, which governs ${policy.entityId}, not the query source ${query.source}`,
+        nodeId: query.id,
+      });
+    }
+  }
+}
+
+/** A resolved type that is known and is not a boolean primitive. */
+function isKnownNonBoolean(type: TypeRef | undefined): boolean {
+  const resolved = resolveKnownType(type);
+  return resolved !== undefined && !(resolved.kind === 'primitive' && resolved.primitive === 'boolean');
+}
+
+/** Types that carry a total order a provider can sort or compare by. */
+function isOrderableType(type: TypeRef | undefined): boolean {
+  const resolved = resolveKnownType(type);
+  if (!resolved) {
+    return true;
+  }
+  if (resolved.kind === 'enum') {
+    return true;
+  }
+  return (
+    resolved.kind === 'primitive' &&
+    ['string', 'number', 'boolean', 'date', 'datetime'].includes(resolved.primitive)
+  );
 }
 
 function checkIntegrationArguments(
