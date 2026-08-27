@@ -228,6 +228,8 @@ interface RuntimeDiagnostic {
 | `INTEGRATION_QUERY_FAILED` | An integration query failed for any other reason. Never carries a provider secret. | `integration-query` | `operationId`, `retryable` |
 | `BLOB_STORAGE_UNAVAILABLE` | No host capable of reaching an object store is configured. Only the authoritative runtime ever reaches one. | `blob-metadata` | `storageId` |
 | `BLOB_METADATA_FAILED` | A `blob-metadata` lookup failed: no such key, a still-staged object, or the store refused. The store's own code is in `details.code` rather than replacing the diagnostic code — a provider's vocabulary is not Axiom's. | `blob-metadata` | `storageId`, `code` |
+| `QUERY_RESOLVER_UNAVAILABLE` | A `query` operation ran but no data provider is reachable — a bare client runtime, or an authority with no `DataProvider` registered. A `query` operation makes its action server-authority, so a client-compiled action never contains one. | `query` operation | `queryId` |
+| `QUERY_OPERATION_FAILED` | A `query` operation's registered query failed to execute. The provider's own code is in `details.code`. Never carries a provider secret. | `query` operation | `queryId`, `code` |
 | `UI_NODE_MISSING` | A child id that is not a UI node in the IR. | render | — |
 | `UNSUPPORTED_UI_NODE` | An unknown UI node kind. | render | — |
 | `PERSISTED_STATE_UNREADABLE` | **Warning.** A stored value could not be parsed; the initial value was used. | startup | — |

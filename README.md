@@ -137,6 +137,8 @@ full in the linked contract.
 35. **Subscription delivery is at-least-once, per-subscription ordered, and never silently lossy.** The queue is always bounded, and a policy that may discard an event says so in the graph. Two subscriptions have no ordering relationship at all.
 36. **OS I/O primitives are not graph vocabulary.** No path, socket, stream, file descriptor or subprocess. They live inside an adapter, where a Node runtime and a future Rust one may implement the same graph with entirely different primitives. Full model: [`docs/ANTI_PATTERNS.md`](docs/ANTI_PATTERNS.md).
 37. **Binary data is a `BlobRef` in state and bytes out of band.** Upload and download are one host transport for every application; possession of a key is never permission. Full model: [`docs/STORAGE.md`](docs/STORAGE.md).
+38. **Authoritative data too large to materialize is a `QueryDef`, not a `StateDef`.** The graph names the source, filter, sort, projection, relationships, aggregation, pagination and read policy; a `DataProvider` decides SQL, indexes and execution plan. The client invokes a query by id and never a query language. Full model: [`docs/QUERIES.md`](docs/QUERIES.md).
+39. **A read policy is declared once and enforced on the authority.** Its predicate is AND-ed into every query's effective filter before the provider runs, so it scopes rows, aggregates and relationship traversals uniformly — and a client argument can never remove it.
 
 ## Installation
 

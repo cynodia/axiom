@@ -499,3 +499,70 @@ The second is also a path traversal waiting to happen, and neither can be reache
 and `GET /axiom/blob/<storageId>/<key>` already exist, for every Axiom application, with
 `StorageDef.uploadAuthorization` and `StorageDef.readAuthorization` enforced by the
 authority. Application-authored upload/download routes: zero.
+
+## 37. Bulk-loading a large collection into `StateDef`
+
+```ts
+// WRONG — every order in the browser, so the app can filter and sort them itself.
+graph.addNode<StateDef>({ id: STATE_ALL_ORDERS, kind: 'state',
+  valueType: collectionType(entityType(ENTITY_ORDER)), authority: 'server' });
+```
+
+At any real scale this is a non-starter, and it makes the client the enforcement point for
+filtering, sorting, pagination and visibility — all four of which then have to be re-done,
+correctly, on the authority anyway. A `QueryDef` says *what data is required*; the provider
+decides how to retrieve it. `StateDef` is for values that can reasonably be held as a whole.
+
+## 38. `SELECT`, a repository call, or `fetch('/api/orders')` in application code
+
+```ts
+// WRONG — the semantic boundary has leaked.
+const rows = await db.query('SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC LIMIT 50', [status]);
+const orders = await orderRepository.findMany({ where: { status }, take: 50 });
+const page = await fetch(`/api/orders?status=${status}&cursor=${cursor}`).then((r) => r.json());
+```
+
+The target is: the application says *"I need these orders"*; Axiom understands what that
+means, who may see them, and which mutations affect them; the provider decides how to
+retrieve them efficiently. Handwritten SQL, ORM calls, repository classes, application data
+endpoints and canonical-data `fetch()` in a reference application: zero. If the reference
+provider generates SQL, that SQL is provider infrastructure — values are parameters, and raw
+input never becomes a table name, a column name or a fragment.
+
+## 39. A second comparison or arithmetic language inside the query system
+
+```ts
+// WRONG — `{ op: 'eq', field, value }` is almost, but not exactly, what `binary('eq', …)` means.
+filter: { op: 'and', operands: [{ op: 'eq', field: F_STATUS, value: { param: 'status' } }] }
+```
+
+Every leaf of every query clause is an ordinary Axiom `Expression`. One `eq`, one null
+truth table, one arithmetic, one dependency walker. A parallel predicate language is two
+truth tables that must be kept identical by hand forever — which is `INVALID_QUERY_PREDICATE`
+waiting to be a subtle divergence between two runtimes.
+
+## 40. `visibleWhen`, a hidden column, or client-side filtering as read authorization
+
+```ts
+// WRONG — the rows still crossed the wire; a hostile client just asked for them raw.
+const visible = allOrders.filter((order) => order.customerId === session.customerId);
+```
+
+Presentation does not authorize behaviour (spec 5 §75), and the query layer does not change
+that. Row visibility is a `ReadPolicyDef` whose predicate is AND-ed into the effective
+filter on the authority — it scopes rows, aggregates and relationship traversals uniformly,
+and no client argument can remove it. `filterUnauthorizedRows(...)` in application code:
+zero.
+
+## 41. Parsing, forging, or hand-building a cursor string
+
+```ts
+// WRONG — a cursor is opaque application data, not a structure to construct.
+const next = btoa(JSON.stringify({ afterId: lastRow.id, page: page + 1 }));
+```
+
+A cursor carries a signed fingerprint of the query, the arguments, the principal and the
+read policy. Parsing it, or building your own, breaks continuation the moment the fingerprint
+does not match — `QUERY_CURSOR_INVALID`. Store `page.nextCursor` and hand it back
+unmodified; the client store's `loadMore` does exactly that. Manual cursor manipulation in
+application code: zero.

@@ -669,8 +669,10 @@ Portable artifacts, for a runtime written in another language:
 @cynodia/axiom-server/schema/server-ir.v2.schema.json JSON Schema for axiom.server.v2
 @cynodia/axiom-server/schema/server-ir.v3.schema.json JSON Schema for axiom.server.v3
 @cynodia/axiom-server/schema/server-ir.v4.schema.json JSON Schema for axiom.server.v4
-@cynodia/axiom-server/schema/server-ir.v5.schema.json JSON Schema for axiom.server.v5 (latest)
+@cynodia/axiom-server/schema/server-ir.v5.schema.json JSON Schema for axiom.server.v5
+@cynodia/axiom-server/schema/server-ir.v6.schema.json JSON Schema for axiom.server.v6 (latest)
 @cynodia/axiom-server/schema/protocol.v1.schema.json  JSON Schema for the protocol
+@cynodia/axiom-server/conformance/queries/<name>.json one query conformance fixture (axiom.conformance.v4)
 ```
 
 This list is generated/tested content, not hand-maintained prose: `packages/demo/test
@@ -762,6 +764,76 @@ Diagnostics: `SUBSCRIPTION_ADAPTER_MISSING` `SUBSCRIPTION_START_FAILED`
 `SUBSCRIPTION_DELIVERY_DROPPED` `SUBSCRIPTION_DELIVERY_FAILED` `BLOB_STORE_MISSING`
 `BLOB_NOT_FOUND` `BLOB_ACCESS_DENIED` `BLOB_TOO_LARGE` `BLOB_MEDIA_TYPE_REJECTED`
 `BLOB_OPERATION_FAILED` `BLOB_STORAGE_UNAVAILABLE` `BLOB_METADATA_FAILED`.
+
+## SEMANTIC DATA ACCESS & QUERY LAYER
+
+Full model: [`QUERIES.md`](QUERIES.md). For authoritative data too large to materialize as a
+`StateDef` — 500,000 orders, years of audit rows. The graph owns the meaning; a
+`DataProvider` owns execution. `axiom.server.v6`.
+
+```ts
+// A registered query: one node, fixed named clauses, every leaf an ordinary Expression.
+graph.addNode<QueryDef>({
+  id: QUERY_RECENT_ORDERS, kind: 'query',
+  source: ENTITY_ORDER, rowScopeId: SC_ROW,
+  parameters: [{ id: P_STATUS, valueType: enumType([...]) }],
+  filter: binary('eq', field(ref(SC_ROW), F_STATUS), ref(P_STATUS)),   // boolean; PRINCIPAL, params in scope
+  sort: [{ key: field(ref(SC_ROW), F_CREATED_AT), direction: 'desc' }], // canonical identity appended as tie-breaker
+  relationships: [{ relationshipId: REL_ORDER_ACCOUNT, bindAs: SC_ACCOUNT }],
+  projection: { entityId: ENTITY_ORDER_SUMMARY, fields: [{ id: F_S_NAME, value: field(ref(SC_ACCOUNT), F_ACCOUNT_NAME) }, ...] },
+  aggregate: [{ function: 'count' | 'sum' | 'min' | 'max' | 'average', key?: Expression, as: FieldId }],
+  groupBy: [Expression],                                               // first-seen key order; present only with aggregate
+  pagination: { strategy: 'cursor' | 'offset', maxPageSize, defaultPageSize },
+  readPolicyId: POLICY_ORDER,
+});
+
+graph.addNode<RelationshipDef>({ id, kind: 'relationship', cardinality: 'to-one' | 'to-many',
+  from: { entityId, fieldId }, to: { entityId, fieldId } });           // explicit, never inferred
+
+graph.addNode<ReadPolicyDef>({ id, kind: 'read-policy', entityId, rowScopeId,
+  predicate });   // boolean over row + PRINCIPAL; AND-ed into every query's filter, server-side
+
+// Inside an action, before the transaction opens; makes the action server-authority:
+{ kind: 'query', queryId, arguments?, bindAs }
+
+// Mutate a provider-backed row by identity, no collection materialized:
+{ kind: 'set', target: providerRecordFieldLocation(ENTITY_ORDER, F_ID, ref(P_ID), F_STATUS), value: literal('confirmed') }
+```
+
+Client protocol: `{ kind: 'query', queryId, arguments?, cursor?, pageSize?, offset? }` →
+`{ kind: 'query-result', ok, diagnostics, page? | aggregate?, revision }`. The client
+invokes a query **by id**, never a query language. `page.nextCursor` is opaque — store it
+and hand it back; never parse it.
+
+Client lifecycle: `createQueryStore(fetcher)` — a `QueryView` per `{queryId, arguments}` key
+with `load` / `refresh` / `loadMore` / `reset` / `subscribe`. States:
+`idle | loading | ready | refreshing | error` (`QUERY_LIFECYCLE_STATES`). A failed first
+load → `error` with no data; a failed refresh → `error` with the last good data still
+visible.
+
+Server: `createAxiomServer({ ir, dataProvider | dataProviders, cursorSecret?, queryCache? })`.
+`createMemoryDataProvider({ rows })` and `createSqliteDataProvider({ location, entities, seed })`
+are the reference providers, semantically identical. Cache identity includes a principal and
+read-policy fingerprint; any committed mutation clears it. `server.clearQueryCache()` /
+`server.queryCacheStats()`.
+
+AgentAPI: `listQueries()` `getQuery(id)` `explainQuery(id)` `getQueryEntities(id)`
+`getQueryFields(id)` `getQueryRelationships(id)` `getReadPolicyForQuery(id)`
+`getActionsInvalidatingQuery(id)` `getQueriesInvalidatedByAction(actionId)` `listRelationships()`
+`listReadPolicies()`; `getMutationImpact(location).affectedQueries`.
+
+Portable: `runQueryConformanceFixture` / `runQueryConformanceSuite` over the
+`axiom.conformance.v4` fixtures in `conformance/queries/`.
+
+Diagnostics: `QUERY_NOT_FOUND` `QUERY_ARGUMENT_TYPE_MISMATCH` `QUERY_CAPABILITY_UNSUPPORTED`
+`QUERY_CURSOR_INVALID` `QUERY_PAGE_SIZE_EXCEEDED` `QUERY_PROVIDER_FAILURE`
+`QUERY_RESULT_TYPE_MISMATCH` `QUERY_PROVIDER_MISSING` (boundary); `QUERY_RESOLVER_UNAVAILABLE`
+`QUERY_OPERATION_FAILED` (a `query` operation in the runtime). Validation:
+`UNKNOWN_QUERY_ENTITY` `UNKNOWN_RELATIONSHIP` `INVALID_RELATIONSHIP` `UNKNOWN_READ_POLICY`
+`INVALID_READ_POLICY` `DUPLICATE_READ_POLICY` `INVALID_QUERY_PREDICATE` `INVALID_QUERY_SORT`
+`INVALID_QUERY_PROJECTION` `INVALID_QUERY_AGGREGATE` `INVALID_QUERY_GROUPING`
+`INVALID_QUERY_PARAMETER` `UNSTABLE_PAGINATION` `INVALID_QUERY_OPERATION`
+`INVALID_PROVIDER_RECORD_LOCATION`.
 
 ## Metadata classes
 

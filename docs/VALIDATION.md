@@ -36,7 +36,7 @@ non-numeric collections, and obviously incompatible assignments.
 
 ## Codes
 
-72 codes, exported as `VALIDATION_CODES`. Every one is reachable.
+96 codes, exported as `VALIDATION_CODES`. Every one is reachable.
 
 ### Ids and references
 
@@ -146,6 +146,29 @@ Full model: [`SUBSCRIPTIONS.md`](SUBSCRIPTIONS.md) and [`STORAGE.md`](STORAGE.md
 | `UNKNOWN_STORAGE` | A blob operation's `storageId`, or a `StorageDef.blobEntityId`, that does not resolve. |
 | `INVALID_BLOB_ENTITY` | A `StorageDef.blobEntityId` naming an entity that is not the canonical `blobRefEntity()` shape. The message names the missing fields. |
 | `INVALID_BLOB_OPERATION` | A blob operation that cannot execute as written. |
+
+### Semantic data access & query layer (0.10)
+
+Full model: [`QUERIES.md`](QUERIES.md). `validateGraph` rejects a query that could not
+execute rather than letting it validate and then fail at the provider (spec 0.10 §83-84).
+
+| Code | Raised when |
+| --- | --- |
+| `UNKNOWN_QUERY_ENTITY` | A `QueryDef.source`, a `RelationshipDef` endpoint entity, or a `ReadPolicyDef.entityId` that does not resolve to an entity. |
+| `UNKNOWN_RELATIONSHIP` | A `QueryRelationshipUse.relationshipId`, or a `query` operation's `queryId`, that does not resolve. |
+| `INVALID_RELATIONSHIP` | A `RelationshipDef` whose endpoints are inconsistent — a to-one whose `to.fieldId` is not the target's identity, a to-many whose `from.fieldId` is not the source's identity, an endpoint field that is not on its stated entity, or two link fields of different primitive types. Also a query that traverses a relationship starting from an entity other than its `source`. |
+| `UNKNOWN_READ_POLICY` | A `QueryDef.readPolicyId` that does not resolve to a `read-policy` node. |
+| `INVALID_READ_POLICY` | A `ReadPolicyDef` with a non-boolean predicate, a missing entity, or a colliding row scope; also a query whose `readPolicyId` governs a different entity than the query's `source`. |
+| `DUPLICATE_READ_POLICY` | More than one `ReadPolicyDef` governing the same entity — the effective filter would depend on which the compiler picked. |
+| `INVALID_QUERY_PREDICATE` | A `QueryDef.filter` that is not a boolean expression. |
+| `INVALID_QUERY_SORT` | A `QuerySortKey` whose projected key is not an orderable type (`string`, `number`, `boolean`, `date`, `datetime`, `enum`). |
+| `INVALID_QUERY_PROJECTION` | A projected field that is not on the projection entity, or whose value type is incompatible with the declared field type. |
+| `INVALID_QUERY_AGGREGATE` | A `sum`/`average` aggregate over a non-numeric key, a `min`/`max` over an unorderable key, a `count` that carries a key, or an aggregate with no result field. |
+| `INVALID_QUERY_GROUPING` | `groupBy` without `aggregate`, or a group key that is not comparable. |
+| `INVALID_QUERY_PARAMETER` | A duplicate parameter id, an invalid parameter `TypeRef`, a parameter or relationship bind id colliding with a node, or a non-positive `maxPageSize`. |
+| `UNSTABLE_PAGINATION` | Cursor pagination over a source entity with no `identityFieldId` — there is no deterministic tie-breaker, so pages could repeat or skip rows (spec §11). |
+| `INVALID_QUERY_OPERATION` | A `query` operation with a missing required argument, or an argument the query declares no parameter for. |
+| `INVALID_PROVIDER_RECORD_LOCATION` | A `provider-record` location whose `sourceEntityId` does not resolve, or whose `identityFieldId` is not that entity's identity field. |
 
 ### UI and routing
 

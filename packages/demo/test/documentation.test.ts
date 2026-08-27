@@ -243,6 +243,10 @@ test('every validation code is documented, and every documented code exists', ()
     'SUBSCRIPTION_FAILURE_POLICIES', 'LOSSY_BACKPRESSURE_POLICIES',
     'DEFAULT_SUBSCRIPTION_QUEUE_LIMIT', 'DEFAULT_SUBSCRIPTION_DEDUPLICATION_WINDOW',
     'DEFAULT_SUBSCRIPTION_RECONNECT', 'BLOB_OPERATION_KINDS', 'SERVER_IR_V5_OPERATION_KINDS',
+    // Semantic data access & query layer (0.10): exported vocabulary and type names, not codes.
+    'SERVER_IR_V6_OPERATION_KINDS', 'DATA_PROVIDER_CAPABILITIES', 'QUERY_LIFECYCLE_STATES',
+    'QUERY_SORT_DIRECTIONS', 'QUERY_NULLS_ORDERS', 'QUERY_PAGINATION_STRATEGIES',
+    'QUERY_AGGREGATE_FUNCTIONS', 'RELATIONSHIP_CARDINALITIES', 'ORDER_STATUSES',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });

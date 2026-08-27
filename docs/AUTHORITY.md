@@ -488,6 +488,15 @@ does for a local failure.
 | `BLOB_MEDIA_TYPE_REJECTED` | An upload's media type is not in the store's declared `acceptedMediaTypes`. |
 | `BLOB_OPERATION_FAILED` | A `blob-commit` or `blob-delete` failed at the store, after its retry policy. |
 | `INVOCATION_SOURCE_NOT_ALLOWED` | The action's `invocation.allowedSources` does not include this invocation's source (spec 8.1 §3-9) — refused before `authorization` is even evaluated, because no caller reaching the authority this way may invoke the action at all. |
+| `QUERY_NOT_FOUND` | The `QueryRequest` named a `QueryDef` this authority does not execute. |
+| `QUERY_ARGUMENT_TYPE_MISMATCH` | A query argument was missing, unknown, or did not conform to its declared `QueryParameter` type. Rejected before the provider is touched. |
+| `QUERY_UNAUTHORIZED` | The caller may not run this query — reserved for a future explicit query-authorization rule; row visibility today is enforced by the read policy AND-ed into the filter, not by refusal. |
+| `QUERY_CAPABILITY_UNSUPPORTED` | The configured `DataProvider` cannot push down a semantic this query requires, or the query's expression subset contains a leaf the provider cannot translate. Never approximated in memory. |
+| `QUERY_CURSOR_INVALID` | The cursor was tampered with, truncated, or minted for a different query / principal / read policy / contract. Continuing from it is refused; nothing is disclosed. |
+| `QUERY_PAGE_SIZE_EXCEEDED` | The requested page size exceeds the ceiling for this query (`min(QueryDef.pagination.maxPageSize, provider.maxPageSize)`). Refused, never silently truncated. |
+| `QUERY_PROVIDER_FAILURE` | The provider reported a failure executing the query or applying a provider-record mutation. Carries no state value. |
+| `QUERY_RESULT_TYPE_MISMATCH` | The provider returned rows that do not conform to the query's declared result shape. |
+| `QUERY_PROVIDER_MISSING` | No `DataProvider` is registered for this query's source entity (`AxiomServerOptions.dataProvider` / `dataProviders`). |
 
 Two client-side codes belong to the boundary as well:
 
@@ -637,8 +646,9 @@ page plus the conformance fixtures.
 | `axiom.server.v3` | integrations, integration operations, events, triggers, and the `integration-query`/`integration-effect` operation kinds | 0.8.0 |
 | `axiom.server.v4` | `ActionDef.invocation.allowedSources` invocation-source restriction, and the structured effect-outcome envelope (`effectOutcomeEntity`, `EFFECT_ID_FIELD` and its sibling reserved fields) that every effect dispatch uses from 8.1 onward | 0.8.1 |
 | `axiom.server.v5` | `SubscriptionDef` and `StorageDef`, and the `blob-metadata`/`blob-commit`/`blob-delete` operation kinds — the inbound external-I/O direction and binary object storage | 0.9.0 |
+| `axiom.server.v6` | `QueryDef`, `RelationshipDef` and `ReadPolicyDef`, the `query` operation kind, and the `provider-record` location — the semantic data-access & query layer over large authoritative datasets | 0.10.0 |
 
-`SERVER_IR_CONTRACTS` enumerates all five, and is the single source of truth this table is
+`SERVER_IR_CONTRACTS` enumerates all six, and is the single source of truth this table is
 tested against — `packages/demo/test/documentation.test.ts` fails if a contract in
 `SERVER_IR_CONTRACTS` has no row here, or a row here names a contract the code does not
 declare (spec 8.2 §7-8). The rules:
@@ -646,11 +656,11 @@ declare (spec 8.2 §7-8). The rules:
 - **A document declares the oldest contract that can carry it.** `compileToServerIR` computes the label from the vocabulary the document actually uses, so an application that uses nothing from 0.7 or 0.8 produces a byte-identical `axiom.server.v1` document, and the committed v1 conformance fixtures are unchanged. `usesV4Semantics` computes the v4 case specifically: an action's `invocation.allowedSources` genuinely restricting the default two-source set, or any `integration-operation` with `mode: 'effect'` (since every effect dispatch uses the structured v4 envelope) — a document that merely mentions `invocation` without restricting it only needs `axiom.server.v2`, the same tier `group`/`expression-ref` occupy.
 - **A runtime MUST refuse a contract it does not implement**, and MUST refuse a document whose vocabulary exceeds its declared contract. A v2 runtime executing a v1-labelled document that uses `group` would accept what a conforming v1 runtime elsewhere refuses, and the two would then disagree about the same file. `createAxiomServer` raises rather than executing one — including refusing a document that **understates** its own contract (`understatedContract`).
 - **A frozen contract gains nothing.** `axiom.server.v1` does not contain `group`, `expression-ref`, `expressionDefs`, an integration, a trigger, an event, the `integration-query`/`integration-effect` operation kinds, `invocation`, or the structured effect-outcome envelope, and `server-ir.v1.schema.json` is byte-frozen. Vocabulary arrives under a new identifier or not at all.
-- **`axiom.server.v5` is the latest contract as of 0.9.0** (`SERVER_IR_LATEST_CONTRACT`). `usesExternalIOVocabulary` computes it from the document: any `subscriptions`, any `storages`, or any of the three blob operation kinds. The reason it is an incompatible change rather than an additive one is exact — a v4 runtime that ignored `subscriptions` would start an application whose declared live event source never activates, and one that ignored a `blob-commit` would leave state referencing an object that stays staged forever. Both are silent divergence, which is what a contract label exists to prevent.
+- **`axiom.server.v6` is the latest contract as of 0.10.0** (`SERVER_IR_LATEST_CONTRACT`). `usesQueryVocabulary` computes it from the document: any `queries`, any `relationships`, any `readPolicies`, or any `query` operation. It is incompatible rather than additive for the same reason every prior tier is — a v5 runtime that ignored `queries` would accept an application that promises demand-driven, read-authorized, paginated access to a large dataset and silently execute none of it, and one that ignored a `provider-record` mutation would silently skip a canonical write. Both are the divergence a label exists to prevent.
 
 There is one JSON Schema per contract, each generated from the runtime's own vocabulary and
 each shipped: `server-ir.v1.schema.json`, `server-ir.v2.schema.json`, `server-ir.v3.schema.json`,
-`server-ir.v4.schema.json`, `server-ir.v5.schema.json`.
+`server-ir.v4.schema.json`, `server-ir.v5.schema.json`, `server-ir.v6.schema.json`.
 
 **`SubscriptionDef`, `StorageDef` and the blob operations.** Their normative semantics —
 lifecycle states and transitions, at-least-once delivery, per-subscription ordering and the
