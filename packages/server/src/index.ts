@@ -24,6 +24,8 @@ export * from './blobs.js';
 export * from './data-provider.js';
 export * from './query-eval.js';
 export * from './memory-data-provider.js';
+export * from './query-cursor.js';
+export * from './query-runtime.js';
 export * from './effects.js';
 export * from './triggers.js';
 export * from './server.js';

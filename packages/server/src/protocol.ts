@@ -59,7 +59,28 @@ export interface EventRequest {
   credential?: Credential;
 }
 
-export type ServerRequest = SnapshotRequest | InvokeRequest | EventRequest;
+/**
+ * Runs a registered query by id (spec 0.10 §6, §54). The client never submits a query
+ * language: it names a `QueryDef` and supplies typed arguments. The authority validates
+ * the arguments, injects the read policy, clamps the page size and computes the principal —
+ * none of which the client can influence beyond what it is entitled to.
+ */
+export interface QueryRequest {
+  kind: 'query';
+  protocol: typeof PROTOCOL_VERSION;
+  queryId: NodeId;
+  /** Keyed by query parameter id. Untyped input: the authority validates it. */
+  arguments?: Record<string, unknown>;
+  /** Continue from an opaque cursor a previous page returned. */
+  cursor?: string;
+  /** Rows requested. Clamped to the query's and the provider's maxima; an over-large request is refused. */
+  pageSize?: number;
+  /** Offset-strategy queries only. Not the normative consistency model (spec §14). */
+  offset?: number;
+  credential?: Credential;
+}
+
+export type ServerRequest = SnapshotRequest | InvokeRequest | EventRequest | QueryRequest;
 
 /**
  * The authoritative value of the observable states the caller may see.
@@ -110,7 +131,37 @@ export interface EventResponse {
   diagnostics: RuntimeDiagnostic[];
 }
 
-export type ServerResponse = InvokeResponse | SnapshotResponse | ErrorResponse | EventResponse;
+/** One page of a row query. `nextCursor` is opaque; a client stores it and hands it back. */
+export interface QueryPageResult {
+  items: Record<string, unknown>[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+/** The result of an aggregate/grouped query: one row per group (one row if ungrouped). */
+export interface QueryAggregateResult {
+  rows: Array<{ key?: unknown[]; values: Record<string, unknown> }>;
+}
+
+export interface QueryResponse {
+  kind: 'query-result';
+  protocol: typeof PROTOCOL_VERSION;
+  ok: boolean;
+  diagnostics: RuntimeDiagnostic[];
+  /** Present for a row query. */
+  page?: QueryPageResult;
+  /** Present for an aggregate query. */
+  aggregate?: QueryAggregateResult;
+  /** The authority revision the result reflects, so a client can reconcile with its snapshot. */
+  revision: number;
+}
+
+export type ServerResponse =
+  | InvokeResponse
+  | SnapshotResponse
+  | ErrorResponse
+  | EventResponse
+  | QueryResponse;
 
 /**
  * How a client reaches an authority. The first implementation is in-process and the second
@@ -128,6 +179,9 @@ export function isServerRequest(value: unknown): value is ServerRequest {
   const candidate = value as Partial<ServerRequest>;
   return (
     candidate.protocol === PROTOCOL_VERSION &&
-    (candidate.kind === 'invoke' || candidate.kind === 'snapshot' || candidate.kind === 'event')
+    (candidate.kind === 'invoke' ||
+      candidate.kind === 'snapshot' ||
+      candidate.kind === 'event' ||
+      candidate.kind === 'query')
   );
 }

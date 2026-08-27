@@ -32,11 +32,20 @@ import type {
   IntegrationOperationDef,
   LiteralValue,
   NodeId,
+  QueryDef,
+  ReadPolicyDef,
+  RelationshipDef,
   ServerIR,
   ServerIRContract,
   StateDef,
   StorageDef,
   TriggerDef,
+} from '@cynodia/axiom-core';
+import {
+  queryDefaultPageSize,
+  queryIsAggregate,
+  queryMaxPageSize,
+  queryPaginationStrategy,
 } from '@cynodia/axiom-core';
 import { MemoryElement, createAxiomRuntime, createMemoryHost, valuesEqual } from '@cynodia/axiom-runtime';
 import type { AxiomRuntime, EffectIntentRecord, MutationLogEntry, RuntimeDiagnostic } from '@cynodia/axiom-runtime';
@@ -59,11 +68,24 @@ import type {
   EventResponse,
   InvokeRequest,
   InvokeResponse,
+  QueryRequest,
+  QueryResponse,
   ServerRequest,
   ServerResponse,
   SnapshotResponse,
   StateSnapshot,
 } from './protocol.js';
+import type { DataProvider, DataProviderRegistry } from './data-provider.js';
+import { requiredCapabilities } from './data-provider.js';
+import { buildProviderQuery, policyForQuery } from './query-runtime.js';
+import {
+  cursorMatchesContext,
+  fingerprint,
+  openCursor,
+  randomCursorSecret,
+  sealCursor,
+} from './query-cursor.js';
+import type { CursorPayload } from './query-cursor.js';
 
 /**
  * Diagnostic codes the authority adds to the runtime vocabulary. They describe failures of
@@ -123,6 +145,26 @@ export const SERVER_DIAGNOSTIC_CODES = {
    * consulted, because no caller reaching the authority this way may invoke it at all.
    */
   INVOCATION_SOURCE_NOT_ALLOWED: 'INVOCATION_SOURCE_NOT_ALLOWED',
+
+  // Semantic data access & query layer (spec 0.10 §82).
+  /** The request named a query this authority does not execute. */
+  QUERY_NOT_FOUND: 'QUERY_NOT_FOUND',
+  /** An argument was missing, unknown, or did not conform to its declared parameter type. */
+  QUERY_ARGUMENT_TYPE_MISMATCH: 'QUERY_ARGUMENT_TYPE_MISMATCH',
+  /** The caller may not run this query — no read policy could admit them. */
+  QUERY_UNAUTHORIZED: 'QUERY_UNAUTHORIZED',
+  /** The configured provider cannot push down a semantic this query requires. Never approximated. */
+  QUERY_CAPABILITY_UNSUPPORTED: 'QUERY_CAPABILITY_UNSUPPORTED',
+  /** The cursor was tampered with, truncated, or minted for another query / principal / policy. */
+  QUERY_CURSOR_INVALID: 'QUERY_CURSOR_INVALID',
+  /** The requested page size exceeds the authority's ceiling for this query. */
+  QUERY_PAGE_SIZE_EXCEEDED: 'QUERY_PAGE_SIZE_EXCEEDED',
+  /** The provider reported a failure executing the query. */
+  QUERY_PROVIDER_FAILURE: 'QUERY_PROVIDER_FAILURE',
+  /** The provider returned rows that do not conform to the query's declared result shape. */
+  QUERY_RESULT_TYPE_MISMATCH: 'QUERY_RESULT_TYPE_MISMATCH',
+  /** No `DataProvider` is registered for this query's source entity. */
+  QUERY_PROVIDER_MISSING: 'QUERY_PROVIDER_MISSING',
 } as const;
 
 export type ServerDiagnosticCode =
@@ -149,6 +191,19 @@ export interface AxiomServerOptions {
   subscriptions?: SubscriptionAdapterRegistry;
   /** One blob store per `StorageDef` the Server IR declares, keyed by `StorageDef.id`. */
   blobStores?: BlobStorageRegistry;
+  /**
+   * The provider that executes every registered query. Used when a query's source entity
+   * has no more specific entry in `dataProviders`.
+   */
+  dataProvider?: DataProvider;
+  /** A provider per query source entity id, for applications whose data spans stores. */
+  dataProviders?: DataProviderRegistry;
+  /**
+   * The secret that signs keyset cursors. An authority given none mints a random one at
+   * startup — fine in-process, but a multi-instance deployment must supply a shared value
+   * so a cursor issued by one instance verifies on another.
+   */
+  cursorSecret?: string;
 }
 
 export interface AxiomServer {
@@ -310,6 +365,17 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     storagesById[storage.id] = storage;
   }
   const blobStores: BlobStorageRegistry = options.blobStores ?? {};
+
+  // The semantic data-access layer (spec 0.10). Queries, relationships and row-level read
+  // policies are executed here and never cross to a client.
+  const queriesById = new Map<NodeId, QueryDef>((ir.queries ?? []).map((query) => [query.id, query]));
+  const relationships: RelationshipDef[] = ir.relationships ?? [];
+  const readPolicies: ReadPolicyDef[] = ir.readPolicies ?? [];
+  const dataProviders: DataProviderRegistry = options.dataProviders ?? {};
+  const defaultDataProvider = options.dataProvider;
+  const cursorSecret = options.cursorSecret ?? randomCursorSecret();
+  const providerFor = (sourceEntityId: NodeId): DataProvider | undefined =>
+    dataProviders[sourceEntityId] ?? defaultDataProvider;
 
   /**
    * Reads a stored object's metadata for a `blob-metadata` operation.
@@ -634,6 +700,229 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       }
     }
     return invokeCore(request.actionId, request.arguments ?? {}, context, request.requestId, replayKey, 0);
+  }
+
+  function queryError(code: ServerDiagnosticCode, message: string, details?: Record<string, unknown>): QueryResponse {
+    return {
+      kind: 'query-result',
+      protocol: PROTOCOL_VERSION,
+      ok: false,
+      diagnostics: [disclosable(diagnostic(code, message, details))],
+      revision: storeRevision,
+    };
+  }
+
+  /**
+   * Runs a registered query (spec 0.10 §54). The client names a `QueryDef` and supplies
+   * typed arguments; this authority validates them, computes the principal from the
+   * authenticated context (never the request), injects the read policy into the filter,
+   * clamps the page size, verifies any cursor against this exact context, hands a
+   * normalized `ProviderQuery` to the provider, and seals the next cursor.
+   */
+  async function runQuery(request: QueryRequest): Promise<QueryResponse> {
+    const query = queriesById.get(request.queryId);
+    if (!query) {
+      return queryError(SERVER_DIAGNOSTIC_CODES.QUERY_NOT_FOUND, `No query ${String(request.queryId)}`, {
+        queryId: request.queryId,
+      });
+    }
+
+    const provider = providerFor(query.source);
+    if (!provider) {
+      return queryError(
+        SERVER_DIAGNOSTIC_CODES.QUERY_PROVIDER_MISSING,
+        `No data provider is registered for ${String(query.source)}`,
+        { queryId: query.id },
+      );
+    }
+
+    // Arguments: unknown names, missing required, wrong type — all rejected before the
+    // provider is touched (spec §7, §55).
+    const suppliedArgs = request.arguments ?? {};
+    const declared = new Map((query.parameters ?? []).map((parameter) => [String(parameter.id), parameter]));
+    const argProblems: RuntimeDiagnostic[] = [];
+    for (const key of Object.keys(suppliedArgs)) {
+      if (!declared.has(key)) {
+        argProblems.push(
+          diagnostic(SERVER_DIAGNOSTIC_CODES.QUERY_ARGUMENT_TYPE_MISMATCH, `${query.id} has no parameter ${key}`, {
+            parameterId: key,
+          }),
+        );
+      }
+    }
+    const resolvedArgs: Record<string, LiteralValue> = {};
+    for (const parameter of query.parameters ?? []) {
+      const key = String(parameter.id);
+      const present = Object.prototype.hasOwnProperty.call(suppliedArgs, key);
+      const value = suppliedArgs[key];
+      if (!present || value === undefined || value === null) {
+        if (parameter.required !== false) {
+          argProblems.push(
+            diagnostic(
+              SERVER_DIAGNOSTIC_CODES.QUERY_ARGUMENT_TYPE_MISMATCH,
+              `${query.id} requires ${parameter.name ?? parameter.id}`,
+              { parameterId: parameter.id },
+            ),
+          );
+        }
+        continue;
+      }
+      if (parameter.valueType) {
+        const issues = validateValueAgainstType(value, parameter.valueType, {
+          path: key,
+          getEntity: (id) => entities.get(id),
+        });
+        for (const issue of issues) {
+          argProblems.push(
+            diagnostic(SERVER_DIAGNOSTIC_CODES.QUERY_ARGUMENT_TYPE_MISMATCH, issue.message, {
+              parameterId: parameter.id,
+            }),
+          );
+        }
+      }
+      resolvedArgs[key] = value as LiteralValue;
+    }
+    if (argProblems.length > 0) {
+      return {
+        kind: 'query-result',
+        protocol: PROTOCOL_VERSION,
+        ok: false,
+        diagnostics: argProblems.map(disclosable),
+        revision: storeRevision,
+      };
+    }
+
+    const principal = ((host.authenticate
+      ? await host.authenticate(request.credential ?? null)
+      : null) ?? null) as Record<string, LiteralValue> | null;
+
+    const strategy = queryPaginationStrategy(query);
+    const cap = Math.min(queryMaxPageSize(query), provider.capabilities.maxPageSize);
+    const requestedSize = request.pageSize ?? queryDefaultPageSize(query);
+    if (request.pageSize !== undefined && request.pageSize > cap) {
+      return queryError(
+        SERVER_DIAGNOSTIC_CODES.QUERY_PAGE_SIZE_EXCEEDED,
+        `Requested ${request.pageSize} rows; the ceiling for ${String(query.id)} is ${cap}`,
+        { queryId: query.id, requested: request.pageSize, maximum: cap },
+      );
+    }
+    const pageSize = Math.max(1, Math.min(requestedSize, cap));
+
+    const policy = policyForQuery(query, readPolicies);
+    const argsFingerprint = await fingerprint(resolvedArgs);
+    const principalFingerprint = await fingerprint(principal ?? 'anon');
+    const policyFingerprint = await fingerprint(policy ? policy.predicate : 'none');
+
+    let after: CursorPayload['pos'] | undefined;
+    if (request.cursor !== undefined) {
+      const payload = await openCursor(request.cursor, cursorSecret);
+      if (
+        !payload ||
+        !cursorMatchesContext(payload, {
+          queryId: query.id,
+          argumentsFingerprint: argsFingerprint,
+          principalFingerprint,
+          policyFingerprint,
+          contract: String(ir.contract),
+        })
+      ) {
+        return queryError(SERVER_DIAGNOSTIC_CODES.QUERY_CURSOR_INVALID, 'The cursor is invalid for this request', {
+          queryId: query.id,
+        });
+      }
+      after = payload.pos;
+    }
+
+    const sourceIdentityFieldId = entities.get(query.source)?.identityFieldId;
+    const providerQuery = buildProviderQuery({
+      query,
+      policy,
+      relationships,
+      ...(sourceIdentityFieldId ? { sourceIdentityFieldId } : {}),
+      arguments: resolvedArgs,
+      principal,
+      pageSize,
+      strategy,
+      ...(after ? { after } : {}),
+      ...(request.offset !== undefined ? { offset: request.offset } : {}),
+    });
+
+    // The clauses this query needs must be capabilities the provider actually has, and the
+    // provider's own plan must report nothing unsupported (spec §9, §29, §81, §84).
+    const needed = requiredCapabilities({
+      filter: query.filter ?? policy,
+      sort: query.sort ?? [],
+      projection: query.projection,
+      relationships: query.relationships ?? [],
+      aggregate: query.aggregate ?? [],
+      groupBy: query.groupBy ?? [],
+      strategy,
+    });
+    const missing = needed.filter((capability) => !provider.capabilities.supports.includes(capability));
+    const planUnsupported = provider.explain(providerQuery).unsupported;
+    if (missing.length > 0 || planUnsupported.length > 0) {
+      return queryError(
+        SERVER_DIAGNOSTIC_CODES.QUERY_CAPABILITY_UNSUPPORTED,
+        `The provider cannot execute this query exactly: ${[...missing, ...planUnsupported].join(', ')}`,
+        { queryId: query.id, missing, unsupported: [...planUnsupported] },
+      );
+    }
+
+    if (queryIsAggregate(query)) {
+      const result = await provider.aggregate(providerQuery);
+      if (!result.ok) {
+        return queryError(
+          providerFailureCode(result.code),
+          result.message,
+          { queryId: query.id },
+        );
+      }
+      return {
+        kind: 'query-result',
+        protocol: PROTOCOL_VERSION,
+        ok: true,
+        diagnostics: [],
+        aggregate: { rows: result.value.rows },
+        revision: storeRevision,
+      };
+    }
+
+    const result = await provider.query(providerQuery);
+    if (!result.ok) {
+      return queryError(providerFailureCode(result.code), result.message, { queryId: query.id });
+    }
+    let nextCursor: string | null = null;
+    if (result.value.hasMore && result.value.lastPosition && strategy === 'cursor') {
+      nextCursor = await sealCursor(
+        {
+          q: String(query.id),
+          a: argsFingerprint,
+          p: principalFingerprint,
+          rp: policyFingerprint,
+          c: String(ir.contract),
+          pos: result.value.lastPosition,
+        },
+        cursorSecret,
+      );
+    }
+    return {
+      kind: 'query-result',
+      protocol: PROTOCOL_VERSION,
+      ok: true,
+      diagnostics: [],
+      page: { items: result.value.items, nextCursor, hasMore: result.value.hasMore },
+      revision: storeRevision,
+    };
+  }
+
+  function providerFailureCode(code: string): ServerDiagnosticCode {
+    if (code === 'QUERY_CAPABILITY_UNSUPPORTED') {
+      return SERVER_DIAGNOSTIC_CODES.QUERY_CAPABILITY_UNSUPPORTED;
+    }
+    if (code === 'QUERY_CURSOR_INVALID') {
+      return SERVER_DIAGNOSTIC_CODES.QUERY_CURSOR_INVALID;
+    }
+    return SERVER_DIAGNOSTIC_CODES.QUERY_PROVIDER_FAILURE;
   }
 
   /**
@@ -1207,6 +1496,9 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         }
         if (request.kind === 'invoke') {
           return invoke(request);
+        }
+        if (request.kind === 'query') {
+          return runQuery(request);
         }
         if (request.kind === 'event') {
           const diagnostics = await dispatchEvent((request as EventRequest).eventId, (request as EventRequest).payload, 0);
