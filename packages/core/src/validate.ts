@@ -33,6 +33,7 @@ import { queryPaginationStrategy, sortKeyDirection } from './query.js';
 import type { RelationshipDef } from './relationships.js';
 import { relationshipIsToOne } from './relationships.js';
 import type { ReadPolicyDef } from './read-policy.js';
+import type { MigrationDef } from './migration.js';
 import { collectionType, entityType } from './type-ref.js';
 import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD, isGroupFieldId } from './group.js';
 import type { TypeRef } from './type-ref.js';
@@ -253,6 +254,13 @@ function validateNode(node: AnyNode, context: Context): void {
       return;
     case 'read-policy':
       validateReadPolicy(node, context);
+      return;
+    case 'migration':
+      // Full semantic validation (chain contiguity, transform purity and result types,
+      // destructive classification, coverage against the schema diff) lands in the
+      // migration-validation pass; structural acceptance here keeps a `MigrationDef` a
+      // first-class node in the meantime.
+      validateMigration(node, context);
       return;
     default:
       context.errors.push({
@@ -1035,6 +1043,16 @@ function validateReadPolicy(policy: ReadPolicyDef, context: Context): void {
       nodeId: policy.id,
     });
   }
+}
+
+/**
+ * Structural acceptance of a `MigrationDef`. The full semantic pass — chain contiguity
+ * against `graph.schemaVersion`, transform-expression purity and result-type checking,
+ * destructive-operation classification, and coverage against the schema diff — is the
+ * migration-validation stage and reports its own `MIGRATION_*` codes.
+ */
+function validateMigration(_migration: MigrationDef, _context: Context): void {
+  // Intentionally minimal at this layer; see `validateMigrations` in the migration pass.
 }
 
 /** Builds the single-row scope a read policy or a query filter is evaluated in. */

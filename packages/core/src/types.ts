@@ -19,6 +19,7 @@ import type { StorageDef } from './storage.js';
 import type { QueryDef } from './query.js';
 import type { RelationshipDef } from './relationships.js';
 import type { ReadPolicyDef } from './read-policy.js';
+import type { MigrationDef } from './migration.js';
 
 export type SemanticNodeKind =
   | 'entity'
@@ -36,7 +37,8 @@ export type SemanticNodeKind =
   | 'storage'
   | 'query'
   | 'relationship'
-  | 'read-policy';
+  | 'read-policy'
+  | 'migration';
 
 /** Every semantic node kind, enumerated so tests can walk them. */
 export const SEMANTIC_NODE_KINDS: readonly SemanticNodeKind[] = [
@@ -56,6 +58,7 @@ export const SEMANTIC_NODE_KINDS: readonly SemanticNodeKind[] = [
   'query',
   'relationship',
   'read-policy',
+  'migration',
 ];
 
 export type NodeKind = SemanticNodeKind | UINodeKind;
@@ -77,6 +80,7 @@ export type AnyNode =
   | QueryDef
   | RelationshipDef
   | ReadPolicyDef
+  | MigrationDef
   | UINode;
 
 export type NodeOfKind<K extends NodeKind> = Extract<AnyNode, { kind: K }>;

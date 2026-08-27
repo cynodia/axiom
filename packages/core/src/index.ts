@@ -16,6 +16,7 @@ export * from './storage.js';
 export * from './query.js';
 export * from './relationships.js';
 export * from './read-policy.js';
+export * from './migration.js';
 export * from './renderer-capabilities.js';
 export * from './trigger-capabilities.js';
 export * from './authoring-metadata.js';
