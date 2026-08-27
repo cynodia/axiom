@@ -18,6 +18,8 @@ import {
 } from '@cynodia/axiom-core';
 import type { ActionDef, EntityDef, QueryDef, ReadPolicyDef, RelationshipDef, StateDef } from '@cynodia/axiom-core';
 import { compileToServerIR } from '@cynodia/axiom-compiler';
+import { createQueryStore } from '@cynodia/axiom-runtime';
+import type { RemoteQueryResult } from '@cynodia/axiom-runtime';
 import {
   PROTOCOL_VERSION,
   SERVER_DIAGNOSTIC_CODES,
@@ -340,6 +342,39 @@ test('a query with no registered provider is rejected clearly', async () => {
   const s = await server({ provider: false });
   const res = (await s.handle(q(QUERY_ORDERS, { pageSize: 2 }, 'admin'))) as QueryResponse;
   assert.equal(res.diagnostics[0].code, SERVER_DIAGNOSTIC_CODES.QUERY_PROVIDER_MISSING);
+});
+
+test('the client query store drives a real authority through its lifecycle', async () => {
+  const s = await server();
+  const store = createQueryStore(async (request): Promise<RemoteQueryResult> => {
+    const response = (await s.handle({
+      kind: 'query',
+      protocol: PROTOCOL_VERSION,
+      queryId: request.queryId as never,
+      ...(request.arguments ? { arguments: request.arguments } : {}),
+      ...(request.cursor ? { cursor: request.cursor } : {}),
+      ...(request.pageSize !== undefined ? { pageSize: request.pageSize } : {}),
+      credential: 'a1',
+    })) as QueryResponse;
+    return {
+      ok: response.ok,
+      diagnostics: response.diagnostics,
+      ...(response.page ? { page: response.page as never } : {}),
+      revision: response.revision,
+    };
+  });
+
+  const key = { queryId: QUERY_ORDERS as never, arguments: { [P_STATUS]: 'confirmed' } };
+  await store.load(key, { pageSize: 3 });
+  const ready = store.get(key);
+  assert.equal(ready.status, 'ready');
+  // a1 has 6 confirmed orders; the first cursor page holds 3 with more to come.
+  assert.equal(ready.page?.items.length, 3);
+  assert.equal(ready.page?.hasMore, true);
+
+  await store.loadMore(key);
+  assert.equal(store.get(key).page?.items.length, 6, 'the second page is appended');
+  assert.equal(store.get(key).page?.hasMore, false);
 });
 
 test('a query operation inside an action resolves rows and folds them, read policy applied', async () => {

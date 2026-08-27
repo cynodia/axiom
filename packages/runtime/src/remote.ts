@@ -34,6 +34,26 @@ interface ProtocolAnswer {
   diagnostics?: RuntimeDiagnostic[];
   changes?: Record<NodeId, unknown>;
   snapshot?: { revision: number; states: Record<NodeId, unknown> };
+  page?: { items: Array<Record<string, unknown>>; nextCursor: string | null; hasMore: boolean };
+  aggregate?: { rows: Array<{ key?: unknown[]; values: Record<string, unknown> }> };
+  revision?: number;
+}
+
+/** What a client hands the gateway to run a registered query (spec 0.10 §54). */
+export interface RemoteQueryRequest {
+  queryId: NodeId;
+  arguments?: Record<string, unknown>;
+  cursor?: string;
+  pageSize?: number;
+  offset?: number;
+}
+
+export interface RemoteQueryResult {
+  ok: boolean;
+  diagnostics: RuntimeDiagnostic[];
+  page?: { items: Array<Record<string, unknown>>; nextCursor: string | null; hasMore: boolean };
+  aggregate?: { rows: Array<{ key?: unknown[]; values: Record<string, unknown> }> };
+  revision: number;
 }
 
 function unreachable(message: string): RuntimeDiagnostic {
@@ -114,6 +134,35 @@ export function createHttpRemoteGateway(options: HttpRemoteGatewayOptions = {}) 
           ok: false,
           diagnostics: [unreachable(error instanceof Error ? error.message : String(error))],
           changes: {},
+        };
+      }
+    },
+
+    async query(request: RemoteQueryRequest): Promise<RemoteQueryResult> {
+      try {
+        const answer = await send({
+          kind: 'query',
+          queryId: request.queryId,
+          ...(request.arguments ? { arguments: request.arguments } : {}),
+          ...(request.cursor ? { cursor: request.cursor } : {}),
+          ...(request.pageSize !== undefined ? { pageSize: request.pageSize } : {}),
+          ...(request.offset !== undefined ? { offset: request.offset } : {}),
+        });
+        if (answer.kind === 'query-result') {
+          return {
+            ok: answer.ok === true,
+            diagnostics: answer.diagnostics ?? [],
+            ...(answer.page ? { page: answer.page } : {}),
+            ...(answer.aggregate ? { aggregate: answer.aggregate } : {}),
+            revision: answer.revision ?? 0,
+          };
+        }
+        return { ok: false, diagnostics: answer.diagnostics ?? [], revision: 0 };
+      } catch (error) {
+        return {
+          ok: false,
+          diagnostics: [unreachable(error instanceof Error ? error.message : String(error))],
+          revision: 0,
         };
       }
     },
