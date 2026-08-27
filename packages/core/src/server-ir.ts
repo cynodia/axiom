@@ -19,6 +19,8 @@ import type { QueryDef } from './query.js';
 import { queryExpressions } from './query.js';
 import type { RelationshipDef } from './relationships.js';
 import type { ReadPolicyDef } from './read-policy.js';
+import type { MigrationDef } from './migration.js';
+import { migrationExpressions } from './migration.js';
 
 /**
  * The contracts a Server IR may declare. A runtime that does not recognize the value MUST
@@ -42,6 +44,7 @@ export const SERVER_IR_CONTRACTS = [
   'axiom.server.v4',
   'axiom.server.v5',
   'axiom.server.v6',
+  'axiom.server.v7',
 ] as const;
 
 export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
@@ -50,7 +53,7 @@ export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
 export const SERVER_IR_CONTRACT: ServerIRContract = 'axiom.server.v1';
 
 /** The newest contract this implementation produces and executes. */
-export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v6';
+export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v7';
 
 /** Operation kinds no contract before `axiom.server.v5` contains. */
 export const SERVER_IR_V5_OPERATION_KINDS: readonly string[] = [
@@ -159,6 +162,22 @@ export function usesExternalIOVocabulary(ir: {
 }
 
 /**
+ * Whether a document uses 0.11's schema-evolution vocabulary — a `MigrationDef`, or a
+ * `schemaVersion` past the default `1`. A v6 runtime knows nothing of semantic schema
+ * identity: it would start against persisted data at an older schema and let queries and
+ * actions fail later in arbitrary ways (spec11 §12). Any of it present requires
+ * `axiom.server.v7`, computed from actual usage the same way the earlier predicates decide
+ * their tiers — a document with no migrations and `schemaVersion` 1 still labels itself
+ * v6 or lower, byte-identical to what it always produced.
+ */
+export function usesMigrationVocabulary(ir: {
+  migrations?: readonly unknown[];
+  schemaVersion?: number;
+}): boolean {
+  return (ir.migrations?.length ?? 0) > 0 || (ir.schemaVersion ?? 1) > 1;
+}
+
+/**
  * Whether a document uses 0.10's semantic data-access vocabulary — a `QueryDef`, a
  * `RelationshipDef`, a `ReadPolicyDef`, or a `query` operation inside an action. A v5
  * runtime knows none of it: it would accept a document that promises demand-driven,
@@ -202,6 +221,7 @@ export function serverIRExpressions(ir: {
   storages?: readonly StorageDef[];
   queries?: readonly QueryDef[];
   readPolicies?: readonly ReadPolicyDef[];
+  migrations?: readonly MigrationDef[];
 }): Expression[] {
   const found: Expression[] = [];
   for (const state of ir.states) {
@@ -243,6 +263,9 @@ export function serverIRExpressions(ir: {
   }
   for (const policy of ir.readPolicies ?? []) {
     found.push(policy.predicate);
+  }
+  for (const migration of ir.migrations ?? []) {
+    found.push(...migrationExpressions(migration));
   }
   return found;
 }
@@ -316,6 +339,18 @@ export interface ServerIR {
   id: string;
   name: string;
   version: string;
+  /**
+   * The application's semantic schema version (spec11 §6). Present in every
+   * `axiom.server.v7` document; absent below it, where it is implicitly `1` and no
+   * migration checking applies.
+   */
+  schemaVersion?: number;
+  /**
+   * The deterministic fingerprint of this document's persistence-relevant semantic
+   * structure (spec11 §9). Present in every `axiom.server.v7` document. A provider stores
+   * it; startup compares the stored value to this one.
+   */
+  schemaFingerprint?: string;
   entities: EntityDef[];
   /** Field lookup, pre-indexed so a runtime re-derives nothing. */
   fields: Record<FieldId, FieldIndexEntry>;
@@ -376,4 +411,10 @@ export interface ServerIR {
    * cannot satisfy one by claiming to.
    */
   readPolicies?: ReadPolicyDef[];
+  /**
+   * Semantic migrations between consecutive schema versions (spec11 §14). Present only in an
+   * `axiom.server.v7` document. Portable plain data — a closed operation vocabulary and
+   * `Expression` transform leaves, never SQL, a callback or a provider handle (spec11 §88).
+   */
+  migrations?: MigrationDef[];
 }

@@ -248,6 +248,7 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
       case 'query':
       case 'relationship':
       case 'read-policy':
+      case 'migration':
         // Server-only vocabulary: no client concern ever needs to know an integration, its
         // operations, the events it can raise (spec §80), the live sources it subscribes to,
         // the object stores it reaches, or — new in 0.10 — the registered queries,

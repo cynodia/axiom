@@ -19,6 +19,8 @@ const {
   SERVER_IR_V2_EXPRESSION_KINDS,
   SERVER_IR_V5_OPERATION_KINDS,
   SERVER_IR_V6_OPERATION_KINDS,
+  MIGRATION_OPERATION_KINDS,
+  MIGRATION_REVERSIBILITIES,
   SUBSCRIPTION_BACKPRESSURE_POLICIES,
   SUBSCRIPTION_FAILURE_POLICIES,
 } = core;
@@ -121,6 +123,13 @@ const buildServerIR = (contract) => ({
           queries: { type: 'array', items: ref('QueryDef') },
           relationships: { type: 'array', items: ref('RelationshipDef') },
           readPolicies: { type: 'array', items: ref('ReadPolicyDef') },
+        }
+      : {}),
+    ...(atLeast(contract, 'axiom.server.v7')
+      ? {
+          schemaVersion: { type: 'integer', minimum: 1 },
+          schemaFingerprint: { type: 'string' },
+          migrations: { type: 'array', items: ref('MigrationDef') },
         }
       : {}),
   },
@@ -616,6 +625,98 @@ const buildServerIR = (contract) => ({
               readPolicyId: id,
             },
             ['id', 'kind', 'source', 'rowScopeId'],
+          ),
+        }),
+
+    ...(!atLeast(contract, 'axiom.server.v7')
+      ? {}
+      : {
+          MigrationConstant: object({ id, value: ref('LiteralValue') }, ['id', 'value']),
+          MigrationOperation: {
+            description: `The closed migration operation vocabulary: ${[...MIGRATION_OPERATION_KINDS].join(', ')}.`,
+            oneOf: [
+              variant('add-entity', { id, destructive: { type: 'boolean' }, entity: ref('EntityDef') }, ['id', 'entity']),
+              variant('remove-entity', { id, destructive: { type: 'boolean' }, entityId: id }, ['id', 'entityId']),
+              variant(
+                'add-field',
+                {
+                  id,
+                  destructive: { type: 'boolean' },
+                  entityId: id,
+                  field: ref('FieldDef'),
+                  populate: expression,
+                  constants: { type: 'array', items: ref('MigrationConstant') },
+                },
+                ['id', 'entityId', 'field'],
+              ),
+              variant('remove-field', { id, destructive: { type: 'boolean' }, entityId: id, fieldId: id }, ['id', 'entityId', 'fieldId']),
+              variant(
+                'change-field',
+                {
+                  id,
+                  destructive: { type: 'boolean' },
+                  entityId: id,
+                  fieldId: id,
+                  to: object({ valueType: ref('TypeRef'), required: { type: 'boolean' } }),
+                },
+                ['id', 'entityId', 'fieldId', 'to'],
+              ),
+              variant(
+                'populate-field',
+                {
+                  id,
+                  destructive: { type: 'boolean' },
+                  entityId: id,
+                  fieldId: id,
+                  value: expression,
+                  constants: { type: 'array', items: ref('MigrationConstant') },
+                },
+                ['id', 'entityId', 'fieldId', 'value'],
+              ),
+              variant(
+                'transform-field',
+                {
+                  id,
+                  destructive: { type: 'boolean' },
+                  entityId: id,
+                  fieldId: id,
+                  fromType: ref('TypeRef'),
+                  toType: ref('TypeRef'),
+                  expression,
+                  constants: { type: 'array', items: ref('MigrationConstant') },
+                },
+                ['id', 'entityId', 'fieldId', 'fromType', 'toType', 'expression'],
+              ),
+              variant(
+                'transform-record',
+                {
+                  id,
+                  destructive: { type: 'boolean' },
+                  entityId: id,
+                  produce: expression,
+                  removesFields: { type: 'array', items: id },
+                  addsFields: { type: 'array', items: id },
+                  constants: { type: 'array', items: ref('MigrationConstant') },
+                },
+                ['id', 'entityId', 'produce'],
+              ),
+              variant('add-relationship', { id, destructive: { type: 'boolean' }, relationship: ref('RelationshipDef') }, ['id', 'relationship']),
+              variant('remove-relationship', { id, destructive: { type: 'boolean' }, relationshipId: id }, ['id', 'relationshipId']),
+            ],
+          },
+          MigrationDef: object(
+            {
+              id,
+              kind: { const: 'migration' },
+              name: { type: 'string' },
+              metadata: { type: 'object' },
+              fromSchema: { type: 'integer', minimum: 1 },
+              toSchema: { type: 'integer', minimum: 2 },
+              operations: { type: 'array', items: ref('MigrationOperation') },
+              reversibility: { enum: [...MIGRATION_REVERSIBILITIES] },
+              reverseOperations: { type: 'array', items: ref('MigrationOperation') },
+            },
+            ['id', 'kind', 'fromSchema', 'toSchema', 'operations'],
           ),
         }),
   },

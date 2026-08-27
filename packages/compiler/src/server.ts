@@ -6,12 +6,15 @@ import {
   isObservable,
   maxContract,
   requiredServerContract,
+  schemaFingerprint,
+  stripAuthoringMetadata,
   serverIRExpressions,
   serverStateClosure,
   stateAuthority,
   usesExternalIOVocabulary,
   usesIntegrationVocabulary,
   usesInvocationVocabulary,
+  usesMigrationVocabulary,
   usesQueryVocabulary,
   usesV4Semantics,
   validateGraph,
@@ -27,6 +30,7 @@ import type {
   IntegrationDef,
   IntegrationOperationDef,
   NodeId,
+  MigrationDef,
   QueryDef,
   ReadPolicyDef,
   RelationshipDef,
@@ -76,6 +80,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
   const queries: QueryDef[] = [];
   const relationships: RelationshipDef[] = [];
   const readPolicies: ReadPolicyDef[] = [];
+  const migrations: MigrationDef[] = [];
   for (const node of nodes) {
     if (node.kind === 'entity') {
       entities.push(node);
@@ -106,6 +111,18 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
       relationships.push(node);
     } else if (node.kind === 'read-policy') {
       readPolicies.push(node);
+    } else if (node.kind === 'migration') {
+      // A migration is authority-side by construction: only the authoritative runtime
+      // executes a schema evolution, and only against persisted canonical data (spec11
+      // §73). It never reaches a client. Authoring markers on the migration or its
+      // operations are stripped like any other trust-boundary payload.
+      migrations.push({
+        ...stripAuthoringMetadata(node),
+        operations: node.operations.map((operation) => stripAuthoringMetadata(operation)),
+        ...(node.reverseOperations
+          ? { reverseOperations: node.reverseOperations.map((operation) => stripAuthoringMetadata(operation)) }
+          : {}),
+      });
     }
   }
 
@@ -155,10 +172,26 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     fields[entry.field.id] = entry;
   }
 
+  // Schema-evolution vocabulary is emitted only when the document actually uses it — a
+  // migration node, or a schemaVersion past the default 1. A plain graph compiles to the
+  // byte-identical pre-v7 document it always did, so the frozen v1–v6 contracts and their
+  // conformance fixtures are untouched (spec11 §87).
+  const emitSchemaEvolution = usesMigrationVocabulary({
+    migrations,
+    schemaVersion: graph.schemaVersion,
+  });
+
   const rules = {
     id: graph.id,
     name: graph.name,
     version: graph.version,
+    ...(emitSchemaEvolution
+      ? {
+          schemaVersion: graph.schemaVersion,
+          schemaFingerprint: schemaFingerprint(graph),
+          ...(migrations.length > 0 ? { migrations } : {}),
+        }
+      : {}),
     entities,
     fields,
     states,
@@ -208,6 +241,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     usesV4Semantics(document) ? 'axiom.server.v4' : 'axiom.server.v1',
     usesExternalIOVocabulary(document) ? 'axiom.server.v5' : 'axiom.server.v1',
     usesQueryVocabulary(document) ? 'axiom.server.v6' : 'axiom.server.v1',
+    usesMigrationVocabulary(document) ? 'axiom.server.v7' : 'axiom.server.v1',
   ];
   const contract = contractCandidates.reduce(maxContract);
 

@@ -647,8 +647,9 @@ page plus the conformance fixtures.
 | `axiom.server.v4` | `ActionDef.invocation.allowedSources` invocation-source restriction, and the structured effect-outcome envelope (`effectOutcomeEntity`, `EFFECT_ID_FIELD` and its sibling reserved fields) that every effect dispatch uses from 8.1 onward | 0.8.1 |
 | `axiom.server.v5` | `SubscriptionDef` and `StorageDef`, and the `blob-metadata`/`blob-commit`/`blob-delete` operation kinds — the inbound external-I/O direction and binary object storage | 0.9.0 |
 | `axiom.server.v6` | `QueryDef`, `RelationshipDef` and `ReadPolicyDef`, the `query` operation kind, and the `provider-record` location — the semantic data-access & query layer over large authoritative datasets | 0.10.0 |
+| `axiom.server.v7` | `MigrationDef` and the closed migration-operation vocabulary, plus the top-level `schemaVersion` and `schemaFingerprint` fields — semantic schema evolution over persisted canonical data | 0.11.0 |
 
-`SERVER_IR_CONTRACTS` enumerates all six, and is the single source of truth this table is
+`SERVER_IR_CONTRACTS` enumerates all seven, and is the single source of truth this table is
 tested against — `packages/demo/test/documentation.test.ts` fails if a contract in
 `SERVER_IR_CONTRACTS` has no row here, or a row here names a contract the code does not
 declare (spec 8.2 §7-8). The rules:
@@ -660,7 +661,8 @@ declare (spec 8.2 §7-8). The rules:
 
 There is one JSON Schema per contract, each generated from the runtime's own vocabulary and
 each shipped: `server-ir.v1.schema.json`, `server-ir.v2.schema.json`, `server-ir.v3.schema.json`,
-`server-ir.v4.schema.json`, `server-ir.v5.schema.json`, `server-ir.v6.schema.json`.
+`server-ir.v4.schema.json`, `server-ir.v5.schema.json`, `server-ir.v6.schema.json`,
+`server-ir.v7.schema.json`.
 
 **`SubscriptionDef`, `StorageDef` and the blob operations.** Their normative semantics —
 lifecycle states and transitions, at-least-once delivery, per-subscription ordering and the
