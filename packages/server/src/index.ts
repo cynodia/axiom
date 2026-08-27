@@ -30,6 +30,8 @@ export * from './sql-query.js';
 export * from './query-conformance.js';
 export * from './migration.js';
 export * from './migration-store.js';
+export * from './migration-eval.js';
+export * from './migration-executor.js';
 export { createSqliteDataProvider, isSqliteAvailable as isSqliteDataProviderAvailable } from './sqlite-data-provider.js';
 export type { SqliteDataProviderOptions } from './sqlite-data-provider.js';
 export * from './effects.js';
