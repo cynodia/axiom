@@ -90,6 +90,12 @@ export interface ApplicationGraphData {
   id: string;
   name: string;
   version: string;
+  /**
+   * The application's **semantic schema version** (spec11 §6): a monotonic integer,
+   * independent of `version` (the npm/marketing string) and of the Server IR contract. A
+   * `MigrationDef` chain connects consecutive integers. Absent means `1`.
+   */
+  schemaVersion?: number;
   nodes: Record<NodeId, AnyNode>;
   edges: Record<string, GraphEdge>;
   /** Visual identity. Presentation only: a theme can never change behaviour. */

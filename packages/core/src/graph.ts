@@ -61,6 +61,23 @@ export class ApplicationGraph {
   }
 
   /**
+   * The application's semantic schema version (spec11 §6) — a monotonic integer, distinct
+   * from {@link version}. Defaults to `1`. A `MigrationDef` chain must connect every
+   * integer from the persisted version up to this one.
+   */
+  get schemaVersion(): number {
+    return this.data.schemaVersion ?? 1;
+  }
+
+  setSchemaVersion(schemaVersion: number): void {
+    if (!Number.isInteger(schemaVersion) || schemaVersion < 1) {
+      throw new Error(`schemaVersion must be a positive integer, got ${schemaVersion}`);
+    }
+    this.data.schemaVersion = schemaVersion;
+    this.revision += 1;
+  }
+
+  /**
    * The application's visual identity, completed against the default theme. A theme is
    * presentation only: changing it cannot change an action, a constraint or a route.
    */
