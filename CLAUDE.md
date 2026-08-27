@@ -190,6 +190,32 @@ which is compiled and run. Edit one and you must edit the other.
 `scripts/verify-packages.mjs` fails the release if any document is missing from the
 tarball. An external consumer must never need repository access to obtain the contract.
 
+**Discoverability is part of the API.** A blind external-agent test found the contract only
+after the agent had guessed at the API, failed, searched the web and cloned this repository —
+`docs/AGENT_REFERENCE.md` was already installed the whole time. Documentation an unfamiliar
+agent cannot discover costs almost as much as documentation that does not exist, so three
+files at the facade's package root exist purely to route:
+
+| File | Role |
+| ---- | ---- |
+| `packages/axiom/README.md` | The npm landing page. Its **first** section after the title is the entry point: what Axiom is, who it is for, `docs/AGENT_REFERENCE.md` as the start, the `.d.ts` as the API contract, and the escalation order. Then the documentation map. |
+| `packages/axiom/AGENTS.md` | The cross-vendor agent instruction file. Routing and prohibitions only — never a copy of this file, which is maintainer-facing. |
+| `packages/axiom/llms.txt` | The LLM documentation-discovery convention. A compact annotated index, not a second reference. |
+
+All three must name `docs/AGENT_REFERENCE.md` in their first quarter, must reference only
+paths the tarball actually contains, and must stay vendor-neutral — `AGENTS.md` and `llms.txt`
+are conventions, not one model's file. `scripts/verify-packages.mjs` checks the packed
+artifact, `scripts/discoverability-probe.mjs` (`npm run release:probe`) reconstructs what a
+cold agent sees from the tarball alone, and the AI-entry-point tests in
+`packages/demo/test/documentation.test.ts` check the sources. Adding a document to `docs/`
+means adding a row to the facade README's map, or that test fails.
+
+**There is deliberately no consumer-facing `CLAUDE.md` at the package root.** `AGENTS.md` is
+the vendor-neutral convention and covers every agent; a second file would either duplicate it
+or drift from it, and a `CLAUDE.md` inside `node_modules/@cynodia/axiom` is not auto-loaded by
+Claude Code anyway — the file that is loaded is the *consuming project's* own. This `CLAUDE.md`
+is maintainer-facing and must never be published.
+
 **Every declared diagnostic code must be reachable.** An agent should never have to
 discover a code by causing a failure, which is impossible for a code that can never occur.
 Adding a code to `VALIDATION_CODES` or `RUNTIME_DIAGNOSTIC_CODES` means emitting it and

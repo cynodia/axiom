@@ -1,13 +1,39 @@
 # Axiom
 
-AI-native semantic application framework.
+AI-native semantic application framework. An application is a typed semantic graph, not
+source files.
 
-Axiom represents application behavior, state, UI structure and presentation as structured
-semantic data executed by generic runtimes. An application is a typed graph, not source
-files: the JavaScript and HTML that reach the browser are output, and are never edited.
+## AI agents: read this first
+
+**Read [`docs/AGENT_REFERENCE.md`](docs/AGENT_REFERENCE.md) before writing any Axiom code.**
+It ships inside this package, so no repository access, web search or framework source
+inspection is needed to obtain the contract.
+
+| | |
+| --- | --- |
+| **What** | A semantic application framework. State, behavior, constraints, UI structure, presentation and authority are structured data executed by generic runtimes. |
+| **Who for** | AI-authored applications. The primary author of an Axiom application is a coding agent; human readability is explicitly not the optimization target. |
+| **Start** | [`docs/AGENT_REFERENCE.md`](docs/AGENT_REFERENCE.md) — the compressed operational contract for application authors. |
+| **API contract** | The published `.d.ts` declarations in `dist/`. Authoritative for signatures, unions and branded types. |
+| **Deeper semantics** | The focused documents in `docs/` — [map below](#documentation-map). |
+| **Escalation** | `docs/AGENT_REFERENCE.md` → `.d.ts` → the focused `docs/` document for the topic → a minimal public-API probe. |
+
+Axiom's vocabulary is deliberately unlike React, Vue, Angular, Svelte or Express: there is no
+component, no hook, no JSX, no route handler, no ORM and no callback anywhere in the graph.
+Guessing the API from those conventions produces graphs `validateGraph` rejects, so reading
+the reference first is cheaper than any number of attempts.
+
+**Reading the framework's implementation source should not be necessary to author an
+application.** `docs/` plus the `.d.ts` declarations are intended to be sufficient on their
+own. Source inspection is a legitimate tool for debugging Axiom itself; it is not the way to
+discover normal consumer usage, and cloning the repository for that purpose is a sign the
+documentation above was missed.
+
+Shorter forms of the same routing: [`AGENTS.md`](AGENTS.md) and [`llms.txt`](llms.txt), both
+at this package's root.
 
 **Status: experimental / alpha.** The API may change between alpha releases. The
-documentation in `docs/` describes this exact version.
+documentation in `docs/` describes this exact version, `0.10.0-alpha.1`.
 
 ## Installation
 
@@ -16,6 +42,17 @@ npm install @cynodia/axiom            # the graph, compiler, runtime and agent A
 npm install @cynodia/axiom-ui         # semantic UI authoring patterns (build time only)
 npm install @cynodia/axiom-server     # only if the application has an authority
 ```
+
+Every release of this project is a pre-release and npm's `latest` tag points at it, so the
+plain command above installs the current version. **There is no `alpha` dist-tag** — the tag
+was removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` now
+fails with a 404. Pin the exact version instead when one is needed:
+`npm install @cynodia/axiom@0.10.0-alpha.1`.
+
+These are ES modules compiled to ES2022; import them with `import`, not `require`. There is
+no published Axiom CLI. `@cynodia/axiom-server`'s SQLite persistence adapter additionally
+needs a Node build that provides `node:sqlite` (Node 22 or newer); `isSqliteAvailable()`
+reports its absence rather than failing at import.
 
 ## Canonical mental model
 
@@ -124,30 +161,40 @@ console.log(app.getState(COUNT)); // 1
 
 `compileToHtml(graph)` emits the same application as one self-contained page.
 
-## Documentation
+## Documentation map
 
-The complete operational contract ships with this package, in `docs/`.
+The complete operational contract ships with this package, in `docs/`. Every path below
+resolves inside the installed package. Read `docs/AGENT_REFERENCE.md` first; reach for a
+focused document when the reference is not specific enough for the question at hand.
 
 | Need to understand | Read |
 | --- | --- |
-| Compressed reference for authoring or modifying an app | `docs/AGENT_REFERENCE.md` |
-| Exact runtime guarantees | `docs/SEMANTIC_CONTRACT.md` |
-| Graph, ids, types, entity value representation | `docs/GRAPH_MODEL.md` |
-| Every expression kind, builtin and scope rule | `docs/EXPRESSIONS.md` |
-| Addressing writable positions | `docs/LOCATIONS.md` |
-| Stored, derived, draft and ephemeral state | `docs/STATE.md` |
-| Actions, operations, transactions, iteration | `docs/ACTIONS_TRANSACTIONS.md` |
-| Constraints and transition constraints | `docs/CONSTRAINTS.md` |
-| Semantic UI nodes and bindings | `docs/UI.md` |
-| Presentation, UX intent, themes, formatting | `docs/PRESENTATION.md` |
-| Runtime API and diagnostic codes | `docs/RUNTIME.md` |
-| Server authority, Server IR, the protocol and persistence | `docs/AUTHORITY.md` |
-| Machine queries and graph transformations | `docs/AGENT_API.md` |
-| Validation codes | `docs/VALIDATION.md` |
-| Mistakes that compile but are wrong | `docs/ANTI_PATTERNS.md` |
+| **Compressed contract for authoring or modifying an app — start here** | [`docs/AGENT_REFERENCE.md`](docs/AGENT_REFERENCE.md) |
+| Exact runtime guarantees, stated formally | [`docs/SEMANTIC_CONTRACT.md`](docs/SEMANTIC_CONTRACT.md) |
+| Mistakes that compile but are wrong | [`docs/ANTI_PATTERNS.md`](docs/ANTI_PATTERNS.md) |
+| Graph, node kinds, ids, types, entity value representation | [`docs/GRAPH_MODEL.md`](docs/GRAPH_MODEL.md) |
+| Every expression kind, builtin, scope, presence and null rule | [`docs/EXPRESSIONS.md`](docs/EXPRESSIONS.md) |
+| Addressing writable positions | [`docs/LOCATIONS.md`](docs/LOCATIONS.md) |
+| Stored, derived, draft and ephemeral state | [`docs/STATE.md`](docs/STATE.md) |
+| Actions, operations, guards, transactions, iteration | [`docs/ACTIONS_TRANSACTIONS.md`](docs/ACTIONS_TRANSACTIONS.md) |
+| Constraints and transition constraints | [`docs/CONSTRAINTS.md`](docs/CONSTRAINTS.md) |
+| Semantic UI nodes, interaction primitives and bindings | [`docs/UI.md`](docs/UI.md) |
+| Presentation, UX intent, themes, value formatting | [`docs/PRESENTATION.md`](docs/PRESENTATION.md) |
+| Runtime API, startup lifecycle and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
+| Validation codes and what rejects a graph | [`docs/VALIDATION.md`](docs/VALIDATION.md) |
+| Server authority, the trust boundary, Server IR, the protocol, persistence, deployment | [`docs/AUTHORITY.md`](docs/AUTHORITY.md) |
+| External systems: integration definitions, query operations, adapters, secrets | [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) |
+| External effects: the outbox, retries, delivery guarantees, outcomes | [`docs/EFFECTS.md`](docs/EFFECTS.md) |
+| Typed events, webhooks, the dispatch pipeline | [`docs/EVENTS.md`](docs/EVENTS.md) |
+| Timed and lifecycle execution, event-invoked actions | [`docs/TRIGGERS.md`](docs/TRIGGERS.md) |
+| Live inbound streams: lifecycle, delivery, deduplication, backpressure | [`docs/SUBSCRIPTIONS.md`](docs/SUBSCRIPTIONS.md) |
+| Binary data: `BlobRef`, upload, download, authorization, orphans | [`docs/STORAGE.md`](docs/STORAGE.md) |
+| Large authoritative datasets: `QueryDef`, relationships, read policy, providers, cursors, cache | [`docs/QUERIES.md`](docs/QUERIES.md) |
+| Machine queries, mutation impact and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 
-Start with `docs/AGENT_REFERENCE.md`. It plus the `.d.ts` declarations are intended to be
-sufficient on their own.
+`docs/AGENT_REFERENCE.md` plus the `.d.ts` declarations are intended to be sufficient on
+their own. If they are not, that is a documentation defect worth reporting rather than a
+reason to read framework source.
 
 ## What is in the box
 

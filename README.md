@@ -14,6 +14,30 @@ handler, SQL statement or line of client JavaScript in an Axiom application.
 **Status: experimental / alpha.** The API may change between alpha releases. This
 documentation describes 0.10.0-alpha.1.
 
+## AI agents: read this first
+
+**Read [`docs/AGENT_REFERENCE.md`](docs/AGENT_REFERENCE.md) before writing any Axiom code.**
+
+| | |
+| --- | --- |
+| **What** | A semantic application framework. State, behavior, constraints, UI structure, presentation and authority are structured data executed by generic runtimes. |
+| **Who for** | AI-authored applications. The primary author of an Axiom application is a coding agent. |
+| **Start** | [`docs/AGENT_REFERENCE.md`](docs/AGENT_REFERENCE.md) — the compressed operational contract for application authors. |
+| **API contract** | The published `.d.ts` declarations. |
+| **Deeper semantics** | The focused documents in `docs/` — [map below](#documentation-map). |
+| **Escalation** | `docs/AGENT_REFERENCE.md` → `.d.ts` → the focused `docs/` document for the topic → a minimal public-API probe. |
+
+Axiom's vocabulary is deliberately unlike React, Vue, Angular, Svelte or Express: there is no
+component, no hook, no JSX, no route handler, no ORM and no callback anywhere in the graph.
+Guessing the API from those conventions produces graphs `validateGraph` rejects.
+
+**Nothing here needs to be cloned to author an application.** The whole of `docs/` and the
+`.d.ts` declarations ship inside `@cynodia/axiom`, alongside `AGENTS.md` and `llms.txt` at the
+installed package root, which carry the same routing in shorter form. Reading framework
+implementation source is a tool for debugging Axiom itself, not the way to discover normal
+consumer usage. This repository is for working **on** Axiom; the published package is
+sufficient for working **with** it.
+
 ## Who this is for
 
 > **The primary developer of an Axiom application is an AI coding agent.** Humans are a
@@ -147,6 +171,12 @@ npm install @cynodia/axiom            # the graph, compiler, runtime and agent A
 npm install @cynodia/axiom-ui         # semantic UI authoring patterns (build time only)
 npm install @cynodia/axiom-server     # only if the application has an authority
 ```
+
+Every release of this project is a pre-release and npm's `latest` tag points at it, so the
+plain commands above install the current version. **There is no `alpha` dist-tag** — it was
+removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` fails with a
+404. Pin the exact version instead when one is needed:
+`npm install @cynodia/axiom@0.10.0-alpha.1`.
 
 The server package is separate rather than re-exported, because it imports `node:http` and
 `node:sqlite` and a browser bundle must not.
@@ -492,6 +522,7 @@ the published package — no repository access is needed to obtain the contract.
 | Typed facts, webhooks, event dispatch | [`docs/EVENTS.md`](docs/EVENTS.md) |
 | **Live external event streams: lifecycle, delivery, backpressure** | [`docs/SUBSCRIPTIONS.md`](docs/SUBSCRIPTIONS.md) |
 | **Binary data: BlobRef, upload, download, authorization, orphans** | [`docs/STORAGE.md`](docs/STORAGE.md) |
+| **Large authoritative datasets: `QueryDef`, relationships, read policy, providers, cursors** | [`docs/QUERIES.md`](docs/QUERIES.md) |
 | Runtime API, startup lifecycle and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
 | Machine queries and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 | Validation codes and what rejects a graph | [`docs/VALIDATION.md`](docs/VALIDATION.md) |

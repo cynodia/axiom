@@ -6,6 +6,40 @@ declarations before authoring or modifying an Axiom application.
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
 [`ANTI_PATTERNS.md`](ANTI_PATTERNS.md).
 
+## Start here
+
+```bash
+npm install @cynodia/axiom            # graph, compiler, runtime, agent API
+npm install @cynodia/axiom-ui         # semantic UI authoring patterns, build time only
+npm install @cynodia/axiom-server     # only if a StateDef declares server authority
+```
+
+Everything is imported from `@cynodia/axiom`; the four re-exported packages need not be
+installed individually. There is no published CLI.
+
+A complete runnable skeleton — graph, state, action, UI, route, compile, run — is the
+minimal application in [`../README.md`](../README.md). Read this document for the rules;
+copy that for the shape.
+
+**Escalation order.** This document → the `.d.ts` declarations → the focused document for the
+topic → a minimal public-API probe: build the smallest graph that isolates the question, call
+`validateGraph`, read the returned codes. Reading Axiom's own implementation source is for
+debugging the framework, not for authoring an application.
+
+**How much of this to read.** Everything up to and including
+[Agent API](#agent-api) applies to every Axiom application. If no `StateDef` declares
+`authority: 'server'`, the application is client-only and
+[SERVER AUTHORITY](#server-authority) onwards — authority, integrations, effects, triggers,
+subscriptions, storage — describes capability it does not use; skim the headings and stop.
+Read [`ANTI_PATTERNS.md`](ANTI_PATTERNS.md) **before** the first attempt, not the second:
+collection nulls, repeat scope binding and identity-over-index selectors all shape a first
+draft.
+
+**Do not guess from React, Vue, Angular, Svelte or Express.** Axiom has no component, no hook,
+no JSX, no route handler, no ORM and no callback in the graph. There is no `formatter: fn`, no
+`validator: fn`, no raw-CSS channel and no stored closure anywhere; new capability arrives as
+an inspectable node, never as a function you supply.
+
 ## Glossary
 
 One canonical term per concept. These are not interchangeable.
@@ -31,7 +65,7 @@ One canonical term per concept. These are not interchangeable.
 ## Graph construction
 
 ```ts
-const graph = new ApplicationGraph(id, name);      // version defaults to '0.8.2'
+const graph = new ApplicationGraph(id, name);      // version defaults to '0.10.0'
 graph.addNode<StateDef>({ id, kind: 'state', ... }); // returns NodeId; throws if id exists
 graph.getNode<StateDef>(id);                        // deep clone, or undefined
 graph.updateNode(node);                             // write a modified node back
@@ -323,6 +357,13 @@ boolean types (`TYPE_MISMATCH`).
 Every kind is in `UI_NODE_KINDS`: `view` `container` `text` `repeat` `field-display` `form`
 `input` `button` `conditional` `diagnostic` `dialog`. Detail: [`UI.md`](UI.md).
 
+Every kind carries the same base, and `visibleWhen` lives here rather than in
+`presentation`:
+
+```ts
+{ id, kind, name?, visibleWhen?: Expression, presentation?: Presentation, metadata? }
+```
+
 - `RepeatNode` binds the current item to **the repeat node's own id**; the template refers to it as `ref(repeatNodeId)`.
 - `InputNode.binding` is `{ location }` — no expression, no field id. An input write goes through the same mutation engine and transaction as an action.
 - `ButtonNode.arguments` is keyed by **action parameter id**.
@@ -411,6 +452,22 @@ presentation: {
   control?, responsive?, rendererOverrides?,
 }
 ```
+
+Every value is a closed vocabulary, exported as an array; a token outside it is a validation
+**error**, never a silently ignored value. The four an application reaches for constantly:
+
+| Property | Vocabulary | Array |
+| --- | --- | --- |
+| `layout` | `vertical` `horizontal` `grid` `stack` | `LAYOUT_KINDS` |
+| `gap`, `padding` | `none` `xsmall` `small` `medium` `large` `xlarge` | `SPACING_TOKENS` |
+| `textRole` | `body` `caption` `label` `heading` `title` `display` | `TEXT_ROLES` |
+| `density` | `compact` `comfortable` `spacious` | `DENSITIES` |
+
+`layout: 'horizontal'` is shorthand for `layout: { kind: 'horizontal', gap?, align?, justify?,
+wrap?, columns? }` — a bare token or the object, never a third form. `stack` is a tight
+vertical column, not overlapping children. Every other vocabulary — roles, UX roles, surfaces,
+treatments, icons, control variants, sizing, value formats, device classes —
+is in [`PRESENTATION.md`](PRESENTATION.md); read it before guessing a token.
 
 Resolution precedence, lowest first:
 

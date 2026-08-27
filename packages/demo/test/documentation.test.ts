@@ -86,6 +86,16 @@ const PACKAGE_READMES: [string, string][] = readdirSync(path.join(repoRoot, 'pac
   .filter((file) => existsSync(path.join(repoRoot, file)))
   .map((file) => [file, read(file)]);
 
+/**
+ * The facade's AI entry points: the files a cold agent sees at the installed package root.
+ * Their whole job is to route the reader to the contract before anything is authored.
+ */
+const AI_ENTRY_POINTS = ['README.md', 'AGENTS.md', 'llms.txt'] as const;
+const FIRST_READ = 'docs/AGENT_REFERENCE.md';
+const facadeEntryPoints = new Map<string, string>(
+  AI_ENTRY_POINTS.map((name) => [name, read(`packages/axiom/${name}`)]),
+);
+
 /** Every fenced TypeScript block in the documentation. */
 function codeBlocks(): string[] {
   const blocks: string[] = [];
@@ -477,7 +487,7 @@ test('no document claims to describe a version other than the current one', () =
   const version = JSON.parse(read('package.json')).version as string;
   const release = version.replace(/-.*$/, '');
   const stale = new Set<string>();
-  for (const [file, source] of [...ALL_DOCS, ...PACKAGE_READMES]) {
+  for (const [file, source] of [...ALL_DOCS, ...PACKAGE_READMES, ...facadeEntryPoints]) {
     // Links to the specification documents carry their own historical version numbers.
     const prose = source.replace(/specs\/spec[\d.]*\.md/g, '');
     // A document "names a version" when it states which one it describes, or names a
@@ -752,4 +762,166 @@ test('every UI node kind is listed wherever the kinds are enumerated', () => {
       assert.ok(listed.includes(kind), `${file} enumerates the UI kinds but omits ${kind}`);
     }
   }
+});
+
+// ------------------------------------------------ the AI entry points (discoverability)
+
+/**
+ * A blind external-agent test found Axiom's contract only after the agent had guessed at the
+ * API, failed, searched the web and cloned this repository. The documentation existed; the
+ * route to it did not. Discoverability is therefore part of the API, and the route is tested
+ * like the rest of the contract — including against the drift that made it necessary
+ * ("README says docs/QUERY.md, the package ships docs/QUERIES.md").
+ *
+ * The packed artifact is checked separately by scripts/verify-packages.mjs and
+ * scripts/discoverability-probe.mjs. These tests check the sources those pack.
+ */
+test('the facade ships an AI entry point at its root, and each names the starting document', () => {
+  for (const [name, source] of facadeEntryPoints) {
+    assert.ok(
+      source.includes(FIRST_READ),
+      `packages/axiom/${name} does not route the reader to ${FIRST_READ}`,
+    );
+    // Buried routing is not routing: an agent reads the top of the file and stops.
+    const share = source.indexOf(FIRST_READ) / source.length;
+    assert.ok(
+      share <= 0.25,
+      `packages/axiom/${name} names ${FIRST_READ} only ${(share * 100).toFixed(0)}% into the file`,
+    );
+  }
+});
+
+test('the facade manifest whitelists the AI entry points', () => {
+  const files = JSON.parse(read('packages/axiom/package.json')).files as string[];
+  for (const name of AI_ENTRY_POINTS) {
+    assert.ok(files.includes(name), `the facade manifest does not whitelist ${name}`);
+  }
+});
+
+test('every package-local path the AI entry points name is a file the facade ships', () => {
+  const packed = new Set<string>([
+    ...AI_ENTRY_POINTS,
+    'LICENSE',
+    'dist/index.js',
+    'dist/index.d.ts',
+    ...DOC_FILES.map((name) => `docs/${name}`),
+  ]);
+  const broken: string[] = [];
+  for (const [name, source] of facadeEntryPoints) {
+    const targets = new Set<string>();
+    for (const match of source.matchAll(/\]\((?!https?:|#)([^)\s]+)\)/g)) {
+      targets.add(match[1].split('#')[0]);
+    }
+    // Paths named in prose or in a table cell, not only as links.
+    for (const match of source.matchAll(/(?<![\w/-])(docs\/[A-Z_]+\.md|dist\/index\.d\.ts)/g)) {
+      targets.add(match[1]);
+    }
+    for (const target of targets) {
+      if (!packed.has(target)) {
+        broken.push(`packages/axiom/${name} → ${target}`);
+      }
+    }
+  }
+  assert.deepEqual(broken, [], 'an AI entry point names a path the package does not ship');
+});
+
+test('the facade README maps every document the facade ships', () => {
+  const readme = facadeEntryPoints.get('README.md') as string;
+  for (const name of DOC_FILES) {
+    assert.ok(
+      readme.includes(`docs/${name}`),
+      `docs/${name} ships in the facade but is not in its documentation map`,
+    );
+  }
+});
+
+test('the AI entry points route inside the package, never off it', () => {
+  // An entry point that answers "read the repository" or "search the web" reproduces exactly
+  // the cold start it exists to prevent.
+  for (const [name, source] of facadeEntryPoints) {
+    for (const match of source.matchAll(/\]\((https?:[^)\s]+)\)/g)) {
+      assert.fail(`packages/axiom/${name} links out to ${match[1]} as a document source`);
+    }
+  }
+});
+
+test('the AI entry points are vendor-neutral', () => {
+  // The package is for AI agents generally. AGENTS.md and llms.txt are the cross-vendor
+  // conventions and must not become one vendor's file.
+  const vendors = /\b(Claude|ChatGPT|GPT-[\d.]|Copilot|Gemini|Cursor|Codex|Anthropic|OpenAI)\b/;
+  for (const [name, source] of facadeEntryPoints) {
+    const found = vendors.exec(source);
+    assert.equal(found, null, `packages/axiom/${name} names a specific vendor: ${found?.[0]}`);
+  }
+});
+
+test('the repository README states the entry point before its conceptual introduction', () => {
+  const heading = README.indexOf('## AI agents: read this first');
+  assert.ok(heading >= 0, 'the README has no AI entry point section');
+  const introduction = README.indexOf('## Who this is for');
+  assert.ok(
+    heading < introduction,
+    'the README buries the entry point behind its conceptual introduction',
+  );
+  assert.ok(
+    README.slice(heading, introduction).includes('docs/AGENT_REFERENCE.md'),
+    'the README entry point section does not name docs/AGENT_REFERENCE.md',
+  );
+});
+
+test('the documented install command is a form npm can actually resolve', () => {
+  // `npm install @cynodia/axiom@alpha` 404s: the alpha dist-tag was removed when it stopped
+  // tracking releases, so only `latest` — the bare command — and exact versions resolve. An
+  // install command that carries a version must therefore carry this exact one.
+  const version = JSON.parse(read('package.json')).version as string;
+  const wrong: string[] = [];
+  for (const [file, source] of [...ALL_DOCS, ...PACKAGE_READMES, ...facadeEntryPoints]) {
+    for (const match of source.matchAll(/npm install (@cynodia\/[\w-]+)@([\w.-]+)/g)) {
+      // `@alpha` may appear only as the counter-example, in a file that says it fails.
+      if (match[2] === 'alpha') {
+        if (!/no `alpha` dist-tag/.test(source)) {
+          wrong.push(`${file}: ${match[0]} without saying the tag does not exist`);
+        }
+        continue;
+      }
+      if (match[2] !== version) {
+        wrong.push(`${file}: ${match[0]} is not the published version ${version}`);
+      }
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('the vocabularies the agent reference inlines are exactly the exported arrays', () => {
+  // The reference inlines four token vocabularies so a cold author need not open
+  // PRESENTATION.md to lay out a container — the one thing a blind cold-start run got wrong.
+  // An inlined vocabulary that drifts from its array is worse than no inlined vocabulary: it
+  // is a confident wrong answer. Each row is checked against the array it names.
+  const reference = ALL_DOCS.get('docs/AGENT_REFERENCE.md') as string;
+  const arrays: Record<string, readonly string[]> = {
+    LAYOUT_KINDS,
+    SPACING_TOKENS,
+    TEXT_ROLES,
+    DENSITIES,
+  };
+  const rows = [...reference.matchAll(/^\| `[^|]+` \| ((?:`[\w-]+` ?)+)\| `([A-Z_]+)` \|$/gm)];
+  const checked: string[] = [];
+  for (const [, tokens, array] of rows) {
+    const expected = arrays[array];
+    if (!expected) {
+      continue; // a row naming some other array is not this test's business
+    }
+    const listed = [...tokens.matchAll(/`([\w-]+)`/g)].map((match) => match[1]);
+    assert.deepEqual(
+      [...listed].sort(),
+      [...expected].sort(),
+      `docs/AGENT_REFERENCE.md inlines ${array} as ${listed.join(' ')}`,
+    );
+    checked.push(array);
+  }
+  assert.deepEqual(
+    checked.sort(),
+    Object.keys(arrays).sort(),
+    'the reference no longer inlines every vocabulary this test covers',
+  );
 });

@@ -326,8 +326,10 @@ A pattern is an authoring abstraction and nothing else: after expansion the appl
 ordinary Axiom application, and `validateGraph`, `compileToIR`, `AgentAPI` and the runtime know
 nothing about patterns. Ownership defaults to the **declaration**, so editing a generated node
 is drift rather than an edit. The contract travels with the package rather than being restated here: install
-`@cynodia/axiom-ui` and read its `README.md`, `docs/TOOLKIT_AGENT_REFERENCE.md` and
-`docs/PATTERN_CATALOG.json` — the last is addressable as `@cynodia/axiom-ui/catalog`.
+`@cynodia/axiom-ui` and read, inside **that** package,
+`@cynodia/axiom-ui/docs/TOOLKIT_AGENT_REFERENCE.md`, its `README.md` and
+`@cynodia/axiom-ui/docs/PATTERN_CATALOG.json` — the last is addressable as
+`@cynodia/axiom-ui/catalog`. None of the three is in this package.
 
 ## Containment
 

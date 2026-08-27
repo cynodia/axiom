@@ -32,6 +32,15 @@ const REQUIRED_FACADE_DOCS = [
 ];
 const FORBIDDEN_PATHS = [/^package\/src\//, /^package\/test\//, /^package\/dist-test\//,
   /node_modules/, /\.tsbuildinfo$/, /^package\/tsconfig.*\.json$/];
+/**
+ * The facade's AI entry points. Documentation an unfamiliar agent cannot discover costs
+ * almost as much as documentation that does not exist, so what routes an agent to the
+ * contract is verified against the packed artifact like the contract itself: the files must
+ * be there, they must name the starting document, and every package-local path they
+ * reference must resolve inside the tarball.
+ */
+const AI_ENTRY_POINTS = ['README.md', 'AGENTS.md', 'llms.txt'];
+const AI_ENTRY_TARGET = 'docs/AGENT_REFERENCE.md';
 
 const problems = [];
 const report = (name, message) => problems.push(`${name}: ${message}`);
@@ -122,7 +131,7 @@ for (const { name } of publishable) {
 
   const required = ['README.md', 'LICENSE', 'dist/index.js', 'dist/index.d.ts'];
   if (name === '@cynodia/axiom') {
-    required.push(...REQUIRED_FACADE_DOCS);
+    required.push(...REQUIRED_FACADE_DOCS, ...AI_ENTRY_POINTS);
   }
   if (name === '@cynodia/axiom-ui') {
     // The catalogue is the toolkit's agent-facing interface, and an agent that installed the
@@ -154,6 +163,34 @@ for (const { name } of publishable) {
   for (const file of required) {
     if (!has(file)) {
       report(name, `is missing ${file}`);
+    }
+  }
+
+  if (name === '@cynodia/axiom') {
+    for (const entry of AI_ENTRY_POINTS) {
+      if (!has(entry)) {
+        continue; // already reported as missing
+      }
+      const text = execFileSync('tar', ['-xzOf', tarball, `package/${entry}`], { encoding: 'utf8' });
+      if (!text.includes(AI_ENTRY_TARGET)) {
+        report(name, `${entry} does not route the reader to ${AI_ENTRY_TARGET}`);
+      }
+      /**
+       * Markdown link targets, plus the bare package-local paths these files name in prose
+       * or in a table. Anchors, external URLs and npm package names are not paths.
+       */
+      const referenced = new Set();
+      for (const match of text.matchAll(/\]\((?!https?:|#)([^)\s]+)\)/g)) {
+        referenced.add(match[1].split('#')[0]);
+      }
+      for (const match of text.matchAll(/(?<![\w/-])(docs\/[A-Z_]+\.md|dist\/index\.d\.ts)/g)) {
+        referenced.add(match[1]);
+      }
+      for (const target of referenced) {
+        if (target && !has(target)) {
+          report(name, `${entry} references ${target}, which the tarball does not contain`);
+        }
+      }
     }
   }
   if (!files.some((file) => file.endsWith('.d.ts'))) {

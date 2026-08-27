@@ -21,6 +21,8 @@
     "dist/**/*.d.ts",
     "docs/*.md",
     "README.md",
+    "AGENTS.md",
+    "llms.txt",
     "LICENSE"
   ],
   "main": "./dist/index.js",
