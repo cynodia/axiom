@@ -12,6 +12,9 @@ import type {
 } from './nodes.js';
 import { locationExpressions, locationRootStateId } from './location.js';
 import type { AnyNode } from './types.js';
+import type { QueryDef } from './query.js';
+import { queryExpressions } from './query.js';
+import type { ReadPolicyDef } from './read-policy.js';
 
 /**
  * Who may commit a canonical mutation.
@@ -58,6 +61,10 @@ export interface AuthorityContext {
   transitionConstraints: TransitionConstraintDef[];
   /** Named expressions, so a rule that reuses one still declares what it reads. */
   expressions: Map<NodeId, ExpressionDef>;
+  /** Registered queries — always authority-side, since they read authoritative data. */
+  queries: Map<NodeId, QueryDef>;
+  /** Row-level read policies, by the entity they govern. */
+  readPolicies: Map<NodeId, ReadPolicyDef>;
   principalEntityId?: NodeId;
 }
 
@@ -67,6 +74,8 @@ export function authorityContext(nodes: readonly AnyNode[], principalEntityId?: 
   const constraints: ConstraintDef[] = [];
   const transitionConstraints: TransitionConstraintDef[] = [];
   const expressions = new Map<NodeId, ExpressionDef>();
+  const queries = new Map<NodeId, QueryDef>();
+  const readPolicies = new Map<NodeId, ReadPolicyDef>();
   for (const node of nodes) {
     switch (node.kind) {
       case 'state':
@@ -84,6 +93,12 @@ export function authorityContext(nodes: readonly AnyNode[], principalEntityId?: 
       case 'expression':
         expressions.set(node.id, node);
         break;
+      case 'query':
+        queries.set(node.id, node);
+        break;
+      case 'read-policy':
+        readPolicies.set(node.entityId, node);
+        break;
       default:
     }
   }
@@ -93,6 +108,8 @@ export function authorityContext(nodes: readonly AnyNode[], principalEntityId?: 
     constraints,
     transitionConstraints,
     expressions,
+    queries,
+    readPolicies,
     ...(principalEntityId ? { principalEntityId } : {}),
   };
 }
@@ -336,6 +353,10 @@ export function serverStateClosure(context: AuthorityContext): Set<NodeId> {
   const ruleExpressions = [
     ...context.constraints.map((constraint) => constraint.expression),
     ...context.transitionConstraints.map((constraint) => constraint.expression),
+    // A query's filter/sort/projection and a read policy's predicate are evaluated on the
+    // authority too, so any authoritative state they consult has to be present.
+    ...[...context.queries.values()].flatMap((query) => queryExpressions(query)),
+    ...[...context.readPolicies.values()].map((policy) => policy.predicate),
   ];
   for (const id of statesReadBy(ruleExpressions, context)) {
     needed.add(id);

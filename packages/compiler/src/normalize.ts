@@ -245,11 +245,15 @@ export function compileToIR(graph: ApplicationGraph, options: CompileOptions = {
       case 'event':
       case 'subscription':
       case 'storage':
+      case 'query':
+      case 'relationship':
+      case 'read-policy':
         // Server-only vocabulary: no client concern ever needs to know an integration, its
-        // operations, the events it can raise (spec §80), the live sources it subscribes to
-        // or the object stores it reaches. A subscription in particular has no client half
-        // at all — the browser maintains no long-lived external source — so it is absent
-        // here rather than present and inert (spec 0.9 §62-64).
+        // operations, the events it can raise (spec §80), the live sources it subscribes to,
+        // the object stores it reaches, or — new in 0.10 — the registered queries,
+        // entity relationships and row-level read policies the authority executes. A client
+        // invokes a query by id and receives a typed page; it never sees a clause or a
+        // policy predicate (spec 0.10 §6, §46-49).
         delete nodes[node.id];
         break;
       case 'trigger': {

@@ -12,6 +12,7 @@ import {
   usesExternalIOVocabulary,
   usesIntegrationVocabulary,
   usesInvocationVocabulary,
+  usesQueryVocabulary,
   usesV4Semantics,
   validateGraph,
 } from '@cynodia/axiom-core';
@@ -26,6 +27,9 @@ import type {
   IntegrationDef,
   IntegrationOperationDef,
   NodeId,
+  QueryDef,
+  ReadPolicyDef,
+  RelationshipDef,
   ServerIR,
   ServerIRContract,
   StateDef,
@@ -69,6 +73,9 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
   const events: EventDef[] = [];
   const subscriptions: SubscriptionDef[] = [];
   const storages: StorageDef[] = [];
+  const queries: QueryDef[] = [];
+  const relationships: RelationshipDef[] = [];
+  const readPolicies: ReadPolicyDef[] = [];
   for (const node of nodes) {
     if (node.kind === 'entity') {
       entities.push(node);
@@ -91,6 +98,14 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
       subscriptions.push(node);
     } else if (node.kind === 'storage') {
       storages.push(node);
+    } else if (node.kind === 'query') {
+      // A query reads authoritative data, so it is executed on the authority and nowhere
+      // else. The client invokes it by id (spec 0.10 §6); it never receives the clauses.
+      queries.push(node);
+    } else if (node.kind === 'relationship') {
+      relationships.push(node);
+    } else if (node.kind === 'read-policy') {
+      readPolicies.push(node);
     }
   }
 
@@ -158,6 +173,9 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     ...(triggers.length > 0 ? { triggers } : {}),
     ...(subscriptions.length > 0 ? { subscriptions } : {}),
     ...(storages.length > 0 ? { storages } : {}),
+    ...(queries.length > 0 ? { queries } : {}),
+    ...(relationships.length > 0 ? { relationships } : {}),
+    ...(readPolicies.length > 0 ? { readPolicies } : {}),
   };
 
   // Only the definitions the authority's own rules reach. A calculation used by the client
@@ -189,6 +207,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     usesIntegrationVocabulary(document) ? 'axiom.server.v3' : 'axiom.server.v1',
     usesV4Semantics(document) ? 'axiom.server.v4' : 'axiom.server.v1',
     usesExternalIOVocabulary(document) ? 'axiom.server.v5' : 'axiom.server.v1',
+    usesQueryVocabulary(document) ? 'axiom.server.v6' : 'axiom.server.v1',
   ];
   const contract = contractCandidates.reduce(maxContract);
 
