@@ -63,8 +63,19 @@ turn it into a working browser application whose generated JavaScript nobody rea
   staged-then-committed lifecycle, the `blob-metadata`/`blob-commit`/`blob-delete`
   operations, and `axiom.server.v5`. Reports:
   `AXIOM_0_9_IMPLEMENTATION_REPORT.md` and `AXIOM_0_9_IO_RESEARCH.md`.
+* `specs/spec10.md` — the **0.10 semantic data access & query layer**: `QueryDef` (a
+  demand-driven read over authoritative data too large to materialize — fixed named clauses,
+  every leaf an ordinary `Expression`), `RelationshipDef` (explicit, never inferred),
+  `ReadPolicyDef` (row-level; field-level deferred) AND-ed into every query's effective
+  filter on the authority, the `DataProvider` contract with `createMemoryDataProvider` and
+  `createSqliteDataProvider` reference providers, opaque fingerprinted keyset cursors, a
+  `query` action operation and a `provider-record` `Location` for transactional mutation of
+  never-materialized rows, a client `createQueryStore` lifecycle, a principal/policy
+  fingerprinted result cache, `axiom.server.v6` and the `axiom.conformance.v4` fixture
+  format. Reports: `AXIOM_0_10_IMPLEMENTATION_REPORT.md` and `AXIOM_0_10_QUERY_RESEARCH.md`.
+  Full model: `docs/QUERIES.md`.
 
-Together, spec2–spec9 are the authority on design decisions — **except where the
+Together, spec2–spec10 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 
