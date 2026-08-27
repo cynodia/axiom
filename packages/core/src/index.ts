@@ -24,6 +24,7 @@ export * from './ui.js';
 export * from './types.js';
 export * from './graph.js';
 export * from './schema-identity.js';
+export * from './schema-diff.js';
 export * from './infer.js';
 export * from './context.js';
 export * from './validate-location.js';

@@ -13,7 +13,7 @@ Design authority: `reports/AXIOM_0_11_MIGRATION_RESEARCH.md` (the §4 decision).
 | 1 | `core` semantic schema identity + deterministic fingerprint: `graph.schemaVersion` (+ `ApplicationGraphData.schemaVersion`, `setSchemaVersion`, `DEFAULT_SCHEMA_VERSION`), `schema-identity.ts` — `schemaProjection`/`schemaFingerprint`/`fingerprintProjection`/`canonicalJSON`, `SCHEMA_FINGERPRINT_VERSION`, stable-id canonicalization, enum-set ordering, ephemeral states excluded, read-policy predicate excluded. `schema-identity.test.ts` (17). | ✅ committed |
 | 2 | `core` `MigrationDef` vocabulary: `migration.ts` — node type, `MIGRATION_OPERATION_KINDS` (10) closed set, `MIGRATION_OLD_SCOPE` reserved transform scope, `MigrationConstant`, `reversibility`/`reverseOperations`, helpers (`migrationOperationExpressions`/`migrationExpressions`/`migrationOperationEntityId`/`FieldIds`/`ReadFieldIds`/`sortMigrations`/`migrationPath`), operation builders. `types.ts`/`index.ts` wiring; `validate.ts` accepts `kind:'migration'` structurally (full pass = phase 3). `migration.test.ts` (8). | ✅ committed |
 | 3 | `core` validation: `validate-migration.ts` — graph-level `validateMigrations(nodes, schemaVersion)` wired into `validateGraph`. 9 new `VALIDATION_CODES` (INVALID_MIGRATION_VERSION, MIGRATION_PATH_NOT_FOUND, MIGRATION_CHAIN_FORK, DUPLICATE_MIGRATION_OPERATION_ID, MIGRATION_REQUIRED_FIELD_WITHOUT_DEFAULT, MIGRATION_DESTRUCTIVE_UNMARKED, INVALID_MIGRATION_OPERATION, MIGRATION_TRANSFORM_IMPURE, MIGRATION_TRANSFORM_TYPE_MISMATCH). Checks chain contiguity vs `graph.schemaVersion`, forks, from==to/downgrade/out-of-range, op-id uniqueness, add-required-without-populate, unmarked remove-field/entity, empty change-field, non-object transform-record.produce, transform purity (no now/uuid, no stray scope), toType vs target field type. `VALIDATION.md` §"Schema evolution" + count 96→105; `documentation.test.ts` notCodes allowlist. `migration-validation.test.ts` (16). | ✅ committed |
-| 4 | `core` + `agent-api` semantic schema diff & static classification: `diffSchema(prev,next)` → `SchemaDiff`, `classifySchemaChange` → presentation-only / persistence-compatible / migration-required / destructive / incompatible-ambiguous; rename-vs-delete+add refusal (§60); migration coverage check (does the chain cover the diff?) | ⬜ |
+| 4 | `core` semantic schema diff & static classification: `schema-diff.ts` — `SCHEMA_CHANGE_CLASSES` (presentation-only / persistence-compatible / migration-required / destructive / incompatible-ambiguous), `diffSchema(prev,next)` → `SchemaDiff` (per-entry class + `verdict` + `byClass` + `destructive` + `needsMigration`), `classifyFieldTypeChange` (safe set: identical, widen-to-optional, enum growth; narrow/kind-change ⇒ migration-required/destructive), `migrationCoversDiff(diff, ops)` → `{covered, uncovered, unmatched}` (the compiler's coverage primitive). Diff never pairs remove+add as a rename (§60); identity change ⇒ incompatible-ambiguous; read-policy changes flagged `authorizationChange` (§42). `schema-diff.test.ts` (15). agent-api wrappers deferred to phase 15. | ✅ committed |
 | 5 | `compiler`: migration vocabulary → Server IR; `axiom.server.v7` via `usesMigrationVocabulary(ir)`; `compileToServerIR` emits `migrations` + `schemaVersion` + `schemaFingerprint`; `compileToIR` strips migrations from client IR; frozen v1–v6 byte-unchanged; IR purity assertions | ⬜ |
 | 6 | `server`: semantic migration planner + state machine. `SemanticMigrationPlan`, `planMigration()` (pure, no writes), path resolution (11→12→13→14; missing link refuses), destructive-approval model, `MIGRATION_PHASES` (planned/approved/running/checkpointed/validating/completed/failed), `MIGRATION_DIAGNOSTIC_CODES` | ⬜ |
 | 7 | `server`: provider migration contract. `ProviderMigrationPlan`, `MIGRATION_PROVIDER_CAPABILITIES` (atomic-schema-change/batched-transform/checkpointing/rename-field/transactional-ddl/migration-lock), durable stored schema metadata (version + fingerprint + step history), migration lock/lease + recovery | ⬜ |
@@ -49,4 +49,14 @@ Design authority: `reports/AXIOM_0_11_MIGRATION_RESEARCH.md` (the §4 decision).
 
 ## Known-red tests (expected until the noted phase)
 
-_(populated as phases land)_
+_(none currently — every phase lands green through `npm test` and a clean `release:prepare`)_
+
+## Environmental note
+
+`npm run release:prepare` runs the whole test corpus through a single highly-concurrent
+`node --test dist-test/**/*.test.js`. Under that concurrency Node's `structuredClone`
+intermittently throws `DataCloneError: [object Unknown] could not be cloned` from
+`ApplicationGraph`'s clone helper — a different random test each time, always passing in
+isolation and under the per-workspace `npm test`. Treated as environmental flakiness, not a
+code defect: the gate is a green per-workspace `npm test` plus a clean `release:prepare`
+(re-run once if it trips).
