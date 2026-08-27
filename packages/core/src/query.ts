@@ -298,19 +298,3 @@ export function queryExpressions(query: QueryDef): Expression[] {
   return found;
 }
 
-/**
- * An operation that runs a registered query inside an action and binds its result into
- * scope for the operations that follow (spec §40).
- *
- * It is resolved before the action's transaction opens — its result may inform the
- * mutations that follow — and reads Axiom's *own* authoritative data, which is why it is a
- * first-class operation rather than an `integration-query` (spec §102). `bindAs` introduces
- * a scope exactly as a `for-each`'s `scopeId` does; later operations refer to the whole
- * result as `ref(bindAs)`. Never legal inside `for-each`.
- */
-export interface QueryOperation {
-  kind: 'query';
-  queryId: NodeId;
-  arguments?: Record<string, Expression>;
-  bindAs: NodeId;
-}

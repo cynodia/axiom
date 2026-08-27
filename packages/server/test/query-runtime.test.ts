@@ -8,12 +8,15 @@ import {
   enumType,
   field,
   fieldId,
+  forEach,
   literal,
   nodeId,
+  object,
   primitiveType,
   ref,
+  stateLocation,
 } from '@cynodia/axiom-core';
-import type { EntityDef, QueryDef, ReadPolicyDef, RelationshipDef, StateDef } from '@cynodia/axiom-core';
+import type { ActionDef, EntityDef, QueryDef, ReadPolicyDef, RelationshipDef, StateDef } from '@cynodia/axiom-core';
 import { compileToServerIR } from '@cynodia/axiom-compiler';
 import {
   PROTOCOL_VERSION,
@@ -52,6 +55,14 @@ const ROW = nodeId('scope_row');
 const ACC = nodeId('scope_acc');
 const PROW = nodeId('scope_policy_row');
 const P_STATUS = nodeId('param_status');
+
+const ENTITY_REPORT = nodeId('entity_report');
+const F_REPORT_ID = fieldId('field_report_id');
+const F_REPORT_TOTAL = fieldId('field_report_total');
+const STATE_REPORT = nodeId('state_report');
+const ACTION_BUILD_REPORT = nodeId('action_build_report');
+const SCOPE_RESULT = nodeId('scope_query_result');
+const SCOPE_ITEM = nodeId('scope_report_item');
 
 const STATUS = ['pending', 'confirmed', 'cancelled'];
 const PRINCIPAL_ID = 'axiom_principal';
@@ -140,7 +151,7 @@ function graph(): ApplicationGraph {
         { id: F_SUM_TOTAL, value: field(ref(ROW), F_ORDER_TOTAL) },
       ],
     },
-    pagination: { strategy: 'cursor', maxPageSize: 10, defaultPageSize: 5 },
+    pagination: { strategy: 'cursor', maxPageSize: 50, defaultPageSize: 5 },
     readPolicyId: POLICY_ORDER,
   });
   g.addNode<QueryDef>({
@@ -151,6 +162,44 @@ function graph(): ApplicationGraph {
     aggregate: [{ function: 'count', as: F_SUM_COUNT }],
     pagination: { strategy: 'offset', maxPageSize: 1 },
     readPolicyId: POLICY_ORDER,
+  });
+  // A `query` operation inside an action: resolve rows pre-transaction, then fold them into
+  // a server-authoritative report collection. The read policy still applies.
+  g.addNode<EntityDef>({
+    id: ENTITY_REPORT,
+    kind: 'entity',
+    identityFieldId: F_REPORT_ID,
+    fields: [
+      { id: F_REPORT_ID, valueType: primitiveType('string'), required: true },
+      { id: F_REPORT_TOTAL, valueType: primitiveType('number'), required: true },
+    ],
+  });
+  g.addNode<StateDef>({
+    id: STATE_REPORT,
+    kind: 'state',
+    valueType: collectionType(entityType(ENTITY_REPORT)),
+    authority: 'server',
+    initialValue: [],
+  });
+  g.addNode<ActionDef>({
+    id: ACTION_BUILD_REPORT,
+    kind: 'action',
+    operations: [
+      { kind: 'query', queryId: QUERY_ORDERS, arguments: { [P_STATUS]: literal('confirmed') }, bindAs: SCOPE_RESULT },
+      forEach(ref(SCOPE_RESULT), SCOPE_ITEM, [
+        {
+          kind: 'insert',
+          target: stateLocation(STATE_REPORT),
+          value: object(
+            [
+              { fieldId: F_REPORT_ID, value: field(ref(SCOPE_ITEM), F_SUM_ID) },
+              { fieldId: F_REPORT_TOTAL, value: field(ref(SCOPE_ITEM), F_SUM_TOTAL) },
+            ],
+            ENTITY_REPORT,
+          ),
+        },
+      ]),
+    ],
   });
   g.setPrincipalEntity(ENTITY_PRINCIPAL);
   return g;
@@ -188,7 +237,7 @@ async function server(opts: { provider?: boolean } = {}) {
       : {
           dataProvider: createMemoryDataProvider({
             rows: { [ENTITY_ORDER]: orders as never, [ENTITY_ACCOUNT]: accounts as never },
-            maxPageSize: 10,
+            maxPageSize: 50,
           }),
         }),
   });
@@ -291,4 +340,25 @@ test('a query with no registered provider is rejected clearly', async () => {
   const s = await server({ provider: false });
   const res = (await s.handle(q(QUERY_ORDERS, { pageSize: 2 }, 'admin'))) as QueryResponse;
   assert.equal(res.diagnostics[0].code, SERVER_DIAGNOSTIC_CODES.QUERY_PROVIDER_MISSING);
+});
+
+test('a query operation inside an action resolves rows and folds them, read policy applied', async () => {
+  const s = await server();
+  const admin = await s.handle({
+    kind: 'invoke',
+    protocol: PROTOCOL_VERSION,
+    actionId: ACTION_BUILD_REPORT,
+    credential: 'admin',
+  });
+  assert.equal((admin as { ok: boolean }).ok, true, JSON.stringify(admin));
+  assert.equal((s.getState(STATE_REPORT) as unknown[]).length, 12);
+
+  const s2 = await server();
+  await s2.handle({
+    kind: 'invoke',
+    protocol: PROTOCOL_VERSION,
+    actionId: ACTION_BUILD_REPORT,
+    credential: 'a1',
+  });
+  assert.equal((s2.getState(STATE_REPORT) as unknown[]).length, 6);
 });

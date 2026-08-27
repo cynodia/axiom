@@ -42,6 +42,7 @@ import type {
   Expression,
   IntegrationDef,
   IntegrationOperationDef,
+  QueryDef,
   RouteDef,
   StateDef,
   StorageDef,
@@ -611,6 +612,8 @@ test('every declared operation kind is executed by the runtime', () => {
   const integrationQueryOp = nodeId('integration_operation_probe_query');
   const integrationEffectOp = nodeId('integration_operation_probe_effect');
   const scopeQuery = nodeId('scope_integration_query');
+  const dataQuery = nodeId('query_probe');
+  const scopeDataQuery = nodeId('scope_data_query');
   const storage = nodeId('storage_probe');
   const blobEntity = nodeId('entity_blob_ref');
   const scopeBlob = nodeId('scope_blob_metadata');
@@ -630,6 +633,13 @@ test('every declared operation kind is executed by the runtime', () => {
     integrationId: integration,
     mode: 'effect',
     resultType: primitiveType('string'),
+  });
+  graph.addNode<QueryDef>({
+    id: dataQuery,
+    kind: 'query',
+    source: ENTITY_LINE,
+    rowScopeId: scopeDataQuery,
+    pagination: { strategy: 'offset', maxPageSize: 10 },
   });
   const actions: Record<string, ActionDef['operations']> = {
     set: [{ kind: 'set', target: stateLocation(STATE_COUNTER), value: literal(1) }],
@@ -670,6 +680,7 @@ test('every declared operation kind is executed by the runtime', () => {
     ],
     'blob-commit': [{ kind: 'blob-commit', storageId: storage, blobKey: literal('probe-key') }],
     'blob-delete': [{ kind: 'blob-delete', storageId: storage, blobKey: literal('probe-key') }],
+    query: [{ kind: 'query', queryId: dataQuery, arguments: {}, bindAs: nodeId('scope_query_bind') }],
   };
   assert.deepEqual(Object.keys(actions).sort(), [...OPERATION_KINDS].sort());
 

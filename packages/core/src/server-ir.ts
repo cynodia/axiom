@@ -176,10 +176,9 @@ export function usesQueryVocabulary(ir: {
   ) {
     return true;
   }
-  // A `query` operation inside an action is also v6 vocabulary — folded in with the rest of
-  // the operation walk once `QueryOperation` joins the `Operation` union (0.10 action phase).
+  // A `query` operation inside an action is also v6 vocabulary.
   return Object.values(ir.actions).some((action) =>
-    (action.operations ?? []).some((operation) => (operation.kind as string) === 'query'),
+    (action.operations ?? []).some((operation) => operation.kind === 'query'),
   );
 }
 
@@ -273,6 +272,7 @@ function actionExpressions(action: ActionDef): Expression[] {
           found.push(...Object.values(operation.inputs ?? {}));
           break;
         case 'integration-query':
+        case 'query':
           found.push(...Object.values(operation.arguments ?? {}));
           break;
         case 'integration-effect':

@@ -93,6 +93,10 @@ export const RUNTIME_DIAGNOSTIC_CODES = {
   BLOB_STORAGE_UNAVAILABLE: 'BLOB_STORAGE_UNAVAILABLE',
   /** A `blob-metadata` lookup failed: no such key, a staged object, or the store refused. */
   BLOB_METADATA_FAILED: 'BLOB_METADATA_FAILED',
+  /** A `query` operation ran where no data provider is reachable — a client runtime, or a server with none registered. */
+  QUERY_RESOLVER_UNAVAILABLE: 'QUERY_RESOLVER_UNAVAILABLE',
+  /** A `query` operation's registered query failed to execute. Never carries a provider secret. */
+  QUERY_OPERATION_FAILED: 'QUERY_OPERATION_FAILED',
 } as const;
 
 export type RuntimeDiagnosticCode =
@@ -1501,6 +1505,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       }
       case 'integration-query':
       case 'blob-metadata':
+      case 'query':
         // The result was already resolved and bound into the action's scope before this
         // transaction opened — see `runActionAsync`. Nothing to do here; this case exists
         // only so the kind is recognized rather than falling to `default`.
@@ -1723,7 +1728,10 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
 
   function actionHasAsyncQuery(action: ActionDef): boolean {
     return (action.operations ?? []).some(
-      (operation) => operation.kind === 'integration-query' || operation.kind === 'blob-metadata',
+      (operation) =>
+        operation.kind === 'integration-query' ||
+        operation.kind === 'blob-metadata' ||
+        operation.kind === 'query',
     );
   }
 
@@ -1794,6 +1802,48 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         }
         scope.values.set(operation.bindAs, blobOutcome.value);
         presetBindings.set(operation.bindAs, blobOutcome.value);
+        continue;
+      }
+      if (operation.kind === 'query') {
+        // A registered query, resolved before the transaction — the same pre-transaction
+        // phase `integration-query` occupies, and for the same reason: its result may inform
+        // the mutations that follow, but running it is not a pure expression.
+        const queryArgs: Record<string, unknown> = {};
+        for (const [key, argument] of Object.entries(operation.arguments ?? {})) {
+          queryArgs[key] = evaluate(argument, scope);
+        }
+        let queryOutcome: Awaited<ReturnType<NonNullable<HostEnvironment['runQuery']>>> | undefined;
+        try {
+          queryOutcome = await host.runQuery?.(String(operation.queryId), queryArgs);
+        } catch (error) {
+          queryOutcome = {
+            ok: false,
+            code: RUNTIME_DIAGNOSTIC_CODES.QUERY_OPERATION_FAILED,
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
+        if (!queryOutcome) {
+          return failWith({
+            code: RUNTIME_DIAGNOSTIC_CODES.QUERY_RESOLVER_UNAVAILABLE,
+            message: `${action.name ?? action.id} runs a query, but no data provider is reachable here`,
+            severity: 'error',
+            nodeId: action.id,
+            actionId: action.id,
+            details: { queryId: String(operation.queryId) },
+          });
+        }
+        if (!queryOutcome.ok) {
+          return failWith({
+            code: RUNTIME_DIAGNOSTIC_CODES.QUERY_OPERATION_FAILED,
+            message: queryOutcome.message,
+            severity: 'error',
+            nodeId: action.id,
+            actionId: action.id,
+            details: { queryId: String(operation.queryId), code: queryOutcome.code },
+          });
+        }
+        scope.values.set(operation.bindAs, queryOutcome.value);
+        presetBindings.set(operation.bindAs, queryOutcome.value);
         continue;
       }
       if (operation.kind !== 'integration-query') {

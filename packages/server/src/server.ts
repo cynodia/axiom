@@ -376,6 +376,8 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   const cursorSecret = options.cursorSecret ?? randomCursorSecret();
   const providerFor = (sourceEntityId: NodeId): DataProvider | undefined =>
     dataProviders[sourceEntityId] ?? defaultDataProvider;
+  /** The caller of the action currently running, so a `query` operation's policy binds them. */
+  let activePrincipal: Record<string, LiteralValue> | null = null;
 
   /**
    * Reads a stored object's metadata for a `blob-metadata` operation.
@@ -484,7 +486,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     return { ok: true, value: result.value };
   }
 
-  const runtime = buildRuntime(ir, host, queryIntegration, readBlobMetadata);
+  const runtime = buildRuntime(ir, host, queryIntegration, readBlobMetadata, executeQueryForOperation);
   let storeRevision = 0;
   const revisions = new Map<NodeId, number>();
   const replies = new Map<string, InvokeResponse>();
@@ -915,6 +917,79 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     };
   }
 
+  /**
+   * Runs a registered query for a `query` **operation** inside an action (spec 0.10 §40).
+   * Same authority as the protocol path — the read policy is injected and the principal is
+   * the caller of the running action — but there is no cursor and no page envelope: it
+   * binds the rows (or the aggregate rows) directly into the action's scope. Bounded to the
+   * query's maximum page size, so a `query` operation can never materialize a whole table
+   * into a transaction.
+   */
+  async function executeQueryForOperation(
+    queryId: string,
+    args: Record<string, unknown>,
+  ): Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string }> {
+    const query = queriesById.get(queryId as NodeId);
+    if (!query) {
+      return { ok: false, code: SERVER_DIAGNOSTIC_CODES.QUERY_NOT_FOUND, message: `No query ${queryId}` };
+    }
+    const provider = providerFor(query.source);
+    if (!provider) {
+      return {
+        ok: false,
+        code: SERVER_DIAGNOSTIC_CODES.QUERY_PROVIDER_MISSING,
+        message: `No data provider for ${String(query.source)}`,
+      };
+    }
+    const resolvedArgs: Record<string, LiteralValue> = {};
+    for (const parameter of query.parameters ?? []) {
+      const key = String(parameter.id);
+      if (args[key] !== undefined && args[key] !== null) {
+        resolvedArgs[key] = args[key] as LiteralValue;
+      }
+    }
+    const policy = policyForQuery(query, readPolicies);
+    const sourceIdentityFieldId = entities.get(query.source)?.identityFieldId;
+    const providerQuery = buildProviderQuery({
+      query,
+      policy,
+      relationships,
+      ...(sourceIdentityFieldId ? { sourceIdentityFieldId } : {}),
+      arguments: resolvedArgs,
+      principal: activePrincipal,
+      pageSize: Math.min(queryMaxPageSize(query), provider.capabilities.maxPageSize),
+      strategy: 'offset',
+      offset: 0,
+    });
+    const needed = requiredCapabilities({
+      filter: query.filter ?? policy,
+      sort: query.sort ?? [],
+      projection: query.projection,
+      relationships: query.relationships ?? [],
+      aggregate: query.aggregate ?? [],
+      groupBy: query.groupBy ?? [],
+      strategy: 'offset',
+    });
+    const missing = needed.filter((capability) => !provider.capabilities.supports.includes(capability));
+    if (missing.length > 0 || provider.explain(providerQuery).unsupported.length > 0) {
+      return {
+        ok: false,
+        code: SERVER_DIAGNOSTIC_CODES.QUERY_CAPABILITY_UNSUPPORTED,
+        message: `The provider cannot execute ${String(query.id)} exactly`,
+      };
+    }
+    if (queryIsAggregate(query)) {
+      const result = await provider.aggregate(providerQuery);
+      return result.ok
+        ? { ok: true, value: result.value.rows }
+        : { ok: false, code: providerFailureCode(result.code), message: result.message };
+    }
+    const result = await provider.query(providerQuery);
+    return result.ok
+      ? { ok: true, value: result.value.items }
+      : { ok: false, code: providerFailureCode(result.code), message: result.message };
+  }
+
   function providerFailureCode(code: string): ServerDiagnosticCode {
     if (code === 'QUERY_CAPABILITY_UNSUPPORTED') {
       return SERVER_DIAGNOSTIC_CODES.QUERY_CAPABILITY_UNSUPPORTED;
@@ -959,8 +1034,10 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
     // The caller is bound for the whole invocation, not only for the authorization check.
     // An operation that records who acted — `field(ref(PRINCIPAL), F_USER_ID)` — must resolve
-    // whether or not the action also happens to carry an authorization rule.
+    // whether or not the action also happens to carry an authorization rule. It is also what
+    // a `query` operation's read policy is evaluated against.
     runtime.hydrateState(PRINCIPAL, context.principal);
+    activePrincipal = (context.principal ?? null) as Record<string, LiteralValue> | null;
 
     // Resolved from this authority's own IR. A client's idea of what an action does is
     // never consulted.
@@ -1690,11 +1767,17 @@ type ReadBlobMetadata = (
   key: string,
 ) => Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string }>;
 
+type RunQueryOperation = (
+  queryId: string,
+  args: Record<string, unknown>,
+) => Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string }>;
+
 function buildRuntime(
   ir: ServerIR,
   host: ServerHost,
   queryIntegration: QueryIntegration,
   readBlobMetadata: ReadBlobMetadata,
+  runQueryOperation: RunQueryOperation,
 ): AxiomRuntime {
   const nodes: ApplicationIR['nodes'] = {};
   for (const entity of ir.entities) {
@@ -1765,6 +1848,7 @@ function buildRuntime(
       uuid: () => host.uuid(),
       queryIntegration: (operationId, args, options) => queryIntegration(operationId, args, options),
       readBlobMetadata: (storageId, key) => readBlobMetadata(storageId, key),
+      runQuery: (queryId, args) => runQueryOperation(queryId, args),
     },
   });
 }

@@ -110,4 +110,11 @@ export interface HostEnvironment {
     storageId: string,
     key: string,
   ): Promise<IntegrationQueryOutcome>;
+  /**
+   * Runs a registered `QueryDef` by id and returns its result, for a `query` operation
+   * inside an action (spec 0.10 §40). Resolved before the transaction opens, exactly like
+   * `queryIntegration`. Only the authoritative runtime implements it — a `query` operation
+   * makes its action server-authority, so no client-compiled action ever contains one.
+   */
+  runQuery?(queryId: string, args: Record<string, unknown>): Promise<IntegrationQueryOutcome>;
 }

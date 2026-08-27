@@ -205,6 +205,14 @@ export function actionUsesStorage(action: ActionDef): boolean {
   );
 }
 
+/**
+ * Whether an action runs a registered query (spec 0.10 §40). Only the authority holds a
+ * data provider, so an action that reads authoritative data through a query executes there.
+ */
+export function actionUsesQuery(action: ActionDef): boolean {
+  return (action.operations ?? []).some((operation) => operation.kind === 'query');
+}
+
 /** The states an action writes, following `for-each`, `invoke` and declared native effects. */
 export function statesWrittenBy(
   action: ActionDef,
@@ -307,7 +315,7 @@ export function actionAuthority(action: ActionDef, context: AuthorityContext): A
   // Integrations and object stores are both server-only by default (spec §65: secrets,
   // trust, CORS, auditability, deterministic authority), so an action that reaches either
   // is unconditionally server — independent of what it writes.
-  if (actionUsesIntegration(action) || actionUsesStorage(action)) {
+  if (actionUsesIntegration(action) || actionUsesStorage(action) || actionUsesQuery(action)) {
     return 'server';
   }
   for (const stateId of statesWrittenBy(action, context)) {

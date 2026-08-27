@@ -565,6 +565,36 @@ function validateOperation(
       }
       return local;
     }
+    case 'query': {
+      requireKind(operation.queryId, 'query', action.id, context, VALIDATION_CODES.unknownRelationship);
+      const target = context.nodes.get(operation.queryId);
+      if (target?.kind === 'query') {
+        const declared = new Set((target.parameters ?? []).map((parameter) => String(parameter.id)));
+        for (const parameter of target.parameters ?? []) {
+          if (parameter.required !== false && operation.arguments?.[String(parameter.id)] === undefined) {
+            context.errors.push({
+              code: VALIDATION_CODES.invalidQueryOperation,
+              message: `Action ${action.id} runs ${operation.queryId} without supplying ${parameter.id}`,
+              nodeId: action.id,
+            });
+          }
+        }
+        for (const key of Object.keys(operation.arguments ?? {})) {
+          if (!declared.has(key)) {
+            context.errors.push({
+              code: VALIDATION_CODES.invalidQueryOperation,
+              message: `Action ${action.id} passes unknown argument ${key} to ${operation.queryId}`,
+              nodeId: action.id,
+            });
+          }
+        }
+      }
+      for (const argument of Object.values(operation.arguments ?? {})) {
+        validateExpression(argument, action.id, context, local);
+      }
+      // The result binds a `QueryPage`-shaped value; its exact type is a runtime concern.
+      return resultScope(local, operation.bindAs, undefined, context, action.id);
+    }
     default:
       context.errors.push({
         code: VALIDATION_CODES.danglingNodeRef,

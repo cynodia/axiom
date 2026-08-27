@@ -292,7 +292,8 @@ export type Operation =
   | IntegrationEffectOperation
   | BlobMetadataOperation
   | BlobCommitOperation
-  | BlobDeleteOperation;
+  | BlobDeleteOperation
+  | QueryOperation;
 
 export type OperationKind = Operation['kind'];
 
@@ -310,6 +311,7 @@ export const OPERATION_KINDS: readonly OperationKind[] = [
   'blob-metadata',
   'blob-commit',
   'blob-delete',
+  'query',
 ];
 
 /** The storage operations, which address a `StorageDef` rather than an integration. */
@@ -496,6 +498,25 @@ export interface BlobDeleteOperation {
   blobKey: Expression;
   succeededEventId?: NodeId;
   failedEventId?: NodeId;
+}
+
+/**
+ * Runs a registered `QueryDef` inside an action and binds its result into scope for the
+ * operations that follow (spec 0.10 §40).
+ *
+ * It is resolved **before the action's transaction opens** — its result may inform the
+ * mutations that follow — and reads Axiom's *own* authoritative data, which is why it is a
+ * first-class operation rather than an `integration-query` (spec §102): a query is not an
+ * external system. `bindAs` introduces a scope exactly as a `for-each`'s `scopeId` does;
+ * later operations refer to the whole result as `ref(bindAs)`. Never legal inside
+ * `for-each`, and — like `integration-query` — it makes its action server-authority, since
+ * only the authority holds a data provider.
+ */
+export interface QueryOperation {
+  kind: 'query';
+  queryId: NodeId;
+  arguments?: Record<string, Expression>;
+  bindAs: NodeId;
 }
 
 export type NativeEffect =

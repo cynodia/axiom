@@ -665,6 +665,12 @@ function linkOperations(
           linker.link(actionId, operation.failedEventId, 'references');
         }
         break;
+      case 'query':
+        linker.link(actionId, operation.queryId, 'references');
+        for (const argument of Object.values(operation.arguments ?? {})) {
+          linker.reads(actionId, argument, scope);
+        }
+        break;
       default:
     }
   }
