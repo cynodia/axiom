@@ -1,0 +1,114 @@
+{
+  "conformance": "axiom.conformance.v4",
+  "baseContract": "axiom.server.v6",
+  "protocol": "axiom.protocol.v1",
+  "release": "0.9.0-alpha.1",
+  "description": "Portable query conformance fixtures (spec 0.10 §89-91). Each file carries a compiled axiom.server.v6 Server IR, a dataset of provider rows, the principals, and a query/invoke step sequence with the exact results required. Running one needs only a DataProvider and the semantics in docs/QUERIES.md and docs/AUTHORITY.md.",
+  "fixtures": [
+    {
+      "name": "filter-equality",
+      "covers": [
+        "filter"
+      ]
+    },
+    {
+      "name": "filter-compound",
+      "covers": [
+        "filter",
+        "search"
+      ]
+    },
+    {
+      "name": "multi-key-sort",
+      "covers": [
+        "sort"
+      ]
+    },
+    {
+      "name": "stable-ordering",
+      "covers": [
+        "sort",
+        "pagination"
+      ]
+    },
+    {
+      "name": "null-ordering",
+      "covers": [
+        "sort",
+        "null-semantics"
+      ]
+    },
+    {
+      "name": "projection-shape",
+      "covers": [
+        "projection"
+      ]
+    },
+    {
+      "name": "cursor-page-1",
+      "covers": [
+        "pagination"
+      ]
+    },
+    {
+      "name": "cursor-page-2",
+      "covers": [
+        "pagination"
+      ]
+    },
+    {
+      "name": "invalid-cursor",
+      "covers": [
+        "pagination",
+        "hostile-client"
+      ]
+    },
+    {
+      "name": "to-one-relationship",
+      "covers": [
+        "relationship"
+      ]
+    },
+    {
+      "name": "count-aggregate",
+      "covers": [
+        "aggregate"
+      ]
+    },
+    {
+      "name": "grouped-sum",
+      "covers": [
+        "aggregate",
+        "group"
+      ]
+    },
+    {
+      "name": "row-read-policy",
+      "covers": [
+        "read-policy"
+      ]
+    },
+    {
+      "name": "aggregate-under-policy",
+      "covers": [
+        "read-policy",
+        "aggregate"
+      ]
+    },
+    {
+      "name": "relationship-under-policy",
+      "covers": [
+        "read-policy",
+        "relationship"
+      ]
+    },
+    {
+      "name": "query-inside-transaction",
+      "covers": [
+        "read-policy",
+        "mutation",
+        "transactional-reads"
+      ]
+    }
+  ]
+}

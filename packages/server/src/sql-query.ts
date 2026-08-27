@@ -62,15 +62,18 @@ export function translateExpression(expression: Expression, context: SqlContext)
     case 'literal':
       return literalFragment(expression.value as LiteralValue);
     case 'ref': {
-      // A bare `ref` to a parameter resolves to its value; `ref(rowScope)` / `ref(relBind)`
-      // are only meaningful as a `field` source and never appear bare in a valid query.
+      // A bare `ref` to a supplied parameter resolves to its value; a declared parameter
+      // that was not supplied resolves to NULL, exactly as `query-eval.ts` returns null for
+      // an unbound id. `ref(rowScope)` / `ref(relBind)` are only meaningful as a `field`
+      // source and never appear bare in a valid query; a bare `ref(PRINCIPAL)` (the whole
+      // record) is not translatable.
       if (String(expression.targetId) in context.args) {
         return literalFragment(context.args[String(expression.targetId)]);
       }
       if (expression.targetId === PRINCIPAL) {
         throw new UnsupportedQueryExpression('ref:principal-record');
       }
-      throw new UnsupportedQueryExpression(`ref:${String(expression.targetId)}`);
+      return literalFragment(null);
     }
     case 'field': {
       const source = expression.source;

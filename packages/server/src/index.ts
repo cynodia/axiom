@@ -27,6 +27,7 @@ export * from './memory-data-provider.js';
 export * from './query-cursor.js';
 export * from './query-runtime.js';
 export * from './sql-query.js';
+export * from './query-conformance.js';
 export { createSqliteDataProvider, isSqliteAvailable as isSqliteDataProviderAvailable } from './sqlite-data-provider.js';
 export type { SqliteDataProviderOptions } from './sqlite-data-provider.js';
 export * from './effects.js';

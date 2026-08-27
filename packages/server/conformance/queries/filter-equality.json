@@ -1,0 +1,776 @@
+{
+  "conformance": "axiom.conformance.v4",
+  "name": "filter-equality",
+  "covers": [
+    "filter"
+  ],
+  "description": "A single equality filter over an enum field, admin principal.",
+  "serverIR": {
+    "contract": "axiom.server.v6",
+    "id": "query-conformance",
+    "name": "Query Conformance",
+    "version": "0.9.0-alpha.1",
+    "entities": [
+      {
+        "id": "entity_principal",
+        "kind": "entity",
+        "identityFieldId": "field_principal_account_id",
+        "fields": [
+          {
+            "id": "field_principal_role",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_principal_account_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "entity_order",
+        "kind": "entity",
+        "identityFieldId": "field_order_id",
+        "fields": [
+          {
+            "id": "field_order_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_order_account_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_order_status",
+            "valueType": {
+              "kind": "enum",
+              "values": [
+                "pending",
+                "confirmed",
+                "cancelled"
+              ]
+            },
+            "required": true
+          },
+          {
+            "id": "field_order_created_at",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "datetime"
+            }
+          },
+          {
+            "id": "field_order_total",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          },
+          {
+            "id": "field_order_note",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          }
+        ]
+      },
+      {
+        "id": "entity_account",
+        "kind": "entity",
+        "identityFieldId": "field_account_id",
+        "fields": [
+          {
+            "id": "field_account_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_account_name",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "entity_order_summary",
+        "kind": "entity",
+        "identityFieldId": "field_summary_id",
+        "fields": [
+          {
+            "id": "field_summary_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_summary_account",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          },
+          {
+            "id": "field_summary_total",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            }
+          },
+          {
+            "id": "field_summary_count",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            }
+          },
+          {
+            "id": "field_summary_revenue",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            }
+          }
+        ]
+      }
+    ],
+    "fields": {
+      "field_principal_role": {
+        "entityId": "entity_principal",
+        "field": {
+          "id": "field_principal_role",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_principal_account_id": {
+        "entityId": "entity_principal",
+        "field": {
+          "id": "field_principal_account_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_order_id": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_order_account_id": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_account_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_order_status": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_status",
+          "valueType": {
+            "kind": "enum",
+            "values": [
+              "pending",
+              "confirmed",
+              "cancelled"
+            ]
+          },
+          "required": true
+        }
+      },
+      "field_order_created_at": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_created_at",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "datetime"
+          }
+        }
+      },
+      "field_order_total": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_total",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          },
+          "required": true
+        }
+      },
+      "field_order_note": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_note",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_account_id": {
+        "entityId": "entity_account",
+        "field": {
+          "id": "field_account_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_account_name": {
+        "entityId": "entity_account",
+        "field": {
+          "id": "field_account_name",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_summary_id": {
+        "entityId": "entity_order_summary",
+        "field": {
+          "id": "field_summary_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_summary_account": {
+        "entityId": "entity_order_summary",
+        "field": {
+          "id": "field_summary_account",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_summary_total": {
+        "entityId": "entity_order_summary",
+        "field": {
+          "id": "field_summary_total",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          }
+        }
+      },
+      "field_summary_count": {
+        "entityId": "entity_order_summary",
+        "field": {
+          "id": "field_summary_count",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          }
+        }
+      },
+      "field_summary_revenue": {
+        "entityId": "entity_order_summary",
+        "field": {
+          "id": "field_summary_revenue",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          }
+        }
+      }
+    },
+    "states": [],
+    "actions": {
+      "action_confirm": {
+        "id": "action_confirm",
+        "kind": "action",
+        "parameters": [
+          {
+            "id": "param_order",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "field",
+              "target": {
+                "kind": "provider-record",
+                "sourceEntityId": "entity_order",
+                "identityFieldId": "field_order_id",
+                "identityValue": {
+                  "kind": "ref",
+                  "targetId": "param_order"
+                }
+              },
+              "fieldId": "field_order_status"
+            },
+            "value": {
+              "kind": "literal",
+              "value": "confirmed"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      }
+    },
+    "constraints": [],
+    "transitionConstraints": [],
+    "principalEntityId": "entity_principal",
+    "observableStateIds": [],
+    "queries": [
+      {
+        "id": "query_orders",
+        "kind": "query",
+        "source": "entity_order",
+        "rowScopeId": "scope_row",
+        "parameters": [
+          {
+            "id": "param_status",
+            "valueType": {
+              "kind": "enum",
+              "values": [
+                "pending",
+                "confirmed",
+                "cancelled"
+              ]
+            },
+            "required": false
+          },
+          {
+            "id": "param_search",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": false
+          }
+        ],
+        "filter": {
+          "kind": "binary",
+          "operator": "and",
+          "left": {
+            "kind": "binary",
+            "operator": "eq",
+            "left": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_order_status"
+            },
+            "right": {
+              "kind": "ref",
+              "targetId": "param_status"
+            }
+          },
+          "right": {
+            "kind": "binary",
+            "operator": "or",
+            "left": {
+              "kind": "call",
+              "function": "is-empty",
+              "arguments": [
+                {
+                  "kind": "ref",
+                  "targetId": "param_search"
+                }
+              ]
+            },
+            "right": {
+              "kind": "call",
+              "function": "contains",
+              "arguments": [
+                {
+                  "kind": "call",
+                  "function": "coalesce",
+                  "arguments": [
+                    {
+                      "kind": "field",
+                      "source": {
+                        "kind": "ref",
+                        "targetId": "scope_row"
+                      },
+                      "fieldId": "field_order_note"
+                    },
+                    {
+                      "kind": "literal",
+                      "value": ""
+                    }
+                  ]
+                },
+                {
+                  "kind": "ref",
+                  "targetId": "param_search"
+                }
+              ]
+            }
+          }
+        },
+        "sort": [
+          {
+            "key": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_order_created_at"
+            },
+            "direction": "desc",
+            "nulls": "last"
+          },
+          {
+            "key": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_order_total"
+            },
+            "direction": "asc",
+            "nulls": "last"
+          }
+        ],
+        "relationships": [
+          {
+            "relationshipId": "rel_order_account",
+            "bindAs": "scope_acc"
+          }
+        ],
+        "projection": {
+          "entityId": "entity_order_summary",
+          "fields": [
+            {
+              "id": "field_summary_id",
+              "value": {
+                "kind": "field",
+                "source": {
+                  "kind": "ref",
+                  "targetId": "scope_row"
+                },
+                "fieldId": "field_order_id"
+              }
+            },
+            {
+              "id": "field_summary_account",
+              "value": {
+                "kind": "field",
+                "source": {
+                  "kind": "ref",
+                  "targetId": "scope_acc"
+                },
+                "fieldId": "field_account_name"
+              }
+            },
+            {
+              "id": "field_summary_total",
+              "value": {
+                "kind": "field",
+                "source": {
+                  "kind": "ref",
+                  "targetId": "scope_row"
+                },
+                "fieldId": "field_order_total"
+              }
+            }
+          ]
+        },
+        "pagination": {
+          "strategy": "cursor",
+          "maxPageSize": 50,
+          "defaultPageSize": 20
+        },
+        "readPolicyId": "policy_order"
+      },
+      {
+        "id": "query_order_count",
+        "kind": "query",
+        "source": "entity_order",
+        "rowScopeId": "scope_row",
+        "aggregate": [
+          {
+            "function": "count",
+            "as": "field_summary_count"
+          }
+        ],
+        "pagination": {
+          "strategy": "offset",
+          "maxPageSize": 1
+        },
+        "readPolicyId": "policy_order"
+      },
+      {
+        "id": "query_revenue_by_status",
+        "kind": "query",
+        "source": "entity_order",
+        "rowScopeId": "scope_row",
+        "groupBy": [
+          {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "scope_row"
+            },
+            "fieldId": "field_order_status"
+          }
+        ],
+        "aggregate": [
+          {
+            "function": "count",
+            "as": "field_summary_count"
+          },
+          {
+            "function": "sum",
+            "key": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_order_total"
+            },
+            "as": "field_summary_revenue"
+          }
+        ],
+        "pagination": {
+          "strategy": "offset",
+          "maxPageSize": 10
+        },
+        "readPolicyId": "policy_order"
+      }
+    ],
+    "relationships": [
+      {
+        "id": "rel_order_account",
+        "kind": "relationship",
+        "cardinality": "to-one",
+        "from": {
+          "entityId": "entity_order",
+          "fieldId": "field_order_account_id"
+        },
+        "to": {
+          "entityId": "entity_account",
+          "fieldId": "field_account_id"
+        }
+      }
+    ],
+    "readPolicies": [
+      {
+        "id": "policy_order",
+        "kind": "read-policy",
+        "entityId": "entity_order",
+        "rowScopeId": "scope_policy_row",
+        "predicate": {
+          "kind": "binary",
+          "operator": "or",
+          "left": {
+            "kind": "binary",
+            "operator": "eq",
+            "left": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "axiom_principal"
+              },
+              "fieldId": "field_principal_role"
+            },
+            "right": {
+              "kind": "literal",
+              "value": "admin"
+            }
+          },
+          "right": {
+            "kind": "binary",
+            "operator": "eq",
+            "left": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_policy_row"
+              },
+              "fieldId": "field_order_account_id"
+            },
+            "right": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "axiom_principal"
+              },
+              "fieldId": "field_principal_account_id"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "dataset": {
+    "entity_account": [
+      {
+        "field_account_id": "a1",
+        "field_account_name": "Acme"
+      },
+      {
+        "field_account_id": "a2",
+        "field_account_name": "Globex"
+      }
+    ],
+    "entity_order": [
+      {
+        "field_order_id": "o1",
+        "field_order_account_id": "a1",
+        "field_order_status": "confirmed",
+        "field_order_created_at": "2026-01-05",
+        "field_order_total": 30,
+        "field_order_note": "rush order"
+      },
+      {
+        "field_order_id": "o2",
+        "field_order_account_id": "a2",
+        "field_order_status": "pending",
+        "field_order_created_at": "2026-01-01",
+        "field_order_total": 10,
+        "field_order_note": null
+      },
+      {
+        "field_order_id": "o3",
+        "field_order_account_id": "a1",
+        "field_order_status": "confirmed",
+        "field_order_created_at": "2026-01-03",
+        "field_order_total": 20,
+        "field_order_note": "gift wrap"
+      },
+      {
+        "field_order_id": "o4",
+        "field_order_account_id": "a2",
+        "field_order_status": "confirmed",
+        "field_order_created_at": "2026-01-03",
+        "field_order_total": 40,
+        "field_order_note": "rush delivery"
+      },
+      {
+        "field_order_id": "o5",
+        "field_order_account_id": "a1",
+        "field_order_status": "cancelled",
+        "field_order_created_at": null,
+        "field_order_total": 5,
+        "field_order_note": "void"
+      },
+      {
+        "field_order_id": "o6",
+        "field_order_account_id": "a2",
+        "field_order_status": "confirmed",
+        "field_order_created_at": "2026-01-04",
+        "field_order_total": 15,
+        "field_order_note": null
+      },
+      {
+        "field_order_id": "o7",
+        "field_order_account_id": "a1",
+        "field_order_status": "pending",
+        "field_order_created_at": "2026-01-02",
+        "field_order_total": 25,
+        "field_order_note": "gift"
+      },
+      {
+        "field_order_id": "o8",
+        "field_order_account_id": "a2",
+        "field_order_status": "confirmed",
+        "field_order_created_at": "2026-01-06",
+        "field_order_total": 35,
+        "field_order_note": "rush"
+      }
+    ]
+  },
+  "principals": {
+    "admin": {
+      "field_principal_role": "admin",
+      "field_principal_account_id": "root"
+    },
+    "a1": {
+      "field_principal_role": "account",
+      "field_principal_account_id": "a1"
+    },
+    "a2": {
+      "field_principal_role": "account",
+      "field_principal_account_id": "a2"
+    }
+  },
+  "steps": [
+    {
+      "kind": "query",
+      "queryId": "query_orders",
+      "arguments": {
+        "param_status": "pending"
+      },
+      "credential": "admin",
+      "expect": {
+        "ok": true,
+        "items": [
+          {
+            "field_summary_id": "o7",
+            "field_summary_account": "Acme",
+            "field_summary_total": 25
+          },
+          {
+            "field_summary_id": "o2",
+            "field_summary_account": "Globex",
+            "field_summary_total": 10
+          }
+        ]
+      }
+    }
+  ]
+}

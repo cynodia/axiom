@@ -19,7 +19,7 @@
     "release:dist-tag:dry-run": "node scripts/dist-tag.mjs --dry-run",
     "release:publish:dry-run": "node scripts/publish.mjs --dry-run",
     "docs:sync": "node scripts/sync-docs.mjs",
-    "conformance:generate": "node scripts/conformance.mjs",
+    "conformance:generate": "node scripts/conformance.mjs && node scripts/query-conformance.mjs",
     "conformance:run": "node scripts/run-conformance.mjs",
     "schema:generate": "node scripts/schema.mjs",
     "toolkit:metrics": "node scripts/toolkit-metrics.mjs",
