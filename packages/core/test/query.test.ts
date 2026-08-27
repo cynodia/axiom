@@ -9,12 +9,15 @@ import {
   enumType,
   field,
   fieldId,
+  literal,
   nodeId,
   primitiveType,
+  providerRecordFieldLocation,
   ref,
   validateGraph,
 } from '@cynodia/axiom-core';
 import type {
+  ActionDef,
   EntityDef,
   QueryDef,
   ReadPolicyDef,
@@ -307,6 +310,35 @@ test('a query parameter colliding with a node id is rejected', () => {
     filter: undefined,
   });
   assert.ok(codes(graph).includes(VALIDATION_CODES.invalidQueryParameter));
+});
+
+const P_ORDER_ID = nodeId('param_order_id');
+const ACTION_CONFIRM = nodeId('action_confirm_order');
+
+function withConfirmAction(graph: ApplicationGraph, identityFieldId = F_ORDER_ID): ApplicationGraph {
+  graph.addNode<ActionDef>({
+    id: ACTION_CONFIRM,
+    kind: 'action',
+    parameters: [{ id: P_ORDER_ID, valueType: primitiveType('string'), required: true }],
+    operations: [
+      {
+        kind: 'set',
+        target: providerRecordFieldLocation(ENTITY_ORDER, identityFieldId, ref(P_ORDER_ID), F_ORDER_STATUS),
+        value: literal('confirmed'),
+      },
+    ],
+  });
+  return graph;
+}
+
+test('an action that sets a provider-record field by identity validates', () => {
+  const result = validateGraph(withConfirmAction(baseGraph()));
+  assert.equal(result.valid, true, JSON.stringify(result.errors, null, 2));
+});
+
+test('a provider-record location over a non-identity field is rejected', () => {
+  const graph = withConfirmAction(baseGraph(), F_ORDER_ACCOUNT_ID);
+  assert.ok(codes(graph).includes(VALIDATION_CODES.invalidProviderRecordLocation));
 });
 
 test('a query derives read edges to the state holding its source, and references its parts', () => {

@@ -10,7 +10,7 @@ import type {
   StateDef,
   TransitionConstraintDef,
 } from './nodes.js';
-import { locationExpressions, locationRootStateId } from './location.js';
+import { locationExpressions, locationProviderEntityId, locationRootStateId } from './location.js';
 import type { AnyNode } from './types.js';
 import type { QueryDef } from './query.js';
 import { queryExpressions } from './query.js';
@@ -213,6 +213,25 @@ export function actionUsesQuery(action: ActionDef): boolean {
   return (action.operations ?? []).some((operation) => operation.kind === 'query');
 }
 
+/**
+ * Whether an action writes a `provider-record` location anywhere in its operations
+ * (spec 0.10 §37-39). Mutating a canonical provider-backed row is authoritative work — the
+ * client holds no provider — so such an action executes on the server.
+ */
+export function actionWritesProviderRecord(action: ActionDef): boolean {
+  const targets = (operations: readonly Operation[]): boolean =>
+    operations.some((operation) => {
+      if (operation.kind === 'set' || operation.kind === 'insert' || operation.kind === 'remove') {
+        return locationProviderEntityId(operation.target) !== undefined;
+      }
+      if (operation.kind === 'for-each') {
+        return targets(operation.operations);
+      }
+      return false;
+    });
+  return targets(action.operations ?? []);
+}
+
 /** The states an action writes, following `for-each`, `invoke` and declared native effects. */
 export function statesWrittenBy(
   action: ActionDef,
@@ -315,7 +334,12 @@ export function actionAuthority(action: ActionDef, context: AuthorityContext): A
   // Integrations and object stores are both server-only by default (spec §65: secrets,
   // trust, CORS, auditability, deterministic authority), so an action that reaches either
   // is unconditionally server — independent of what it writes.
-  if (actionUsesIntegration(action) || actionUsesStorage(action) || actionUsesQuery(action)) {
+  if (
+    actionUsesIntegration(action) ||
+    actionUsesStorage(action) ||
+    actionUsesQuery(action) ||
+    actionWritesProviderRecord(action)
+  ) {
     return 'server';
   }
   for (const stateId of statesWrittenBy(action, context)) {

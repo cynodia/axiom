@@ -8,11 +8,13 @@ import {
   enumType,
   field,
   fieldId,
+  literal,
   nodeId,
   primitiveType,
+  providerRecordFieldLocation,
   ref,
 } from '@cynodia/axiom-core';
-import type { EntityDef, QueryDef, ReadPolicyDef, RelationshipDef, StateDef } from '@cynodia/axiom-core';
+import type { ActionDef, EntityDef, QueryDef, ReadPolicyDef, RelationshipDef, StateDef } from '@cynodia/axiom-core';
 import { compileToIR, compileToServerIR } from '@cynodia/axiom-compiler';
 
 const ENTITY_ORDER = nodeId('entity_order');
@@ -138,6 +140,31 @@ test('the contract is computed from the document — no query vocabulary stays b
     valueType: collectionType(entityType(ENTITY_ORDER)),
   });
   assert.equal(compileToServerIR(graph).contract, 'axiom.server.v1');
+});
+
+test('an action that writes a provider-record is server-authority', () => {
+  const graph = graphWithQuery();
+  const P_ID = nodeId('param_order_id');
+  const ACTION = nodeId('action_confirm');
+  graph.addNode<ActionDef>({
+    id: ACTION,
+    kind: 'action',
+    parameters: [{ id: P_ID, valueType: primitiveType('string'), required: true }],
+    operations: [
+      {
+        kind: 'set',
+        target: providerRecordFieldLocation(ENTITY_ORDER, F_ORDER_ID, ref(P_ID), F_ORDER_STATUS),
+        value: literal('confirmed'),
+      },
+    ],
+  });
+  const server = compileToServerIR(graph);
+  assert.ok(ACTION in server.actions, 'the confirm action executes on the authority');
+  assert.ok(server.actions[ACTION].operations.length > 0, 'with its real operations');
+
+  const client = compileToIR(graph);
+  assert.ok(client.remoteActionIds.includes(ACTION), 'the client sends it to the authority');
+  assert.equal(client.actions[ACTION].operations.length, 0, 'and holds none of its operations');
 });
 
 test('the client IR carries no query, relationship or read-policy node', () => {

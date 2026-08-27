@@ -6,11 +6,46 @@ import type { FieldId, NodeId } from './ids.js';
  * opposed to an Expression, which says what a value is. Nothing writable is ever
  * expressed as an Expression, so no mutation depends on JavaScript object identity.
  */
-export type Location = StateLocation | FieldLocation | CollectionItemLocation;
+export type Location =
+  | StateLocation
+  | FieldLocation
+  | CollectionItemLocation
+  | ProviderRecordLocation;
 
 export interface StateLocation {
   kind: 'state';
   stateId: NodeId;
+}
+
+/**
+ * Addresses one canonical **provider-backed** record by its identity, without that record
+ * ever being materialized into a `StateDef` (spec 0.10 §37-39). It is the read/write
+ * counterpart of a `QueryDef`: a `QueryDef` reads many rows a page at a time, a
+ * `provider-record` location names exactly one for a `set` or `remove` inside an action's
+ * transaction.
+ *
+ * It is not a parallel mutation model. The authority loads the addressed rows into the
+ * action's transaction, the ordinary mutation engine applies the `set`/`remove` and
+ * re-checks every constraint and transition rule over the proposed rows, and the provider
+ * commits the touched row set atomically or not at all. A rollback sends the provider
+ * nothing.
+ *
+ * ```ts
+ * // confirmOrder(orderId): set Order[id == $orderId].status = 'confirmed'
+ * fieldLocation(
+ *   providerRecordLocation(ENTITY_ORDER, F_ORDER_ID, ref(P_ORDER_ID)),
+ *   F_ORDER_STATUS,
+ * )
+ * ```
+ */
+export interface ProviderRecordLocation {
+  kind: 'provider-record';
+  /** The entity whose canonical store the record lives in. */
+  sourceEntityId: NodeId;
+  /** The identity field the record is selected by — must be the entity's `identityFieldId`. */
+  identityFieldId: FieldId;
+  /** The identity value, evaluated in the action's argument scope before the transaction opens. */
+  identityValue: Expression;
 }
 
 export interface FieldLocation {
@@ -59,6 +94,24 @@ export function indexSelector(index: Expression): IndexSelector {
   return { kind: 'index', index };
 }
 
+export function providerRecordLocation(
+  sourceEntityId: NodeId,
+  identityFieldId: FieldId,
+  identityValue: Expression,
+): ProviderRecordLocation {
+  return { kind: 'provider-record', sourceEntityId, identityFieldId, identityValue };
+}
+
+/** Convenience: one field of one provider-backed record selected by identity. */
+export function providerRecordFieldLocation(
+  sourceEntityId: NodeId,
+  identityFieldId: FieldId,
+  identityValue: Expression,
+  fieldId: FieldId,
+): FieldLocation {
+  return fieldLocation(providerRecordLocation(sourceEntityId, identityFieldId, identityValue), fieldId);
+}
+
 /** Convenience for the common shape: one field of one item of a collection state. */
 export function itemFieldLocation(
   stateId: NodeId,
@@ -72,11 +125,21 @@ export function itemFieldLocation(
   );
 }
 
-/** The state node every location is ultimately rooted in. */
+/**
+ * The node every location is ultimately rooted in.
+ *
+ * For an ordinary location this is the `StateDef` id. For a `provider-record` location
+ * there is no state — the record was never materialized — so this returns the **source
+ * entity id** instead. Callers that resolve the result as a state (`context.states.get`)
+ * naturally get `undefined` and skip it, which is correct: nothing materialized holds the
+ * record. Use `locationProviderEntityId` to detect the provider-backed case explicitly.
+ */
 export function locationRootStateId(location: Location): NodeId {
   switch (location.kind) {
     case 'state':
       return location.stateId;
+    case 'provider-record':
+      return location.sourceEntityId;
     case 'field':
       return locationRootStateId(location.target);
     case 'collection-item':
@@ -86,14 +149,30 @@ export function locationRootStateId(location: Location): NodeId {
   }
 }
 
+/** The source entity of the `provider-record` a location is rooted in, or `undefined` if it is state-rooted. */
+export function locationProviderEntityId(location: Location): NodeId | undefined {
+  switch (location.kind) {
+    case 'provider-record':
+      return location.sourceEntityId;
+    case 'field':
+      return locationProviderEntityId(location.target);
+    case 'collection-item':
+      return locationProviderEntityId(location.collection);
+    default:
+      return undefined;
+  }
+}
+
 /**
- * Expressions embedded in a location — selector values and indexes. These are read
- * dependencies of whatever uses the location.
+ * Expressions embedded in a location — selector values, indexes and a provider-record's
+ * identity value. These are read dependencies of whatever uses the location.
  */
 export function locationExpressions(location: Location): Expression[] {
   switch (location.kind) {
     case 'state':
       return [];
+    case 'provider-record':
+      return [location.identityValue];
     case 'field':
       return locationExpressions(location.target);
     case 'collection-item': {
@@ -116,6 +195,8 @@ export function locationSelectorFieldIds(location: Location): FieldId[] {
   switch (location.kind) {
     case 'state':
       return [];
+    case 'provider-record':
+      return [location.identityFieldId];
     case 'field':
       return locationSelectorFieldIds(location.target);
     case 'collection-item':

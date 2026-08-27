@@ -165,4 +165,6 @@ export const VALIDATION_CODES = {
   unstablePagination: 'UNSTABLE_PAGINATION',
   /** A `query` operation used where it cannot execute — inside a `for-each`. */
   invalidQueryOperation: 'INVALID_QUERY_OPERATION',
+  /** A `provider-record` location whose entity does not resolve, or whose identity field is not that entity's identity. */
+  invalidProviderRecordLocation: 'INVALID_PROVIDER_RECORD_LOCATION',
 } as const;

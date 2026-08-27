@@ -53,6 +53,24 @@ function walk(location: Location, context: SemanticContext, report: Report): voi
       }
       return;
     }
+    case 'provider-record': {
+      const entity = context.getEntity(location.sourceEntityId);
+      if (!entity) {
+        report(
+          VALIDATION_CODES.invalidProviderRecordLocation,
+          `A provider-record location names ${location.sourceEntityId}, which is not an entity`,
+        );
+        return;
+      }
+      if (entity.identityFieldId !== location.identityFieldId) {
+        report(
+          VALIDATION_CODES.invalidProviderRecordLocation,
+          `A provider-record location selects ${location.sourceEntityId} by ${location.identityFieldId}, which is not its identity field`,
+          { fieldId: location.identityFieldId },
+        );
+      }
+      return;
+    }
     case 'field': {
       walk(location.target, context, report);
       const entry = context.getField(location.fieldId);

@@ -37,6 +37,10 @@ export function inferLocationType(location: Location, context: SemanticContext):
   switch (location.kind) {
     case 'state':
       return context.getState(location.stateId)?.valueType;
+    case 'provider-record':
+      return context.getEntity(location.sourceEntityId)
+        ? { kind: 'entity', entityId: location.sourceEntityId }
+        : undefined;
     case 'field': {
       const parent = unwrap(inferLocationType(location.target, context));
       if (parent?.kind === 'entity') {
@@ -60,11 +64,29 @@ export function inferLocationType(location: Location, context: SemanticContext):
 
 /** Derived state is readable but never writable; everything else follows its root. */
 export function locationCapabilities(location: Location, context: SemanticContext): LocationCapabilities {
+  // A provider-backed record is canonical authoritative data: readable and writable by
+  // definition, and never a derivation.
+  if (locationProviderRoot(location)) {
+    return { readable: true, writable: true };
+  }
   const root = rootState(location, context);
   if (!root) {
     return { readable: false, writable: false };
   }
   return { readable: true, writable: root.derivation === undefined };
+}
+
+function locationProviderRoot(location: Location): boolean {
+  switch (location.kind) {
+    case 'provider-record':
+      return true;
+    case 'field':
+      return locationProviderRoot(location.target);
+    case 'collection-item':
+      return locationProviderRoot(location.collection);
+    default:
+      return false;
+  }
 }
 
 function rootState(location: Location, context: SemanticContext): StateDef | undefined {

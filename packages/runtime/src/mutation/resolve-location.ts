@@ -75,6 +75,14 @@ function toPath(location: Location, scope: unknown, runtime: LocationRuntime): R
             };
       return { rootStateId: parent.rootStateId, segments: [...parent.segments, segment] };
     }
+    case 'provider-record':
+      // A `provider-record` location addresses canonical data that no `StateDef` holds. The
+      // authority rewrites it to a `collection-item` over an in-transaction staging state
+      // before this engine ever sees it (spec 0.10 §38); reaching here means that rewrite
+      // did not happen — a client runtime, which holds no data provider.
+      throw new Error(
+        `A provider-record location cannot be resolved without a data provider; it is authority-only`,
+      );
     default:
       throw new Error(`Unknown location kind "${(location as { kind: string }).kind}"`);
   }
