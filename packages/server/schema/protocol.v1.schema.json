@@ -4,7 +4,7 @@
   "title": "Axiom semantic protocol v1",
   "description": "What a client may send an authority and what it may receive back. A client requests semantic operations — \"invoke action X with arguments Y\" — never a mutation program. Nothing here mentions a transport.",
   "contract": "axiom.protocol.v1",
-  "release": "0.8.2-alpha.1",
+  "release": "0.9.0-alpha.1",
   "oneOf": [
     {
       "$ref": "#/$defs/ServerRequest"
@@ -80,6 +80,9 @@
         },
         {
           "$ref": "#/$defs/EventRequest"
+        },
+        {
+          "$ref": "#/$defs/QueryRequest"
         }
       ]
     },
@@ -232,6 +235,178 @@
       ],
       "additionalProperties": false
     },
+    "QueryRequest": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "query"
+        },
+        "protocol": {
+          "const": "axiom.protocol.v1"
+        },
+        "queryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "pageSize": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "credential": {
+          "$ref": "#/$defs/Credential"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "queryId"
+      ],
+      "additionalProperties": false
+    },
+    "QueryPageResult": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hasMore": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items",
+        "nextCursor",
+        "hasMore"
+      ],
+      "additionalProperties": false
+    },
+    "QueryAggregateResult": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "array"
+              },
+              "values": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "values"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "additionalProperties": false
+    },
+    "QueryResponse": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "query-result"
+        },
+        "protocol": {
+          "const": "axiom.protocol.v1"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "nodeId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "actionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "constraintId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "stateId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "transactionId": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "severity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "page": {
+          "$ref": "#/$defs/QueryPageResult"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/QueryAggregateResult"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "ok",
+        "diagnostics",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
     "ServerResponse": {
       "oneOf": [
         {
@@ -245,6 +420,9 @@
         },
         {
           "$ref": "#/$defs/EventResponse"
+        },
+        {
+          "$ref": "#/$defs/QueryResponse"
         }
       ]
     },

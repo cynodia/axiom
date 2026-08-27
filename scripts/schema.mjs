@@ -18,9 +18,16 @@ const {
   SERVER_IR_CONTRACTS,
   SERVER_IR_V2_EXPRESSION_KINDS,
   SERVER_IR_V5_OPERATION_KINDS,
+  SERVER_IR_V6_OPERATION_KINDS,
   SUBSCRIPTION_BACKPRESSURE_POLICIES,
   SUBSCRIPTION_FAILURE_POLICIES,
 } = core;
+
+const QUERY_SORT_DIRECTIONS = ['asc', 'desc'];
+const QUERY_NULLS_ORDERS = ['first', 'last'];
+const QUERY_PAGINATION_STRATEGIES = ['cursor', 'offset'];
+const QUERY_AGGREGATE_FUNCTIONS = ['count', 'sum', 'min', 'max', 'average'];
+const RELATIONSHIP_CARDINALITIES = ['to-one', 'to-many'];
 
 /** Operation kinds `axiom.server.v1`/`v2` do not contain — integrations are 0.8/v3 vocabulary. */
 const SERVER_IR_V3_OPERATION_KINDS = ['integration-query', 'integration-effect'];
@@ -109,6 +116,13 @@ const buildServerIR = (contract) => ({
           storages: { type: 'array', items: ref('StorageDef') },
         }
       : {}),
+    ...(atLeast(contract, 'axiom.server.v6')
+      ? {
+          queries: { type: 'array', items: ref('QueryDef') },
+          relationships: { type: 'array', items: ref('RelationshipDef') },
+          readPolicies: { type: 'array', items: ref('ReadPolicyDef') },
+        }
+      : {}),
   },
   $defs: {
     NodeId: id,
@@ -172,6 +186,7 @@ const buildServerIR = (contract) => ({
         variant('state', { stateId: id }, ['stateId']),
         variant('field', { target: location, fieldId: id }, ['target', 'fieldId']),
         variant('collection-item', { collection: location, selector: ref('CollectionSelector') }, ['collection', 'selector']),
+        ...(atLeast(contract, 'axiom.server.v6') ? [ref('ProviderRecordLocation')] : []),
       ],
     },
     CollectionItemLocation: variant(
@@ -179,6 +194,15 @@ const buildServerIR = (contract) => ({
       { collection: location, selector: ref('CollectionSelector') },
       ['collection', 'selector'],
     ),
+    ...(atLeast(contract, 'axiom.server.v6')
+      ? {
+          ProviderRecordLocation: variant(
+            'provider-record',
+            { sourceEntityId: id, identityFieldId: id, identityValue: expression },
+            ['sourceEntityId', 'identityFieldId', 'identityValue'],
+          ),
+        }
+      : {}),
     CollectionSelector: {
       oneOf: [
         variant('identity', { fieldId: id, value: expression }, ['fieldId', 'value']),
@@ -291,13 +315,26 @@ const buildServerIR = (contract) => ({
               }, ['operationId']),
             ]
           : []),
+        ...(atLeast(contract, 'axiom.server.v6')
+          ? [
+              variant('query', {
+                queryId: id,
+                arguments: { type: 'object', additionalProperties: expression },
+                bindAs: id,
+              }, ['queryId', 'bindAs']),
+            ]
+          : []),
       ],
     },
     MutationOperation: {
       oneOf: [
         variant('set', { target: location, value: expression }, ['target', 'value']),
         variant('insert', { target: location, value: expression, position: { enum: ['start', 'end'] } }, ['target', 'value']),
-        variant('remove', { target: ref('CollectionItemLocation') }, ['target']),
+        variant('remove', {
+          target: atLeast(contract, 'axiom.server.v6')
+            ? { oneOf: [ref('CollectionItemLocation'), ref('ProviderRecordLocation')] }
+            : ref('CollectionItemLocation'),
+        }, ['target']),
       ],
     },
 
@@ -498,6 +535,89 @@ const buildServerIR = (contract) => ({
             ['id', 'kind', 'blobEntityId'],
           ),
         }),
+
+    ...(!atLeast(contract, 'axiom.server.v6')
+      ? {}
+      : {
+          RelationshipEndpoint: object({ entityId: id, fieldId: id }, ['entityId', 'fieldId']),
+          RelationshipDef: object(
+            {
+              id,
+              kind: { const: 'relationship' },
+              name: { type: 'string' },
+              metadata: { type: 'object' },
+              from: ref('RelationshipEndpoint'),
+              to: ref('RelationshipEndpoint'),
+              cardinality: { enum: [...RELATIONSHIP_CARDINALITIES] },
+            },
+            ['id', 'kind', 'from', 'to', 'cardinality'],
+          ),
+          ReadPolicyDef: object(
+            {
+              id,
+              kind: { const: 'read-policy' },
+              name: { type: 'string' },
+              metadata: { type: 'object' },
+              entityId: id,
+              rowScopeId: id,
+              predicate: expression,
+            },
+            ['id', 'kind', 'entityId', 'rowScopeId', 'predicate'],
+          ),
+          QueryParameter: object(
+            { id, name: { type: 'string' }, valueType: ref('TypeRef'), required: { type: 'boolean' } },
+            ['id', 'valueType'],
+          ),
+          QuerySortKey: object(
+            {
+              key: expression,
+              direction: { enum: [...QUERY_SORT_DIRECTIONS] },
+              nulls: { enum: [...QUERY_NULLS_ORDERS] },
+            },
+            ['key'],
+          ),
+          QueryProjectionField: object({ id, value: expression }, ['id', 'value']),
+          QueryProjection: object(
+            { entityId: id, fields: { type: 'array', items: ref('QueryProjectionField') } },
+            ['entityId', 'fields'],
+          ),
+          QueryRelationshipUse: object(
+            { relationshipId: id, bindAs: id, maxPageSize: { type: 'number' } },
+            ['relationshipId', 'bindAs'],
+          ),
+          QueryAggregate: object(
+            { function: { enum: [...QUERY_AGGREGATE_FUNCTIONS] }, key: expression, as: id },
+            ['function', 'as'],
+          ),
+          QueryPagination: object(
+            {
+              strategy: { enum: [...QUERY_PAGINATION_STRATEGIES] },
+              maxPageSize: { type: 'number' },
+              defaultPageSize: { type: 'number' },
+            },
+            ['strategy'],
+          ),
+          QueryDef: object(
+            {
+              id,
+              kind: { const: 'query' },
+              name: { type: 'string' },
+              metadata: { type: 'object' },
+              parameters: { type: 'array', items: ref('QueryParameter') },
+              source: id,
+              rowScopeId: id,
+              filter: expression,
+              sort: { type: 'array', items: ref('QuerySortKey') },
+              relationships: { type: 'array', items: ref('QueryRelationshipUse') },
+              projection: ref('QueryProjection'),
+              groupBy: { type: 'array', items: expression },
+              aggregate: { type: 'array', items: ref('QueryAggregate') },
+              pagination: ref('QueryPagination'),
+              readPolicyId: id,
+            },
+            ['id', 'kind', 'source', 'rowScopeId'],
+          ),
+        }),
   },
 });
 
@@ -517,7 +637,10 @@ function operationKindsFor(contract) {
     if (!atLeast(contract, 'axiom.server.v3') && SERVER_IR_V3_OPERATION_KINDS.includes(kind)) {
       return false;
     }
-    return atLeast(contract, 'axiom.server.v5') || !SERVER_IR_V5_OPERATION_KINDS.includes(kind);
+    if (!atLeast(contract, 'axiom.server.v5') && SERVER_IR_V5_OPERATION_KINDS.includes(kind)) {
+      return false;
+    }
+    return atLeast(contract, 'axiom.server.v6') || !SERVER_IR_V6_OPERATION_KINDS.includes(kind);
   });
 }
 
@@ -554,7 +677,9 @@ const protocol = {
     RuntimeDiagnostic: diagnostic,
     Credential: { type: ['string', 'null'] },
 
-    ServerRequest: { oneOf: [ref('SnapshotRequest'), ref('InvokeRequest'), ref('EventRequest')] },
+    ServerRequest: {
+      oneOf: [ref('SnapshotRequest'), ref('InvokeRequest'), ref('EventRequest'), ref('QueryRequest')],
+    },
     SnapshotRequest: object(
       {
         kind: { const: 'snapshot' },
@@ -596,8 +721,57 @@ const protocol = {
       ['kind', 'protocol', 'ok', 'diagnostics'],
     ),
 
+    QueryRequest: object(
+      {
+        kind: { const: 'query' },
+        protocol: { const: PROTOCOL_VERSION },
+        queryId: id,
+        arguments: { type: 'object' },
+        cursor: { type: 'string' },
+        pageSize: { type: 'integer', minimum: 1 },
+        offset: { type: 'integer', minimum: 0 },
+        credential: ref('Credential'),
+      },
+      ['kind', 'protocol', 'queryId'],
+    ),
+    QueryPageResult: object(
+      {
+        items: { type: 'array', items: { type: 'object' } },
+        nextCursor: { type: ['string', 'null'] },
+        hasMore: { type: 'boolean' },
+      },
+      ['items', 'nextCursor', 'hasMore'],
+    ),
+    QueryAggregateResult: object(
+      {
+        rows: {
+          type: 'array',
+          items: object({ key: { type: 'array' }, values: { type: 'object' } }, ['values']),
+        },
+      },
+      ['rows'],
+    ),
+    QueryResponse: object(
+      {
+        kind: { const: 'query-result' },
+        protocol: { const: PROTOCOL_VERSION },
+        ok: { type: 'boolean' },
+        diagnostics: { type: 'array', items: diagnostic },
+        page: ref('QueryPageResult'),
+        aggregate: ref('QueryAggregateResult'),
+        revision: { type: 'integer', minimum: 0 },
+      },
+      ['kind', 'protocol', 'ok', 'diagnostics', 'revision'],
+    ),
+
     ServerResponse: {
-      oneOf: [ref('SnapshotResponse'), ref('InvokeResponse'), ref('ErrorResponse'), ref('EventResponse')],
+      oneOf: [
+        ref('SnapshotResponse'),
+        ref('InvokeResponse'),
+        ref('ErrorResponse'),
+        ref('EventResponse'),
+        ref('QueryResponse'),
+      ],
     },
     StateSnapshot: object(
       {

@@ -59,6 +59,9 @@ export const SERVER_IR_V5_OPERATION_KINDS: readonly string[] = [
   'blob-delete',
 ];
 
+/** Operation kinds no contract before `axiom.server.v6` contains. */
+export const SERVER_IR_V6_OPERATION_KINDS: readonly string[] = ['query'];
+
 /** Expression kinds that `axiom.server.v1` does not contain. */
 export const SERVER_IR_V2_EXPRESSION_KINDS: readonly string[] = ['group', 'expression-ref'];
 

@@ -10,6 +10,7 @@ import {
   SERVER_IR_CONTRACTS,
   SERVER_IR_V2_EXPRESSION_KINDS,
   SERVER_IR_V5_OPERATION_KINDS,
+  SERVER_IR_V6_OPERATION_KINDS,
 } from '@cynodia/axiom-core';
 import {
   PROTOCOL_VERSION,
@@ -140,6 +141,19 @@ test('the Server IR schema describes the IR the compiler actually emits', async 
   }
 });
 
+test('the axiom.server.v6 schema describes the query conformance fixtures', async () => {
+  const queryDir = path.join(conformanceDir, 'queries');
+  const files = (await readdir(queryDir)).filter((name) => name.endsWith('.json') && name !== 'manifest.json');
+  const schema = irSchemas.get('axiom.server.v6') as Schema;
+  assert.ok(schema, 'a v6 schema is published');
+  for (const file of files.sort()) {
+    const fixture = JSON.parse(await readFile(path.join(queryDir, file), 'utf8')) as { serverIR: ServerIR };
+    assert.equal(fixture.serverIR.contract, 'axiom.server.v6', `${file} is a v6 document`);
+    const problems = validate(schema, fixture.serverIR, schema, file);
+    assert.deepEqual(problems, [], `${file} conforms to the axiom.server.v6 schema`);
+  }
+});
+
 test('the schema names exactly the vocabulary the runtime implements', () => {
   const defs = irSchema.$defs as Record<string, Schema>;
   const kindsOf = (schema: Schema): unknown[] =>
@@ -184,6 +198,7 @@ test('the schema names exactly the vocabulary the runtime implements', () => {
     [...OPERATION_KINDS]
       .filter((kind) => !V3_OPERATION_KINDS.includes(kind))
       .filter((kind) => !SERVER_IR_V5_OPERATION_KINDS.includes(kind))
+      .filter((kind) => !SERVER_IR_V6_OPERATION_KINDS.includes(kind))
       .sort(),
     'axiom.server.v1 gained no operation vocabulary',
   );
