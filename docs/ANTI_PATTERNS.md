@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.11.1-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.11.2-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -631,7 +631,7 @@ is never "the operator approved data loss."
 if (pkg.version === persisted.axiomVersion) startNormally();
 ```
 
-`@cynodia/axiom` `0.11.1`, `axiom.server.v7`, and `graph.schemaVersion` `14` are unrelated.
+`@cynodia/axiom` `0.11.2`, `axiom.server.v7`, and `graph.schemaVersion` `14` are unrelated.
 Compare `schemaFingerprint(graph)` and `graph.schemaVersion` against what the provider
 durably recorded — which is exactly what the startup gate does.
 

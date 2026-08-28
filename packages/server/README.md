@@ -41,7 +41,9 @@ This package also owns the parts of an application that only the authority can r
 - **Schema evolution** (0.11) — `planMigration` / `explainMigration`, the host-controlled
   `executeMigration`, the durable `MigrationMetadataStore` and lease lock, keyset-batched
   crash-resumable migration, memory and SQLite `MigrationRowStore`s, and the
-  `createAxiomServer` startup gate. See
+  `createAxiomServer` startup gate. Concurrent migrators — including two OS processes on one
+  SQLite file — resolve to `completed` / `MIGRATION_IN_PROGRESS` / `alreadyAtTarget`; the
+  SQLite provider absorbs physical `SQLITE_BUSY` contention internally (0.11.2). See
   [`docs/MIGRATIONS.md`](https://github.com/cynodia/axiom/blob/main/docs/MIGRATIONS.md).
 
 Main exports: `createAxiomServer`, `createMemoryPersistence`, `createSqlitePersistence`,

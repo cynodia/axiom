@@ -261,6 +261,10 @@ test('every validation code is documented, and every documented code exists', ()
     'MIGRATION_OLD_SCOPE', 'MIGRATION_OPERATION_KINDS', 'MIGRATION_REVERSIBILITIES',
     'SCHEMA_FINGERPRINT_VERSION', 'DEFAULT_SCHEMA_VERSION', 'MIGRATION_PHASES',
     'MIGRATION_PROVIDER_CAPABILITIES',
+    // SQLite provider contention (0.11.2): physical SQLite error names, deliberately NOT
+    // Axiom diagnostic codes — the provider reconciles them to MIGRATION_IN_PROGRESS /
+    // MIGRATION_FAILED (spec11.2 §26).
+    'SQLITE_BUSY', 'SQLITE_LOCKED',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });

@@ -1,6 +1,6 @@
 # Schema evolution & semantic migrations
 
-Axiom 0.11.1-alpha.1. The operational contract for evolving a deployed application's
+Axiom 0.11.2-alpha.1. The operational contract for evolving a deployed application's
 semantic model and its persisted canonical data over time — adding a required field,
 splitting one field into two, removing an obsolete one, migrating millions of
 provider-backed rows — **without** an application-authored SQL migration, an ORM migration,
@@ -19,7 +19,7 @@ tarball. This document plus the `.d.ts` declarations, the `axiom.server.v7` sche
 ## Semantic schema identity
 
 An application has a **semantic schema version** — `graph.schemaVersion`, a monotonic
-integer, default `1`. It is a distinct concept from the npm package version (`0.11.1`) and
+integer, default `1`. It is a distinct concept from the npm package version (`0.11.2`) and
 from the Server IR contract (`axiom.server.v7`). A `MigrationDef` chain connects consecutive
 integers.
 
@@ -279,6 +279,31 @@ cursor minted under one schema is `QUERY_CURSOR_INVALID` after a migration chang
   reclaims the lock.
 - A resume against a checkpoint from a different plan is refused
   (`MIGRATION_CHECKPOINT_INVALID`).
+
+**Concurrent-migrator outcomes are semantic, not physical.** When two processes run the
+same required migration against the same database — including two independent OS processes
+sharing one SQLite file — each `executeMigration` result MUST be one of:
+
+| Result | Meaning |
+| --- | --- |
+| `run.phase === 'completed'`, `alreadyAtTarget === false` | this process performed the transition — exactly one process in a race does |
+| `run.alreadyAtTarget === true` | a competitor completed the whole transition first; nothing to do |
+| `MIGRATION_IN_PROGRESS` | a competitor holds the migration lease |
+
+A competing runner never re-executes the transition: the transform runs exactly once, the
+history gains exactly one entry per step, and the schema version advances once. A losing
+process performs no migration data work and does not touch the active owner's checkpoint.
+
+**The provider absorbs physical contention.** SQLite's single-writer file lock
+(`SQLITE_BUSY` / `SQLITE_LOCKED`) is reconciled to the outcomes above inside the provider —
+a short bounded busy wait, then an ownership re-check. A consumer does **not** catch
+SQLite-native lock errors around `executeMigration`, `getMigrationStatus`, `schemaGate()`
+or ordinary requests, and does **not** write its own busy-retry loop; that is provider
+responsibility. `createSqliteMigrationStore` / `createSqliteRowStore` accept an optional
+`busyTimeoutMs` (default 2000) that tunes only the physical wait — it is not
+migration-ownership configuration and correctness never depends on it. If contention
+genuinely cannot be explained by a migration owner, the result is `MIGRATION_FAILED` with
+the physical cause retained for the operator, never a masked `MIGRATION_IN_PROGRESS`.
 
 ---
 
