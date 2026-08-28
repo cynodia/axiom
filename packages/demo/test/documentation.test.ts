@@ -50,7 +50,12 @@ import {
   toBoolean,
 } from '@cynodia/axiom';
 import type { EntityDef, RouteDef, StateDef, ViewNode } from '@cynodia/axiom';
-import { MAX_EVENT_DISPATCH_DEPTH, SERVER_DIAGNOSTIC_CODES, SERVER_IR_CONTRACTS } from '@cynodia/axiom-server';
+import {
+  COORDINATION_DIAGNOSTIC_CODES,
+  MAX_EVENT_DISPATCH_DEPTH,
+  SERVER_DIAGNOSTIC_CODES,
+  SERVER_IR_CONTRACTS,
+} from '@cynodia/axiom-server';
 import { runMinimalExample } from '@cynodia/axiom-demo/minimal';
 import { runSeatingExample } from '@cynodia/axiom-demo/minimal-server';
 
@@ -214,6 +219,8 @@ test('every validation code is documented, and every documented code exists', ()
     ...codes,
     ...Object.values(RUNTIME_DIAGNOSTIC_CODES),
     ...Object.values(SERVER_DIAGNOSTIC_CODES),
+    // Distributed authority (0.12): semantic diagnostics, documented in DISTRIBUTED_AUTHORITY.md.
+    ...COORDINATION_DIAGNOSTIC_CODES,
   ]);
   const invented = new Set<string>();
   for (const match of EVERY_DOC.matchAll(/`([A-Z][A-Z0-9_]{6,})`/g)) {
@@ -261,6 +268,10 @@ test('every validation code is documented, and every documented code exists', ()
     'MIGRATION_OLD_SCOPE', 'MIGRATION_OPERATION_KINDS', 'MIGRATION_REVERSIBILITIES',
     'SCHEMA_FINGERPRINT_VERSION', 'DEFAULT_SCHEMA_VERSION', 'MIGRATION_PHASES',
     'MIGRATION_PROVIDER_CAPABILITIES',
+    // Distributed authority (0.12): exported constants and machine-readable contracts, not codes.
+    'CACHE_COHERENCE', 'COORDINATION_CAPABILITIES', 'SEMANTIC_FINGERPRINT_VERSION',
+    'DURABLE_WORK_STATES', 'EFFECT_WORK_CLASS', 'SCHEDULE_FIRING_WORK_CLASS',
+    'SUBSCRIPTION_CURSOR_RESOURCE_KIND', 'DEFAULT_DEDUP_WINDOW_PER_SOURCE',
     // SQLite provider contention (0.11.2): physical SQLite error names, deliberately NOT
     // Axiom diagnostic codes — the provider reconciles them to MIGRATION_IN_PROGRESS /
     // MIGRATION_FAILED (spec11.2 §26).

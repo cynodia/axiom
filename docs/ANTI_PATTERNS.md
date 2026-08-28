@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.11.2-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.12.0-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -682,3 +682,130 @@ The stored version, fingerprint and step history are written only by the migrati
 executor, atomically with the work they describe. Hand-editing them produces
 `MIGRATION_FINGERPRINT_MISMATCH` or `MIGRATION_STATE_CORRUPTED` at startup — the gate's
 whole purpose is to catch exactly this.
+
+## 52. An application-written distributed lock (or `SETNX` in a `native` operation)
+
+```ts
+// WRONG — the graph now encodes a deployment fact, and a second lock system exists.
+{ kind: 'native', name: 'acquireRedisLock', arguments: { key: literal('reboot:dev-1') } }
+```
+
+Multi-authority safety is the framework's job, not the application's. `createAxiomServer` is
+given a `coordination` provider and every class of framework-owned async work is leased and
+fenced automatically. There is no `native` operation for locking and there will not be one;
+`SETNX` / `Redlock` / a Postgres advisory lock are provider techniques that never appear in
+a graph. See [`DISTRIBUTED_AUTHORITY.md`](DISTRIBUTED_AUTHORITY.md).
+
+## 53. A process-local "already executed" `Set` as deduplication
+
+```ts
+// WRONG — resets on restart, and authority B has never heard of it.
+const done = new Set<string>();
+if (done.has(effectId)) return;
+done.add(effectId);
+```
+
+Deduplication for an authoritative server must be durable and shared. The outbox keys the
+logical effect by its committed intent id and claims it with a fenced lease; external event
+ingestion deduplicates on `source + externalEventId` against a durable payload fingerprint.
+An in-memory set is neither durable nor cross-authority.
+
+## 54. `leader`-only application branches
+
+```ts
+// WRONG — "am I the leader?" is not a question the graph may ask.
+conditional(call('isLeaderInstance'), doTheWork, doNothing)
+```
+
+Axiom is leaderless: ownership is per work item, and any healthy compatible authority may
+claim any item. There is no leader for an application to branch on. If work should happen
+once, model it as framework-owned async work (an effect, a trigger) and let the claim make
+it once.
+
+## 55. A random UUID (or timestamp, or instance id) as an external-event dedup key
+
+```ts
+// WRONG — every "duplicate" gets a fresh id, so nothing is ever deduplicated.
+fireEvent(EVENT_STATUS, { ...payload, dedupKey: crypto.randomUUID() })
+```
+
+Deduplication needs the *provider's* stable delivery id. If the source has no stable id,
+ingestion is honestly at-least-once (`unidentified`) — synthesising uniqueness from a
+receive timestamp, a random UUID or the authority instance id is not deduplication, it just
+hides the fact that duplicates get through.
+
+## 56. A retry that creates a new logical effect
+
+```ts
+// WRONG — every attempt is a new effect, so the external system is hit N times with N keys.
+async function retry(effect) {
+  await outbox.enqueue({ ...effect, id: createNodeId() });
+}
+```
+
+`logicalEffectId` is the committed intent id and is stable for the life of the effect. A
+retry re-claims the *same* work item under a new fencing generation and re-runs the physical
+attempt with the *same* idempotency key. A new id defeats provider idempotency entirely.
+
+## 57. A completion write that is not conditional on the fencing generation
+
+```ts
+// WRONG — a stalled owner that wakes after a reclaim overwrites the new owner's result.
+await store.markComplete(effectId, result);
+```
+
+Every durable-work completion / retry / cursor write must be conditional on the current
+`(ownerId, generation)`. Lease expiry alone does not fence — but once another authority
+reclaims (advancing the generation), the old owner's write must be rejected (`WORK_FENCED`).
+Unconditional completion is a release-blocking defect.
+
+## 58. Assuming a global order across unrelated entities or events
+
+```ts
+// WRONG — there is no total order to observe.
+assert(eventA.sequence < eventB.sequence); // eventA and eventB from different subscriptions
+```
+
+Ordering is **per semantic stream** only: monotonic `sequence` within one subscription.
+There is no ordering across subscriptions, and none between a subscription and any other
+event source. Code that depends on a global order is depending on an accident of which
+authority happened to process what first.
+
+## 59. Relying on pub/sub delivery for cache correctness
+
+```ts
+// WRONG — a dropped invalidation message leaves this authority serving stale data forever.
+bus.on('invalidate', (key) => cache.delete(key));
+// ...and nothing else checks freshness.
+```
+
+Cache coherence is a *durable revision* mechanism, not a broadcast: each cache entry records
+the store revision it was computed at, and every authoritative read re-checks the persisted
+revision before serving. A broadcast invalidation is a latency optimisation; correctness
+must survive it being lost entirely.
+
+## 60. Swallowing an uncertain external effect outcome
+
+```ts
+// WRONG — "we didn't see a success, so it didn't happen" — then a non-idempotent retry.
+if (!recordedSuccess) await chargeCardAgain(amount);
+```
+
+If an authority sent the request and crashed before recording completion, Axiom cannot know
+whether the effect happened. The contract is: retry per the delivery policy **reusing the
+same idempotency key**, and mark the attempt uncertain (`uncertainAttempts`). Never assume
+not-done, and never claim the physical side effect is exactly-once — with a non-idempotent
+provider it may occur twice, and that must be visible, not hidden.
+
+## 61. Executing durable work under an incompatible build
+
+```ts
+// WRONG — authority B, running an older graph, claims and runs work authority A queued.
+await workStore.claim('effect', { ignoreCompatibilityKey: true });
+```
+
+Durable work records the **compatibility key** of the build that created it —
+`{ schemaVersion, schemaFingerprint, serverContract, semanticFingerprint }`. An authority
+whose key differs refuses to claim it (`INCOMPATIBLE_AUTHORITY`); the item waits for a
+compatible authority. A rolling deploy that lets an old build run new-schema work is exactly
+the mixed-semantic execution the fail-closed check exists to prevent.

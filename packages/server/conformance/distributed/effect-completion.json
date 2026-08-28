@@ -1,0 +1,67 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "effect-completion",
+  "covers": [
+    "effect completion"
+  ],
+  "description": "The current owner settles the effect succeeded; a fenced prior owner's settle is rejected.",
+  "clockStart": 1000,
+  "steps": [
+    {
+      "op": "enqueue",
+      "workClass": "effect",
+      "workId": "e1"
+    },
+    {
+      "op": "claim",
+      "workClass": "effect",
+      "owner": "A",
+      "leaseMs": 1000,
+      "expect": {
+        "workIds": [
+          "e1"
+        ]
+      }
+    },
+    {
+      "op": "advance",
+      "ms": 1001
+    },
+    {
+      "op": "claim",
+      "workClass": "effect",
+      "owner": "B",
+      "leaseMs": 5000,
+      "expect": {
+        "workIds": [
+          "e1"
+        ]
+      }
+    },
+    {
+      "op": "settle",
+      "ref": "effect:e1:A",
+      "outcome": "succeeded",
+      "expect": {
+        "ok": false,
+        "reason": "fenced"
+      }
+    },
+    {
+      "op": "settle",
+      "ref": "effect:e1:B",
+      "outcome": "succeeded",
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "op": "work-state",
+      "workClass": "effect",
+      "workId": "e1",
+      "expect": {
+        "state": "succeeded"
+      }
+    }
+  ]
+}

@@ -33,7 +33,7 @@ Shorter forms of the same routing: [`AGENTS.md`](AGENTS.md) and [`llms.txt`](llm
 at this package's root.
 
 **Status: experimental / alpha.** The API may change between alpha releases. The
-documentation in `docs/` describes this exact version, `0.11.2-alpha.1`.
+documentation in `docs/` describes this exact version, `0.12.0-alpha.1`.
 
 ## Installation
 
@@ -47,7 +47,7 @@ Every release of this project is a pre-release and npm's `latest` tag points at 
 plain command above installs the current version. **There is no `alpha` dist-tag** — the tag
 was removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` now
 fails with a 404. Pin the exact version instead when one is needed:
-`npm install @cynodia/axiom@0.11.2-alpha.1`.
+`npm install @cynodia/axiom@0.12.0-alpha.1`.
 
 These are ES modules compiled to ES2022; import them with `import`, not `require`. There is
 no published Axiom CLI. `@cynodia/axiom-server`'s SQLite persistence adapter additionally
@@ -191,6 +191,7 @@ focused document when the reference is not specific enough for the question at h
 | Binary data: `BlobRef`, upload, download, authorization, orphans | [`docs/STORAGE.md`](docs/STORAGE.md) |
 | Large authoritative datasets: `QueryDef`, relationships, read policy, providers, cursors, cache | [`docs/QUERIES.md`](docs/QUERIES.md) |
 | Evolving a deployed schema: `MigrationDef`, fingerprint, the startup gate, `executeMigration`, providers | [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md) |
+| Running N authority processes at once: ownership, leases, fencing, delivery guarantees, version skew | [`docs/DISTRIBUTED_AUTHORITY.md`](docs/DISTRIBUTED_AUTHORITY.md) |
 | Machine queries, mutation impact and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 
 `docs/AGENT_REFERENCE.md` plus the `.d.ts` declarations are intended to be sufficient on

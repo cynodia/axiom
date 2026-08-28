@@ -5,6 +5,8 @@ import { Transaction } from './transaction.js';
 import type { ChangeSet } from './changes.js';
 import { inspectSchema, migrationImpact } from './migration.js';
 import type { MigrationImpact, SchemaInspection } from './migration.js';
+import { inspectDistributedSemantics } from './distributed.js';
+import type { DistributedSemanticsInspection } from './distributed.js';
 
 /**
  * The machine-facing interface to an application. Agents query semantics and apply
@@ -63,5 +65,17 @@ export class AgentAPI extends PresentationQueries {
    */
   migrationImpact(previous: ApplicationGraph): MigrationImpact {
     return migrationImpact(previous, this.graph);
+  }
+
+  /**
+   * The distributed-authority semantics of this application (spec12 §56, §57): its
+   * framework-owned async work classes and the guarantee that applies to each, its
+   * compatibility identity, cache coherence, and the operational knobs — with the semantic
+   * guarantee, the runtime-state source, the provider capability and the tuning kept
+   * separate. Static over the graph; live runtime state is `AxiomServer.authority()` /
+   * `inspectDistributedWork()`.
+   */
+  inspectDistributedSemantics(serverContract?: string): DistributedSemanticsInspection {
+    return inspectDistributedSemantics(this.graph, serverContract);
   }
 }

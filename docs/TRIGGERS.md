@@ -1,6 +1,6 @@
 # Triggers
 
-Axiom 0.11.2-alpha.1. A `TriggerDef` says **when** an action should be invoked, without
+Axiom 0.12.0-alpha.1. A `TriggerDef` says **when** an action should be invoked, without
 embedding callback code. `docs/AUTHORITY.md`
 [§ Triggers](AUTHORITY.md#triggers) is the load-bearing statement of the execution model;
 this file is the vocabulary.

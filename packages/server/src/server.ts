@@ -54,6 +54,23 @@ import type { EffectRecord, PersistenceAdapter } from './persistence.js';
 import { createServerHost } from './host.js';
 import type { ExecutionContext, PrincipalRecord, ServerEvent, ServerHost } from './host.js';
 import { createEffectRunner } from './effects.js';
+import {
+  resolveCoordinationConfig,
+  type CoordinationConfig,
+  type CoordinationProvider,
+} from './coordination.js';
+import {
+  createDistributedEffectRunner,
+  type DistributedEffectRunner,
+} from './distributed-effects.js';
+import {
+  createDurableWorkStore,
+  createMemoryDurableWorkStorage,
+  type DurableWorkStorage,
+} from './durable-work.js';
+import { serverIrCompatibilityKey, serverIrCompatibilityKeyString } from './authority-identity.js';
+import { SCHEDULE_FIRING_WORK_CLASS, scheduledFiringId } from './distributed-scheduler.js';
+import type { AuthorityCompatibilityKey } from './deps.js';
 import type { IntegrationAdapter, IntegrationAdapterRegistry, IntegrationResult } from './integration.js';
 import { createTriggerRuntime } from './triggers.js';
 import type { TriggerRuntime } from './triggers.js';
@@ -237,6 +254,42 @@ export interface AxiomServerOptions {
    * and while a migration lock is held it refuses to serve traffic (spec11 §68).
    */
   migrationMetadata?: MigrationMetadataStore;
+  /**
+   * A durable coordination provider (spec12 §10). Supplying one, together with a durable
+   * `persistence` adapter, activates multi-authority execution automatically — no
+   * application API and no "cluster mode" flag (spec12 §88). Absent, the authority runs
+   * single-writer exactly as before.
+   */
+  coordination?: CoordinationProvider;
+  /**
+   * Durable storage for the distributed work state machine (spec12 §7). Required for a real
+   * multi-process cluster; when `coordination` is set but this is not, an in-memory store is
+   * used — correct for one process and tests, not durable across a restart.
+   */
+  workStorage?: DurableWorkStorage;
+  /**
+   * Infrastructure knobs for distributed execution (spec12 §89): `instanceId`,
+   * `leaseDurationMs`, `renewIntervalMs`, `workerConcurrency`, `claimBatchSize`,
+   * `pollIntervalMs`. Defaults are safe for one authority and for a cluster. An unsafe
+   * combination (e.g. `renewIntervalMs >= leaseDurationMs`) makes `createAxiomServer`
+   * throw (spec12 §90). These never change a semantic guarantee.
+   */
+  distributed?: Partial<CoordinationConfig>;
+}
+
+/** What {@link AxiomServer.authority} reports about this instance's distributed execution. */
+export interface AuthorityInfo {
+  instanceId: string;
+  /** True when a coordination provider is wired: framework-owned async work is leased + fenced. */
+  distributed: boolean;
+  /** The coordination provider's advertised capabilities, or `null` when single-authority. */
+  coordination:
+    | { provider: string; supports: readonly string[]; physicalDurability: boolean }
+    | null;
+  /** The resolved infrastructure config (spec12 §89). */
+  config: CoordinationConfig;
+  /** This build's compatibility identity (spec12 §45); the key durable work is stamped with. */
+  compatibilityKey: AuthorityCompatibilityKey;
 }
 
 export interface AxiomServer {
@@ -306,7 +359,24 @@ export interface AxiomServer {
   clearQueryCache(): void;
   /** Cache observability: how many entries are held and how many reads it has served. */
   queryCacheStats(): { entries: number; hits: number; enabled: boolean };
+  /**
+   * This authority's distributed-execution identity, capability and configuration (spec12
+   * §6, §55, §89). `distributed` is false and `coordination` null when no provider is wired.
+   */
+  authority(): AuthorityInfo;
+  /**
+   * Live distributed-work state on this authority (spec12 §55, §57): every effect work item
+   * with its lease liveness, plus the items this build is refusing as incompatible. Empty
+   * arrays when no coordination provider is wired.
+   */
+  inspectDistributedWork(): Promise<DistributedWorkInspection>;
   stop(): Promise<void>;
+}
+
+export interface DistributedWorkInspection {
+  authority: AuthorityInfo;
+  effects: import('./durable-work.js').DurableWorkItemView[];
+  incompatibleEffects: import('./durable-work.js').DurableWorkItem[];
 }
 
 const IDEMPOTENCY_WINDOW = 256;
@@ -430,6 +500,19 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   const dataProviders: DataProviderRegistry = options.dataProviders ?? {};
   const defaultDataProvider = options.dataProvider;
   const cursorSecret = options.cursorSecret ?? randomCursorSecret();
+
+  // ---- Distributed authority (spec12) ------------------------------------------------
+  // A coordination provider activates multi-authority execution automatically (spec12 §88).
+  // `resolveCoordinationConfig` throws on an unsafe combination (spec12 §90). The runner
+  // itself is built lower down, once the effect terminal/observability hooks exist.
+  const coordinationConfig: CoordinationConfig = resolveCoordinationConfig(options.distributed ?? {});
+  const instanceId = coordinationConfig.instanceId ?? host.uuid();
+  const coordination = options.coordination;
+  const distributed = coordination !== undefined;
+  const compatibilityKey = serverIrCompatibilityKey(ir);
+  const compatibilityKeyStr = serverIrCompatibilityKeyString(ir);
+  let distributedEffectRunner: DistributedEffectRunner | undefined;
+  let distributedWorkStore: import('./durable-work.js').DurableWorkStore | undefined;
 
   /**
    * A conservative, correctness-first query result cache (spec 0.10 §68-72).
@@ -1401,8 +1484,14 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     if (effectsToCommit.length > 0) {
       // Never awaited: the transaction has already committed, and the response the caller
       // gets back reflects "committed, effect pending" (spec §123), not the effect's own
-      // eventual success or failure.
-      effectRunner.dispatch(effectsToCommit);
+      // eventual success or failure. Under distributed authority the intent is registered as
+      // durable work and picked up by the poll loop (or another authority) instead.
+      if (distributedEffectRunner) {
+        distributedEffectRunner.dispatch(effectsToCommit);
+        void distributedEffectRunner.poll();
+      } else {
+        effectRunner.dispatch(effectsToCommit);
+      }
     }
 
     const changes: Record<NodeId, unknown> = changedObservables(observedBefore);
@@ -1539,6 +1628,41 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     evaluate: evaluateForTrigger,
     invoke: invokeFromTrigger,
     serialize,
+    // Distributed authority (spec12 §21-§23): gate each interval/delay firing on a fenced,
+    // durable claim keyed by `scheduleId@dueInstant`, so N authorities polling their own
+    // timers cause exactly one logical firing. `distributedWorkStore` is assigned lower down
+    // (only when a coordination provider is wired); this closure reads it at fire time.
+    ...(options.coordination
+      ? {
+          claimScheduledFiring: async (
+            trigger: TriggerDef,
+            dueInstant: number,
+          ): Promise<null | ((ok: boolean) => Promise<void>)> => {
+            if (!distributedWorkStore) return null;
+            const workId = scheduledFiringId(trigger.id, dueInstant);
+            await distributedWorkStore.enqueue({
+              workClass: SCHEDULE_FIRING_WORK_CLASS,
+              workId,
+              payload: { triggerId: String(trigger.id), dueInstant },
+            });
+            const claim = await distributedWorkStore.claimOne(
+              SCHEDULE_FIRING_WORK_CLASS,
+              workId,
+              instanceId,
+              { leaseMs: coordinationConfig.leaseDurationMs },
+            );
+            if (!claim) return null;
+            return async (ok: boolean) => {
+              await distributedWorkStore!.settle(
+                claim,
+                ok
+                  ? { kind: 'succeeded', result: null }
+                  : { kind: 'failed', error: { code: 'SCHEDULED_FIRING_REFUSED', message: `${String(trigger.id)}@${dueInstant}` } },
+              );
+            };
+          },
+        }
+      : {}),
     report: (event) => {
       const kind =
         event.kind === 'skipped-overlap'
@@ -1694,6 +1818,41 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     report: (event) => report({ kind: event.kind, effectId: event.effectId, operationId: event.operationId, attempt: event.attempt }),
   });
 
+  // The distributed outbox (spec12 §13-§20): when a coordination provider is wired, each
+  // committed effect intent becomes a leased, fenced `DurableWorkItem` that exactly one
+  // authority claims, attempts and settles. The legacy single-writer `effectRunner` above is
+  // still used when no provider is supplied.
+  if (distributed && coordination) {
+    const workStore = createDurableWorkStore({
+      coordination,
+      storage: options.workStorage ?? createMemoryDurableWorkStorage(),
+      authorityKey: compatibilityKeyStr,
+      defaultLeaseMs: coordinationConfig.leaseDurationMs,
+    });
+    distributedWorkStore = workStore;
+    distributedEffectRunner = createDistributedEffectRunner({
+      store: workStore,
+      execution: { adapters, integrationOperations, blobStores, storages: storagesById },
+      host,
+      instanceId,
+      config: coordinationConfig,
+      onTerminal: (record) => onEffectTerminal(record),
+      onAttempt: (record) => {
+        effectRecords.set(record.id, record);
+      },
+      report: (event) =>
+        report({
+          kind:
+            event.kind === 'effect-outcome-uncertain' || event.kind === 'effect-retry-scheduled'
+              ? 'effect-attempted'
+              : event.kind,
+          effectId: event.effectId,
+          operationId: event.operationId,
+          attempt: event.attempt,
+        }),
+    });
+  }
+
   return {
     async start(): Promise<void> {
       if (started) {
@@ -1771,7 +1930,16 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       for (const effect of pending) {
         effectRecords.set(effect.id, effect);
       }
-      if (pending.length > 0) {
+      if (distributedEffectRunner) {
+        // Re-register any intent this authority still holds — `enqueue` is idempotent, so a
+        // sibling authority that already picked it up is unaffected — then run the poll loop
+        // so this and every other class of orphaned durable work is reclaimed (spec12 §7).
+        if (pending.length > 0) {
+          distributedEffectRunner.dispatch(pending);
+        }
+        distributedEffectRunner.start();
+        void distributedEffectRunner.poll();
+      } else if (pending.length > 0) {
         effectRunner.dispatch(pending);
       }
       // Startup triggers run only once persistence and effect resumption have completed
@@ -1942,6 +2110,42 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     },
     clearQueryCache: invalidateQueryCache,
     queryCacheStats: () => ({ entries: queryCache.size, hits: queryCacheHits, enabled: cacheEnabled }),
+    authority: (): AuthorityInfo => ({
+      instanceId,
+      distributed,
+      coordination: coordination
+        ? {
+            provider: coordination.capabilities.provider,
+            supports: coordination.capabilities.supports,
+            physicalDurability: coordination.capabilities.physicalDurability,
+          }
+        : null,
+      config: coordinationConfig,
+      compatibilityKey,
+    }),
+    async inspectDistributedWork(): Promise<DistributedWorkInspection> {
+      const authorityInfo: AuthorityInfo = {
+        instanceId,
+        distributed,
+        coordination: coordination
+          ? {
+              provider: coordination.capabilities.provider,
+              supports: coordination.capabilities.supports,
+              physicalDurability: coordination.capabilities.physicalDurability,
+            }
+          : null,
+        config: coordinationConfig,
+        compatibilityKey,
+      };
+      if (!distributedWorkStore) {
+        return { authority: authorityInfo, effects: [], incompatibleEffects: [] };
+      }
+      return {
+        authority: authorityInfo,
+        effects: await distributedWorkStore.list('effect'),
+        incompatibleEffects: await distributedWorkStore.listIncompatible('effect'),
+      };
+    },
 
     async authorizeBlobRead(storageId, key, principal) {
       const storage = storagesById[storageId];
@@ -2053,6 +2257,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
     async stop(): Promise<void> {
       triggerRuntime.stop();
+      await distributedEffectRunner?.stop();
       // Subscriptions stop before the queue is drained: after this resolves, no further
       // delivery can enter the runtime at all, which is what makes shutdown deterministic
       // rather than merely likely.

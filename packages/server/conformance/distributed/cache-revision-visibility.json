@@ -1,0 +1,50 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "cache-revision-visibility",
+  "covers": [
+    "cache revision visibility"
+  ],
+  "description": "A cached entry is served while the persisted revision is unchanged and dropped once it advances.",
+  "clockStart": 1000,
+  "steps": [
+    {
+      "op": "cache-set",
+      "key": "ownOrders",
+      "value": [
+        1,
+        2,
+        3
+      ],
+      "observedRevision": 5
+    },
+    {
+      "op": "cache-get",
+      "key": "ownOrders",
+      "persistedRevision": 5,
+      "expect": {
+        "hit": true,
+        "value": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "op": "cache-get",
+      "key": "ownOrders",
+      "persistedRevision": 6,
+      "expect": {
+        "hit": false
+      }
+    },
+    {
+      "op": "cache-get",
+      "key": "ownOrders",
+      "persistedRevision": 6,
+      "expect": {
+        "hit": false
+      }
+    }
+  ]
+}

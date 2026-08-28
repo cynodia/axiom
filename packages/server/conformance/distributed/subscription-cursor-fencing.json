@@ -1,0 +1,87 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "subscription-cursor-fencing",
+  "covers": [
+    "subscription cursor fencing"
+  ],
+  "description": "A stalled cursor owner cannot advance after another authority takes over; the cursor never regresses.",
+  "clockStart": 1000,
+  "steps": [
+    {
+      "op": "cursor-acquire",
+      "subscription": "sub",
+      "owner": "A",
+      "leaseMs": 1000,
+      "expect": {
+        "ok": true,
+        "generation": 1,
+        "resumeFrom": 0
+      }
+    },
+    {
+      "op": "cursor-advance",
+      "subscription": "sub",
+      "owner": "A",
+      "generation": 1,
+      "toSequence": 10,
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "op": "advance",
+      "ms": 1001
+    },
+    {
+      "op": "cursor-acquire",
+      "subscription": "sub",
+      "owner": "B",
+      "leaseMs": 5000,
+      "expect": {
+        "ok": true,
+        "generation": 2,
+        "resumeFrom": 10
+      }
+    },
+    {
+      "op": "cursor-advance",
+      "subscription": "sub",
+      "owner": "B",
+      "generation": 2,
+      "toSequence": 25,
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "op": "cursor-advance",
+      "subscription": "sub",
+      "owner": "A",
+      "generation": 1,
+      "toSequence": 999,
+      "expect": {
+        "ok": false,
+        "reason": "fenced"
+      }
+    },
+    {
+      "op": "cursor-advance",
+      "subscription": "sub",
+      "owner": "B",
+      "generation": 2,
+      "toSequence": 5,
+      "expect": {
+        "ok": false,
+        "reason": "stale-sequence"
+      }
+    },
+    {
+      "op": "cursor-read",
+      "subscription": "sub",
+      "expect": {
+        "sequence": 25,
+        "writerGeneration": 2
+      }
+    }
+  ]
+}

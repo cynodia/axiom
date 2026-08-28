@@ -1,0 +1,59 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "schedule-reclaim",
+  "covers": [
+    "schedule reclaim"
+  ],
+  "description": "A crashed firing owner is reclaimed under the same work id — no second firing identity.",
+  "clockStart": 5000,
+  "steps": [
+    {
+      "op": "enqueue",
+      "workClass": "schedule-firing",
+      "workId": "trg@5000"
+    },
+    {
+      "op": "claim",
+      "workClass": "schedule-firing",
+      "owner": "A",
+      "leaseMs": 1000,
+      "expect": {
+        "workIds": [
+          "trg@5000"
+        ]
+      }
+    },
+    {
+      "op": "advance",
+      "ms": 1001
+    },
+    {
+      "op": "claim",
+      "workClass": "schedule-firing",
+      "owner": "B",
+      "leaseMs": 5000,
+      "expect": {
+        "workIds": [
+          "trg@5000"
+        ]
+      }
+    },
+    {
+      "op": "settle",
+      "ref": "schedule-firing:trg@5000:B",
+      "outcome": "succeeded",
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "op": "work-state",
+      "workClass": "schedule-firing",
+      "workId": "trg@5000",
+      "expect": {
+        "state": "succeeded",
+        "attemptNumber": 2
+      }
+    }
+  ]
+}

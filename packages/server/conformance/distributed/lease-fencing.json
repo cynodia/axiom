@@ -1,0 +1,54 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "lease-fencing",
+  "covers": [
+    "lease fencing"
+  ],
+  "description": "An expired lease is reclaimed at a higher generation; the prior owner is fenced, not merely expired.",
+  "clockStart": 1000,
+  "steps": [
+    {
+      "op": "acquire",
+      "resource": "effect:e1",
+      "owner": "A",
+      "leaseMs": 1000,
+      "expect": {
+        "ok": true,
+        "generation": 1
+      }
+    },
+    {
+      "op": "advance",
+      "ms": 1001
+    },
+    {
+      "op": "acquire",
+      "resource": "effect:e1",
+      "owner": "B",
+      "leaseMs": 5000,
+      "expect": {
+        "ok": true,
+        "generation": 2
+      }
+    },
+    {
+      "op": "checkOwnership",
+      "resource": "effect:e1",
+      "owner": "A",
+      "generation": 1,
+      "expect": {
+        "current": false,
+        "reason": "fenced"
+      }
+    },
+    {
+      "op": "renew",
+      "resource": "effect:e1",
+      "ownerRef": "effect:e1#A",
+      "leaseMs": 5000,
+      "expect": {
+        "ok": false
+      }
+    }
+  ]
+}

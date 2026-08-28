@@ -1,0 +1,42 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "mixed-build-refusal",
+  "covers": [
+    "mixed-build refusal"
+  ],
+  "description": "Work stamped with build A's key is not claimed by build B; build A claims it.",
+  "clockStart": 1000,
+  "steps": [
+    {
+      "op": "enqueue",
+      "workClass": "effect",
+      "workId": "e1",
+      "authorityKey": "buildA",
+      "expect": {
+        "created": true
+      }
+    },
+    {
+      "op": "claim",
+      "workClass": "effect",
+      "owner": "B",
+      "leaseMs": 5000,
+      "authorityKey": "buildB",
+      "expect": {
+        "workIds": []
+      }
+    },
+    {
+      "op": "claim",
+      "workClass": "effect",
+      "owner": "A",
+      "leaseMs": 5000,
+      "authorityKey": "buildA",
+      "expect": {
+        "workIds": [
+          "e1"
+        ]
+      }
+    }
+  ]
+}

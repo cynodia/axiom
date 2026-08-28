@@ -47,6 +47,18 @@ export interface TriggerRuntimeOptions {
    * make a client `event` request deadlock against its own already-claimed turn.
    */
   serialize?<T>(body: () => Promise<T>): Promise<T>;
+  /**
+   * Distributed authority (spec12 §21-§23). When set, each `interval` / `delay` firing is
+   * gated on a durable, fenced claim keyed by `(triggerId, dueInstant)`: exactly one
+   * authority is allowed to run a given logical firing no matter how many poll their own
+   * timers. Returns `null` to skip this firing (another authority owns it), or a finalizer to
+   * call once the firing has run (it settles the durable firing record). Absent, every
+   * authority fires on its own timer exactly as before.
+   */
+  claimScheduledFiring?(
+    trigger: TriggerDef,
+    dueInstant: number,
+  ): Promise<null | ((ok: boolean) => Promise<void>)>;
 }
 
 /**
@@ -118,6 +130,23 @@ export function createTriggerRuntime(options: TriggerRuntimeOptions): TriggerRun
     return result.ok;
   }
 
+  const claimScheduledFiring = options.claimScheduledFiring;
+
+  /**
+   * The logical firing instant every authority derives identically (spec12 §22): an
+   * `interval` boundary is epoch-aligned to multiples of `everyMs`; a `delay` fires exactly
+   * once, so its instant is the constant `afterMs`.
+   */
+  function dueInstantFor(trigger: TriggerDef): number {
+    if (trigger.when.kind === 'interval') {
+      return Math.floor(Date.now() / trigger.when.everyMs) * trigger.when.everyMs;
+    }
+    if (trigger.when.kind === 'delay') {
+      return trigger.when.afterMs;
+    }
+    return Date.now();
+  }
+
   async function tick(trigger: TriggerDef, overlap: 'skip' | 'queue'): Promise<void> {
     // The overlap check itself must never wait behind `serialize` — it exists precisely to
     // detect a *concurrent* tick of this same trigger while an earlier one is still
@@ -133,9 +162,20 @@ export function createTriggerRuntime(options: TriggerRuntimeOptions): TriggerRun
     }
     inFlight.add(trigger.id);
     try {
+      // Distributed authority: only the authority that wins the fenced claim for this logical
+      // firing runs it (spec12 §21). The others skip silently — not a failure.
+      const finalize = claimScheduledFiring
+        ? await claimScheduledFiring(trigger, dueInstantFor(trigger))
+        : null;
+      if (claimScheduledFiring && !finalize) {
+        return;
+      }
       // Only the actual invocation — not the overlap bookkeeping around it — is serialized
       // against every other invocation this authority runs (spec 8.1 §26-30).
-      await serialize(() => fire(trigger));
+      const ok = await serialize(() => fire(trigger));
+      if (finalize) {
+        await finalize(ok);
+      }
     } finally {
       inFlight.delete(trigger.id);
       if (queued.delete(trigger.id)) {
@@ -162,7 +202,9 @@ export function createTriggerRuntime(options: TriggerRuntimeOptions): TriggerRun
           tasks.push(host.schedule(trigger.when.everyMs, () => void tick(trigger, overlap)));
         }
         if (trigger.when.kind === 'delay') {
-          tasks.push(host.scheduleOnce(trigger.when.afterMs, () => void serialize(() => fire(trigger))));
+          // Route through `tick` so distributed authority can gate the single firing on a
+          // fenced claim; with no `claimScheduledFiring` this is `serialize(fire)` as before.
+          tasks.push(host.scheduleOnce(trigger.when.afterMs, () => void tick(trigger, 'skip')));
         }
       }
     },

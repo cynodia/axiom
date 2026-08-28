@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.11.2-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.12.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -963,6 +963,76 @@ Diagnostics: `SCHEMA_MIGRATION_REQUIRED` `SCHEMA_INCOMPATIBLE` `MIGRATION_IN_PRO
 `DUPLICATE_MIGRATION_OPERATION_ID` `MIGRATION_REQUIRED_FIELD_WITHOUT_DEFAULT`
 `MIGRATION_DESTRUCTIVE_UNMARKED` `INVALID_MIGRATION_OPERATION` `MIGRATION_TRANSFORM_IMPURE`
 `MIGRATION_TRANSFORM_TYPE_MISMATCH`.
+
+## DISTRIBUTED AUTHORITY
+
+Full model: [`DISTRIBUTED_AUTHORITY.md`](DISTRIBUTED_AUTHORITY.md).
+
+The authoritative runtime may run as **N processes at once** over one shared persistence
+provider, with **no graph change and no application code that knows a cluster exists**. One
+authority and N authorities produce the same committed state and the same framework-owned
+async work. Deployment topology is not application semantics.
+
+Quick answers:
+
+| Question | Answer |
+| --- | --- |
+| Do I write locking code? | **No.** Never an application lock, never `SETNX` in a `native` op. |
+| Do I need Redis? | **No.** `memory` and `SQLite` reference providers ship; 0.12 semantics use no provider's vocabulary. |
+| Are external effects generically exactly-once? | **No.** Exactly-once *logical* creation and *durable completion*; at-least-once *physical* execution unless the provider is idempotent. |
+| Can multiple authorities race work safely? | **Yes**, with a capable `coordination` provider — activated automatically, no flag. |
+| Can a stale owner commit after losing ownership? | **No.** Every durable-work write is fenced on a per-resource generation; a reclaim advances it. |
+| Is deployment topology graph semantics? | **No.** No node kind, operation or IR field is added; a distributed graph compiles byte-identically. |
+
+`createAxiomServer({ coordination, workStorage, distributed: { instanceId, leaseDurationMs,
+renewIntervalMs, workerConcurrency, claimBatchSize, pollIntervalMs } })` — an unsafe combo
+(`renewIntervalMs >= leaseDurationMs`) **throws**. `server.authority()` →
+`{ instanceId, distributed, coordination: capabilities|null, config, compatibilityKey }`;
+`server.inspectDistributedWork()` → live effect work items + incompatible items.
+
+Every framework-owned async unit — outbox effect, scheduled firing, subscription cursor — is
+a leased, fenced, per-item ownership claim: `pending → claimed(ownerId, generation) →
+succeeded/failed/retry`. Lease expiry authorises nothing; only a reclaim (which mints a
+higher generation) fences the prior owner (`WORK_FENCED`). `logicalEffectId` (= the effect
+intent id) never changes across retries; `idempotencyKey` defaults to it (§7 of the full
+doc). Retry backoff is durable, not a process timer. An attempt whose outcome was never
+recorded increments `uncertainAttempts` and is retried with the same key — Axiom never
+claims physical exactly-once.
+
+Scheduled `interval` / `delay` firings are gated on a fenced claim keyed by
+`"<scheduleId>@<dueInstant>"` (epoch-aligned for intervals; the constant `afterMs` for a
+delay), so N pollers cause one firing. Missed firings: `catchUp` = `latest` (default) / `all`
+/ N, always caught up by one authority.
+
+External event ingestion deduplicates on `source + externalEventId` (durable payload
+fingerprint): `accepted` / `duplicate` / `EVENT_ID_CONFLICT` (same id, different payload) /
+`unidentified` (no stable id → at-least-once). An id is **never synthesised** from a
+timestamp, an instance id or a UUID.
+
+Subscription cursors: per-subscription monotonic `sequence` (no cross-subscription order),
+fenced + monotonic advancement (`fenced` / `stale-sequence`), reconnect from the durable
+cursor through any authority.
+
+Cache coherence: durable revision observation — each entry records `observedRevision`,
+re-checked against `persistence.revision()` before every authoritative read → staleness
+bound **0** revisions; correctness does not depend on broadcast. `CACHE_COHERENCE` states it.
+
+Version skew: the **compatibility key** is `{ schemaVersion, schemaFingerprint,
+serverContract, semanticFingerprint }`, compared **fail-closed**. `semanticFingerprint`
+(core, versioned) hashes executable meaning — action bodies, operations, triggers, policies,
+queries, expression defs — and excludes names / UI / routes / themes / metadata / order;
+distinct from `schemaFingerprint`. Durable work is stamped with its creator's key; an
+authority whose key differs refuses to claim it (`INCOMPATIBLE_AUTHORITY`). Migration
+ownership stays 0.11 host-controlled — no second coordination system.
+
+Providers advertise capabilities (`distributed-lease`, `fencing`, `atomic-work-claim`,
+`durable-retry`, `event-dedup`, `durable-subscription-cursor`, `revision-observation`); a
+missing one **fails explicitly**, never a silent single-node fallback. Portable
+`axiom.conformance.v6` fixtures (`conformance/distributed/`) + `runCoordinationConformanceSuite`.
+Server IR stays `axiom.server.v7`.
+
+Diagnostics: `WORK_IN_PROGRESS` `WORK_FENCED` `WORK_NOT_CLAIMABLE` `INCOMPATIBLE_AUTHORITY`
+`EVENT_ID_CONFLICT`.
 
 ## Metadata classes
 

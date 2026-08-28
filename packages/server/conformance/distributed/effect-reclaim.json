@@ -1,0 +1,52 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "effect-reclaim",
+  "covers": [
+    "effect reclaim"
+  ],
+  "description": "A crashed claimer's lease lapses; another authority reclaims the same work item, attempt 2, one uncertain prior attempt.",
+  "clockStart": 1000,
+  "steps": [
+    {
+      "op": "enqueue",
+      "workClass": "effect",
+      "workId": "e1"
+    },
+    {
+      "op": "claim",
+      "workClass": "effect",
+      "owner": "A",
+      "leaseMs": 1000,
+      "expect": {
+        "workIds": [
+          "e1"
+        ]
+      }
+    },
+    {
+      "op": "advance",
+      "ms": 1001
+    },
+    {
+      "op": "claim",
+      "workClass": "effect",
+      "owner": "B",
+      "leaseMs": 5000,
+      "expect": {
+        "workIds": [
+          "e1"
+        ]
+      }
+    },
+    {
+      "op": "work-state",
+      "workClass": "effect",
+      "workId": "e1",
+      "expect": {
+        "state": "claimed",
+        "attemptNumber": 2,
+        "uncertainAttempts": 1
+      }
+    }
+  ]
+}

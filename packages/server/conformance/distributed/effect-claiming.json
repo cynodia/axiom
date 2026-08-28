@@ -1,0 +1,48 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "effect-claiming",
+  "covers": [
+    "effect claiming"
+  ],
+  "description": "One authority claims a pending effect work item exclusively; a second authority claims nothing.",
+  "clockStart": 1000,
+  "steps": [
+    {
+      "op": "enqueue",
+      "workClass": "effect",
+      "workId": "e1",
+      "expect": {
+        "created": true
+      }
+    },
+    {
+      "op": "claim",
+      "workClass": "effect",
+      "owner": "A",
+      "leaseMs": 5000,
+      "expect": {
+        "workIds": [
+          "e1"
+        ]
+      }
+    },
+    {
+      "op": "claim",
+      "workClass": "effect",
+      "owner": "B",
+      "leaseMs": 5000,
+      "expect": {
+        "workIds": []
+      }
+    },
+    {
+      "op": "work-state",
+      "workClass": "effect",
+      "workId": "e1",
+      "expect": {
+        "state": "claimed",
+        "attemptNumber": 1
+      }
+    }
+  ]
+}

@@ -88,8 +88,27 @@ turn it into a working browser application whose generated JavaScript nobody rea
   `migrationImpact`; the string builtins `trim` / `substring-before` / `substring-after`
   (v7). Reports: `AXIOM_0_11_IMPLEMENTATION_REPORT.md` and `AXIOM_0_11_MIGRATION_RESEARCH.md`.
   Full model: `docs/MIGRATIONS.md`.
+* `specs/spec12.md` — the **0.12 distributed authority release**: N authority processes over
+  one shared persistence provider, no graph change, no application code aware of a cluster —
+  "one authority ≈ N authorities" for committed state and all framework-owned async work.
+  A `CoordinationProvider` (memory + SQLite reference) issuing durable, leased, **fenced**
+  per-work-item ownership claims (`generation` — expiry authorises nothing, only a reclaim
+  fences); a generic `DurableWorkStore` claim state machine (logical/physical split,
+  `uncertainAttempts`); the multi-authority outbox (`createDistributedEffectRunner` — exactly-once
+  logical creation, at-least-once physical execution, exactly-once durable completion,
+  idempotency key = `logicalEffectId`, durable retry); the distributed scheduler
+  (`scheduleId@dueInstant` firing identity, `catchUp`); `ExternalEventDedupStore`
+  (`source + externalEventId`, `EVENT_ID_CONFLICT`); `SubscriptionCursorStore` (per-subscription
+  order, fenced monotonic cursor); durable-revision cache coherence (`CACHE_COHERENCE`,
+  staleness bound 0); the versioned `semanticFingerprint` + `AuthorityCompatibilityKey`
+  (fail-closed mixed-build refusal, `INCOMPATIBLE_AUTHORITY`); `createAxiomServer` wiring +
+  host config knobs + `server.authority()` / `inspectDistributedWork()`; AgentAPI
+  `inspectDistributedSemantics()`; **Server IR retained at `axiom.server.v7`** (0.12 adds no IR
+  vocabulary); the `axiom.conformance.v6` tier + `runCoordinationConformanceSuite`; real-OS-process
+  race/chaos/8-authority/large-queue tests. Reports: `AXIOM_0_12_IMPLEMENTATION_REPORT.md` and
+  `AXIOM_0_12_DISTRIBUTED_RESEARCH.md`. Full model: `docs/DISTRIBUTED_AUTHORITY.md`.
 
-Together, spec2–spec11 are the authority on design decisions — **except where the
+Together, spec2–spec12 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 

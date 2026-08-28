@@ -1,0 +1,55 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "schedule-firing",
+  "covers": [
+    "schedule firing"
+  ],
+  "description": "One logical schedule firing (a durable work item) is claimed and completed by exactly one authority.",
+  "clockStart": 5000,
+  "steps": [
+    {
+      "op": "enqueue",
+      "workClass": "schedule-firing",
+      "workId": "trg@5000",
+      "expect": {
+        "created": true
+      }
+    },
+    {
+      "op": "enqueue",
+      "workClass": "schedule-firing",
+      "workId": "trg@5000",
+      "expect": {
+        "created": false
+      }
+    },
+    {
+      "op": "claim",
+      "workClass": "schedule-firing",
+      "owner": "A",
+      "leaseMs": 5000,
+      "expect": {
+        "workIds": [
+          "trg@5000"
+        ]
+      }
+    },
+    {
+      "op": "claim",
+      "workClass": "schedule-firing",
+      "owner": "B",
+      "leaseMs": 5000,
+      "expect": {
+        "workIds": []
+      }
+    },
+    {
+      "op": "settle",
+      "ref": "schedule-firing:trg@5000:A",
+      "outcome": "succeeded",
+      "expect": {
+        "ok": true
+      }
+    }
+  ]
+}

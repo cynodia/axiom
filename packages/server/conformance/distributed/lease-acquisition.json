@@ -1,0 +1,40 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "lease-acquisition",
+  "covers": [
+    "lease acquisition"
+  ],
+  "description": "A free resource is acquired at generation 1; a second live claimant is blocked and sees the holder.",
+  "clockStart": 1000,
+  "steps": [
+    {
+      "op": "acquire",
+      "resource": "effect:e1",
+      "owner": "A",
+      "leaseMs": 5000,
+      "expect": {
+        "ok": true,
+        "generation": 1
+      }
+    },
+    {
+      "op": "acquire",
+      "resource": "effect:e1",
+      "owner": "B",
+      "leaseMs": 5000,
+      "expect": {
+        "ok": false,
+        "heldBy": "A"
+      }
+    },
+    {
+      "op": "inspect",
+      "resource": "effect:e1",
+      "expect": {
+        "held": true,
+        "owner": "A",
+        "generation": 1
+      }
+    }
+  ]
+}

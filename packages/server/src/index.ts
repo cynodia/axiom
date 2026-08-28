@@ -53,7 +53,36 @@ export {
 export type { SqliteMigrationStoreOptions, SqliteRowStoreOptions } from './sqlite-migration.js';
 export { createSqliteDataProvider, isSqliteAvailable as isSqliteDataProviderAvailable } from './sqlite-data-provider.js';
 export type { SqliteDataProviderOptions } from './sqlite-data-provider.js';
+export {
+  createSqliteCoordinationProvider,
+  isSqliteCoordinationAvailable,
+} from './sqlite-coordination.js';
+export type { SqliteCoordinationOptions } from './sqlite-coordination.js';
+export {
+  createSqliteDurableWorkStorage,
+  isSqliteDurableWorkAvailable,
+} from './sqlite-durable-work.js';
+export type { SqliteDurableWorkOptions } from './sqlite-durable-work.js';
+export {
+  createSqliteExternalEventDedupStore,
+  isSqliteExternalEventDedupAvailable,
+} from './sqlite-external-event-dedup.js';
+export type { SqliteExternalEventDedupOptions } from './sqlite-external-event-dedup.js';
+export {
+  createSqliteCursorPositionStore,
+  isSqliteSubscriptionCursorAvailable,
+} from './sqlite-subscription-cursor.js';
+export type { SqliteSubscriptionCursorOptions } from './sqlite-subscription-cursor.js';
+export * from './coordination.js';
+export * from './durable-work.js';
 export * from './effects.js';
+export * from './distributed-effects.js';
+export * from './distributed-scheduler.js';
+export * from './external-event-dedup.js';
+export * from './subscription-cursor.js';
+export * from './revision-cache.js';
+export * from './authority-identity.js';
+export * from './coordination-conformance.js';
 export * from './triggers.js';
 export * from './server.js';
 export * from './conformance-runner.js';

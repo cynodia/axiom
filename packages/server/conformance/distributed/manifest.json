@@ -1,0 +1,32 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "baseContract": "axiom.server.v7",
+  "release": "0.12.0-alpha.1",
+  "description": "Portable distributed-authority conformance fixtures (spec12 §59, §85). Each is a deterministic step list against the memory reference providers with a fixed clock and token sequence. Server IR is retained at axiom.server.v7 — 0.12 adds no IR vocabulary (spec12 §58).",
+  "covers": [
+    "lease acquisition",
+    "lease fencing",
+    "effect claiming",
+    "effect reclaim",
+    "effect completion",
+    "schedule firing",
+    "schedule reclaim",
+    "event deduplication",
+    "subscription cursor fencing",
+    "cache revision visibility",
+    "mixed-build refusal"
+  ],
+  "fixtures": [
+    "lease-acquisition",
+    "lease-fencing",
+    "effect-claiming",
+    "effect-reclaim",
+    "effect-completion",
+    "schedule-firing",
+    "schedule-reclaim",
+    "event-deduplication",
+    "subscription-cursor-fencing",
+    "cache-revision-visibility",
+    "mixed-build-refusal"
+  ]
+}

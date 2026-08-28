@@ -6,6 +6,99 @@ import { blobRef } from './blobs.js';
 import type { EffectRecord, PersistenceAdapter } from './persistence.js';
 import type { IntegrationResult } from './integration.js';
 
+/**
+ * Everything one physical effect attempt needs, independent of *who* runs it or *how many*
+ * times. Shared by the single-authority {@link createEffectRunner} and the multi-authority
+ * distributed runner (spec12 §14) so the two can never diverge on what "perform this effect"
+ * means.
+ */
+export interface EffectExecutionDeps {
+  adapters: IntegrationAdapterRegistry;
+  integrationOperations: Record<NodeId, IntegrationOperationDef>;
+  blobStores?: BlobStorageRegistry;
+  storages?: Record<NodeId, StorageDef>;
+}
+
+/**
+ * The graph-owned retry policy for an effect record — `operation.retry` for an integration
+ * effect, `storage.retry` for a blob effect. Infrastructure may tune cadence and batching
+ * but MUST NOT change this (spec12 §20).
+ */
+export function effectRetryPolicy(
+  record: EffectRecord,
+  deps: EffectExecutionDeps,
+): IntegrationOperationDef['retry'] {
+  if (record.storage) {
+    return deps.storages?.[record.storage.storageId]?.retry;
+  }
+  return deps.integrationOperations[record.operationId]?.retry;
+}
+
+/**
+ * Perform exactly **one** physical attempt of an effect and return its outcome. No retry
+ * loop, no durable status write, no event dispatch — the caller owns all of that. A storage
+ * effect goes to its blob store; an integration effect goes to its adapter with the
+ * Axiom-supplied idempotency key (spec12 §16), so at-least-once physical execution collapses
+ * to exactly-once at an idempotent provider (spec12 §15).
+ *
+ * Missing operation / adapter / store are returned as non-retryable failures rather than
+ * thrown, so every caller classifies them the same way.
+ */
+export async function performEffectAttempt(
+  record: EffectRecord,
+  deps: EffectExecutionDeps,
+): Promise<IntegrationResult> {
+  const blobStores = deps.blobStores ?? {};
+
+  if (record.storage) {
+    const storage = record.storage;
+    const store = blobStores[storage.storageId];
+    if (!store) {
+      return {
+        ok: false,
+        code: 'BLOB_STORE_MISSING',
+        message: `No blob store registered for ${storage.storageId}`,
+        retryable: false,
+      };
+    }
+    const outcome =
+      storage.operation === 'commit' ? await store.commit(storage.key) : await store.delete(storage.key);
+    if (!outcome.ok) {
+      return {
+        ok: false,
+        code: outcome.code,
+        message: outcome.message,
+        ...(outcome.retryable !== undefined ? { retryable: outcome.retryable } : {}),
+      };
+    }
+    return { ok: true, value: outcome.value === null ? storage.key : blobRef(outcome.value) };
+  }
+
+  const operation = deps.integrationOperations[record.operationId];
+  if (!operation) {
+    return {
+      ok: false,
+      code: 'UNKNOWN_INTEGRATION_OPERATION',
+      message: `No integration operation ${record.operationId}`,
+      retryable: false,
+    };
+  }
+  const adapter = deps.adapters[operation.integrationId];
+  if (!adapter) {
+    return {
+      ok: false,
+      code: 'INTEGRATION_ADAPTER_MISSING',
+      message: `No adapter registered for ${operation.integrationId}`,
+      retryable: false,
+    };
+  }
+  return adapter.effect(
+    operation,
+    record.arguments,
+    record.idempotencyKey ? { idempotencyKey: record.idempotencyKey } : {},
+  );
+}
+
 export interface EffectRunnerOptions {
   adapters: IntegrationAdapterRegistry;
   integrationOperations: Record<NodeId, IntegrationOperationDef>;
@@ -54,66 +147,36 @@ export function createEffectRunner(options: EffectRunnerOptions): EffectRunner {
   const { adapters, integrationOperations, persistence, host, onTerminal, onRunning, report } = options;
   const blobStores = options.blobStores ?? {};
   const storages = options.storages ?? {};
-
-  /**
-   * A storage effect executes through the same attempt/retry/outcome machinery an
-   * integration effect does — deliberately, rather than through a second durability system
-   * (spec 0.9 §57). Only the call at the bottom differs.
-   */
-  async function callStore(record: EffectRecord): Promise<IntegrationResult> {
-    const storage = record.storage as NonNullable<EffectRecord['storage']>;
-    const store = blobStores[storage.storageId];
-    if (!store) {
-      return {
-        ok: false,
-        code: 'BLOB_STORE_MISSING',
-        message: `No blob store registered for ${storage.storageId}`,
-        retryable: false,
-      };
-    }
-    const outcome =
-      storage.operation === 'commit' ? await store.commit(storage.key) : await store.delete(storage.key);
-    if (!outcome.ok) {
-      return { ok: false, code: outcome.code, message: outcome.message, ...(outcome.retryable !== undefined ? { retryable: outcome.retryable } : {}) };
-    }
-    return { ok: true, value: outcome.value === null ? storage.key : blobRef(outcome.value) };
-  }
+  const deps: EffectExecutionDeps = { adapters, integrationOperations, blobStores, storages };
 
   async function run(record: EffectRecord): Promise<void> {
-    if (record.storage) {
-      await runWith(record, storages[record.storage.storageId]?.retry, () => callStore(record));
-      return;
-    }
-    const operation = integrationOperations[record.operationId];
-    if (!operation) {
-      const failed: EffectRecord = {
-        ...record,
-        status: 'failed',
-        lastError: { code: 'UNKNOWN_INTEGRATION_OPERATION', message: `No integration operation ${record.operationId}` },
-      };
-      await persistence.recordEffectAttempt?.(record.id, failed);
-      await onTerminal(failed);
-      return;
-    }
-    const adapter = adapters[operation.integrationId];
-    if (!adapter) {
-      const failed: EffectRecord = {
-        ...record,
-        status: 'failed',
-        lastError: { code: 'INTEGRATION_ADAPTER_MISSING', message: `No adapter registered for ${operation.integrationId}` },
-      };
-      await persistence.recordEffectAttempt?.(record.id, failed);
-      await onTerminal(failed);
-      return;
+    // A missing operation or adapter is a deployment fault, not a delivery failure: it
+    // reaches a terminal `failed` immediately, with no `running` attempt recorded.
+    if (!record.storage) {
+      const operation = integrationOperations[record.operationId];
+      if (!operation) {
+        const failed: EffectRecord = {
+          ...record,
+          status: 'failed',
+          lastError: { code: 'UNKNOWN_INTEGRATION_OPERATION', message: `No integration operation ${record.operationId}` },
+        };
+        await persistence.recordEffectAttempt?.(record.id, failed);
+        await onTerminal(failed);
+        return;
+      }
+      if (!adapters[operation.integrationId]) {
+        const failed: EffectRecord = {
+          ...record,
+          status: 'failed',
+          lastError: { code: 'INTEGRATION_ADAPTER_MISSING', message: `No adapter registered for ${operation.integrationId}` },
+        };
+        await persistence.recordEffectAttempt?.(record.id, failed);
+        await onTerminal(failed);
+        return;
+      }
     }
 
-    await runWith(record, operation.retry, () =>
-      adapter.effect(
-        operation,
-        record.arguments,
-        record.idempotencyKey ? { idempotencyKey: record.idempotencyKey } : {},
-      ),
-    );
+    await runWith(record, effectRetryPolicy(record, deps), () => performEffectAttempt(record, deps));
   }
 
   /** The shared attempt loop: durable status per attempt, bounded retries, one terminal outcome. */

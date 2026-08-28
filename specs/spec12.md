@@ -4,7 +4,7 @@
 
 Status: major semantic milestone
 Target: `@cynodia/axiom 0.12.0-alpha.1`
-Baseline: `0.11.2-alpha.1`
+Baseline: `0.12.0-alpha.1`
 
 ---
 

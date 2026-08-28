@@ -1,0 +1,55 @@
+{
+  "conformance": "axiom.conformance.v6",
+  "name": "event-deduplication",
+  "covers": [
+    "event deduplication"
+  ],
+  "description": "A stable external id: first accepted, byte-equal repeat is a duplicate, divergent payload is EVENT_ID_CONFLICT.",
+  "clockStart": 1000,
+  "steps": [
+    {
+      "op": "dedup",
+      "source": "stripe",
+      "externalEventId": "evt_1",
+      "payload": {
+        "amount": 100
+      },
+      "expect": {
+        "status": "accepted"
+      }
+    },
+    {
+      "op": "dedup",
+      "source": "stripe",
+      "externalEventId": "evt_1",
+      "payload": {
+        "amount": 100
+      },
+      "expect": {
+        "status": "duplicate"
+      }
+    },
+    {
+      "op": "dedup",
+      "source": "stripe",
+      "externalEventId": "evt_1",
+      "payload": {
+        "amount": 999
+      },
+      "expect": {
+        "status": "conflict",
+        "code": "EVENT_ID_CONFLICT"
+      }
+    },
+    {
+      "op": "dedup",
+      "source": "stripe",
+      "payload": {
+        "amount": 5
+      },
+      "expect": {
+        "status": "unidentified"
+      }
+    }
+  ]
+}

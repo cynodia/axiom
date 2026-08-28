@@ -3,7 +3,7 @@
 ## SQLite Migration Contention Hardening
 
 Status: corrective hardening release
-Target: `@cynodia/axiom 0.11.2-alpha.1`
+Target: `@cynodia/axiom 0.12.0-alpha.1`
 Baseline: `0.11.1-alpha.1`
 
 Primary evidence:
@@ -1415,7 +1415,7 @@ A
 
 # 58. EXTERNAL REGRESSION TEST
 
-After packaging/publishing `0.11.2-alpha.1`, perform a cold external regression against the real npm packages.
+After packaging/publishing `0.12.0-alpha.1`, perform a cold external regression against the real npm packages.
 
 At minimum:
 
