@@ -399,6 +399,11 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   const migrationMetadata = options.migrationMetadata;
   const declaresSchemaVersion =
     (ir.schemaVersion ?? 1) > 1 || (ir.migrations ?? []).length > 0 || ir.schemaFingerprint !== undefined;
+  // Migration-lifecycle observation for a long-lived process (spec11 §45, §103): a lock was
+  // seen held, and once it clears the schema either still matches (invalidate the query
+  // cache) or has moved past this build (refuse permanently).
+  let migrationLockSeen = false;
+  let schemaOutdated = false;
   const host = options.host ?? createServerHost();
   const window = options.idempotencyWindow ?? IDEMPOTENCY_WINDOW;
 
@@ -901,6 +906,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
           principalFingerprint,
           policyFingerprint,
           contract: String(ir.contract),
+          ...(ir.schemaFingerprint ? { schemaFingerprint: ir.schemaFingerprint } : {}),
         })
       ) {
         return queryError(SERVER_DIAGNOSTIC_CODES.QUERY_CURSOR_INVALID, 'The cursor is invalid for this request', {
@@ -1011,6 +1017,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
           p: principalFingerprint,
           rp: policyFingerprint,
           c: String(ir.contract),
+          ...(ir.schemaFingerprint ? { s: ir.schemaFingerprint } : {}),
           pos: result.value.lastPosition,
         },
         cursorSecret,
@@ -1784,20 +1791,52 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
             ],
           };
         }
-        // While a migration is running, authoritative traffic is refused rather than
-        // applied to data that is mid-transition (spec11 §68). 0.11 has no online
-        // migration; a host that wants zero-downtime must sequence it itself.
-        if (migrationMetadata && declaresSchemaVersion && (await migrationMetadata.readLock())) {
-          return {
-            kind: 'error' as const,
-            protocol: PROTOCOL_VERSION,
-            diagnostics: [
-              diagnostic(
-                SERVER_DIAGNOSTIC_CODES.MIGRATION_IN_PROGRESS,
-                'a schema migration is in progress; the authority is not serving requests',
-              ),
-            ],
-          };
+        if (migrationMetadata && declaresSchemaVersion) {
+          // While a migration is running, authoritative traffic is refused rather than
+          // applied to data that is mid-transition (spec11 §68). 0.11 has no online
+          // migration; a host that wants zero-downtime must sequence it itself.
+          if (await migrationMetadata.readLock()) {
+            migrationLockSeen = true;
+            return {
+              kind: 'error' as const,
+              protocol: PROTOCOL_VERSION,
+              diagnostics: [
+                diagnostic(
+                  SERVER_DIAGNOSTIC_CODES.MIGRATION_IN_PROGRESS,
+                  'a schema migration is in progress; the authority is not serving requests',
+                ),
+              ],
+            };
+          }
+          if (migrationLockSeen && !schemaOutdated) {
+            // A migration that ran under this process has just finished. Either the schema
+            // still matches this build — invalidate the (now possibly stale) query cache
+            // (spec11 §45) — or it moved past this build and this authority must stop
+            // serving until it is redeployed (spec11 §103).
+            migrationLockSeen = false;
+            const record = await migrationMetadata.readSchema();
+            if (
+              record &&
+              (record.schemaVersion !== (ir.schemaVersion ?? 1) ||
+                record.schemaFingerprint !== (ir.schemaFingerprint ?? ''))
+            ) {
+              schemaOutdated = true;
+            } else {
+              invalidateQueryCache();
+            }
+          }
+          if (schemaOutdated) {
+            return {
+              kind: 'error' as const,
+              protocol: PROTOCOL_VERSION,
+              diagnostics: [
+                diagnostic(
+                  SERVER_DIAGNOSTIC_CODES.SCHEMA_INCOMPATIBLE,
+                  'the persisted schema has advanced past this build; redeploy the authority',
+                ),
+              ],
+            };
+          }
         }
         if (request.kind === 'snapshot') {
           const since = request.sinceRevision;

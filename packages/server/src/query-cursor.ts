@@ -28,6 +28,12 @@ export interface CursorPayload {
   rp: string;
   /** The Server IR contract the query compiled under. */
   c: string;
+  /**
+   * The semantic schema fingerprint the query ran under (spec11 §44). Absent for a
+   * document with no schema identity. A cursor minted under one schema is refused after a
+   * migration changes it — a persisted cursor never silently survives a schema change.
+   */
+  s?: string;
   /** The previous page's last-row position. */
   pos: CursorPosition;
 }
@@ -153,6 +159,8 @@ export interface CursorContext {
   principalFingerprint: string;
   policyFingerprint: string;
   contract: string;
+  /** The current semantic schema fingerprint, or absent for a document with no schema identity. */
+  schemaFingerprint?: string;
 }
 
 /** Whether a decoded cursor was minted for exactly this request context. */
@@ -162,7 +170,10 @@ export function cursorMatchesContext(payload: CursorPayload, context: CursorCont
     payload.a === context.argumentsFingerprint &&
     payload.p === context.principalFingerprint &&
     payload.rp === context.policyFingerprint &&
-    payload.c === context.contract
+    payload.c === context.contract &&
+    // Enforced only when the current document has a schema identity, so a pre-0.11 cursor
+    // against a pre-0.11 document still matches.
+    (context.schemaFingerprint ? payload.s === context.schemaFingerprint : true)
   );
 }
 
