@@ -12,7 +12,7 @@ mutations and persists them. Neither is written by hand: there is no route, cont
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
 **Status: experimental / alpha.** The API may change between alpha releases. This
-documentation describes 0.10.0-alpha.1.
+documentation describes 0.11.0-alpha.1.
 
 ## AI agents: read this first
 
@@ -177,7 +177,7 @@ Every release of this project is a pre-release and npm's `latest` tag points at 
 plain commands above install the current version. **There is no `alpha` dist-tag** — it was
 removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` fails with a
 404. Pin the exact version instead when one is needed:
-`npm install @cynodia/axiom@0.10.0-alpha.1`.
+`npm install @cynodia/axiom@0.11.0-alpha.1`.
 
 The server package is separate rather than re-exported, because it imports `node:http` and
 `node:sqlite` and a browser bundle must not.

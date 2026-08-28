@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom-demo",
-  "version": "0.10.0-alpha.1",
+  "version": "0.11.0-alpha.1",
   "description": "Example Axiom applications used to test domain independence.",
   "license": "MIT",
   "author": "AskTech AS",
@@ -51,12 +51,12 @@
     }
   },
   "dependencies": {
-    "@cynodia/axiom": "0.10.0-alpha.1",
-    "@cynodia/axiom-agent-api": "0.10.0-alpha.1",
-    "@cynodia/axiom-compiler": "0.10.0-alpha.1",
-    "@cynodia/axiom-core": "0.10.0-alpha.1",
-    "@cynodia/axiom-runtime": "0.10.0-alpha.1",
-    "@cynodia/axiom-server": "0.10.0-alpha.1"
+    "@cynodia/axiom": "0.11.0-alpha.1",
+    "@cynodia/axiom-agent-api": "0.11.0-alpha.1",
+    "@cynodia/axiom-compiler": "0.11.0-alpha.1",
+    "@cynodia/axiom-core": "0.11.0-alpha.1",
+    "@cynodia/axiom-runtime": "0.11.0-alpha.1",
+    "@cynodia/axiom-server": "0.11.0-alpha.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json && node dist/index.js",

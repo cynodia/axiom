@@ -1,6 +1,6 @@
 # UI
 
-Axiom 0.10.0-alpha.1. Eleven semantic UI node kinds describe **what exists and what it does**.
+Axiom 0.11.0-alpha.1. Eleven semantic UI node kinds describe **what exists and what it does**.
 How it looks is [presentation](PRESENTATION.md).
 
 All eleven share `UIBase`:

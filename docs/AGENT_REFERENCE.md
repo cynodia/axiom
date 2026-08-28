@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.10.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.11.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -65,7 +65,7 @@ One canonical term per concept. These are not interchangeable.
 ## Graph construction
 
 ```ts
-const graph = new ApplicationGraph(id, name);      // version defaults to '0.10.0'
+const graph = new ApplicationGraph(id, name);      // version defaults to '0.11.0'
 graph.addNode<StateDef>({ id, kind: 'state', ... }); // returns NodeId; throws if id exists
 graph.getNode<StateDef>(id);                        // deep clone, or undefined
 graph.updateNode(node);                             // write a modified node back
@@ -140,8 +140,10 @@ group(src, scopeId, by) expressionRef(expressionId, args?)
 - `group` partitions a collection: `Collection<A>` → `Collection<Group<K, A>>`, read with `groupKey(g)` and `groupItems(g)`. Groups appear in **first-seen key order**, members keep source order, keys compare structurally. Nothing is sorted — use `sort` for that.
 - `expressionRef` evaluates a named `ExpressionDef` node: the calculation exists **once** in the graph and every consumer references it. Arguments are evaluated in the calling scope; **the body is evaluated in an isolated scope** that sees its parameters and application state and nothing else, so a definition means the same thing everywhere and its scope ids can never collide with a caller's.
 
-Builtins (14): `required` `is-empty` `non-empty` `length` `contains` `concat` `coalesce`
-`one-of` `count` `sum` `lowercase` `to-string` `now` `uuid`.
+Builtins (17): `required` `is-empty` `non-empty` `length` `contains` `concat` `coalesce`
+`one-of` `count` `sum` `lowercase` `to-string` `trim` `substring-before` `substring-after`
+`now` `uuid`. `trim` / `substring-before` / `substring-after` are `axiom.server.v7`
+vocabulary.
 
 Binary operators: `eq` `neq` `gt` `gte` `lt` `lte` `and` `or` `add` `subtract` `multiply`
 `divide`. Unary: `not` `negate`.
