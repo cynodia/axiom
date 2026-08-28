@@ -31,6 +31,7 @@ export * from './query-conformance.js';
 export * from './migration.js';
 export * from './migration-store.js';
 export * from './migration-row-store.js';
+export * from './migration-gate.js';
 export * from './migration-eval.js';
 export * from './migration-executor.js';
 export {
