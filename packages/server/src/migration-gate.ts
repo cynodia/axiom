@@ -3,6 +3,7 @@ import { migrationPath } from './deps.js';
 import { MIGRATION_DIAGNOSTIC_CODES } from './migration.js';
 import type { MigrationDiagnosticCode } from './migration.js';
 import type { MigrationMetadataStore } from './migration-store.js';
+import { isSqliteContentionError } from './sqlite-contention.js';
 
 /**
  * The startup schema-compatibility gate (spec11 §11-12, hardened by spec11.1 §4-14).
@@ -89,18 +90,37 @@ export async function evaluateSchemaGate(
   const requiredFingerprint = ir.schemaFingerprint ?? '';
   const identity = declaresSchemaIdentity(ir);
 
-  const lock = await metadata.readLock();
+  // Ordinary cross-process contention on the migration-metadata tables means another
+  // migration runner is active (nothing else touches `_axiom_migration_*`). After the
+  // store's own bounded busy handling, a residual contention error is reported as
+  // `migration-in-progress` — a coherent Axiom verdict that also preserves the 0.11.1
+  // fail-closed startup (the authority does not start) (spec11.2 §11, §13, §33).
+  const inProgress = (holder: string): SchemaGateResult => ({
+    status: 'migration-in-progress',
+    code: MIGRATION_DIAGNOSTIC_CODES.MIGRATION_IN_PROGRESS,
+    message: `a migration is running${holder ? `, held by ${holder}` : ''}; the authority will not start until it completes`,
+    requiredVersion,
+    persistedVersion: null,
+  });
+
+  let lock: Awaited<ReturnType<MigrationMetadataStore['readLock']>>;
+  try {
+    lock = await metadata.readLock();
+  } catch (error) {
+    if (isSqliteContentionError(error)) return inProgress('another instance');
+    throw error;
+  }
   if (lock) {
-    return {
-      status: 'migration-in-progress',
-      code: MIGRATION_DIAGNOSTIC_CODES.MIGRATION_IN_PROGRESS,
-      message: `a migration is running, held by ${lock.holder}; the authority will not start until it completes`,
-      requiredVersion,
-      persistedVersion: null,
-    };
+    return inProgress(lock.holder);
   }
 
-  const record = await metadata.readSchema();
+  let record: Awaited<ReturnType<MigrationMetadataStore['readSchema']>>;
+  try {
+    record = await metadata.readSchema();
+  } catch (error) {
+    if (isSqliteContentionError(error)) return inProgress('another instance');
+    throw error;
+  }
 
   // --- The graph declares no semantic schema identity ---------------------------------
   if (!identity) {

@@ -98,6 +98,7 @@ import { MIGRATION_DIAGNOSTIC_CODES } from './migration.js';
 import { evaluateSchemaGate, gateAllowsStart, schemaGateWithoutStore } from './migration-gate.js';
 import type { SchemaGateResult } from './migration-gate.js';
 import type { MigrationMetadataStore } from './migration-store.js';
+import { isSqliteContentionError } from './sqlite-contention.js';
 import { getMigrationStatus } from './migration-execute.js';
 import type { MigrationStatus } from './migration-execute.js';
 
@@ -1802,7 +1803,19 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
           // While a migration is running, authoritative traffic is refused rather than
           // applied to data that is mid-transition (spec11 §68, spec11.1 §12). 0.11 has no
           // online migration; a host that wants zero-downtime must sequence it itself.
-          if (await migrationMetadata.readLock()) {
+          //
+          // A residual SQLite contention error here (after the store's bounded busy
+          // handling) means another process is holding/establishing migration ownership on
+          // the shared database — a request-time race with a migrator resolves to
+          // `MIGRATION_IN_PROGRESS`, never a leaked provider error (spec11.2 §34).
+          let migrationLockHeld: boolean;
+          try {
+            migrationLockHeld = (await migrationMetadata.readLock()) !== null;
+          } catch (error) {
+            if (!isSqliteContentionError(error)) throw error;
+            migrationLockHeld = true;
+          }
+          if (migrationLockHeld) {
             migrationLockSeen = true;
             return {
               kind: 'error' as const,
@@ -1819,17 +1832,27 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
             // A migration that ran under this process has just finished. Either the schema
             // still matches this build — invalidate the (now possibly stale) query cache
             // (spec11 §45) — or it moved past this build and this authority must stop
-            // serving until it is redeployed (spec11 §103).
-            migrationLockSeen = false;
-            const record = await migrationMetadata.readSchema();
-            if (
-              record &&
-              (record.schemaVersion !== (ir.schemaVersion ?? 1) ||
-                record.schemaFingerprint !== (ir.schemaFingerprint ?? ''))
-            ) {
-              schemaOutdated = true;
-            } else {
-              invalidateQueryCache();
+            // serving until it is redeployed (spec11 §103). If the post-migration schema
+            // read still contends, defer the decision to the next request rather than
+            // leaking the error.
+            let record: Awaited<ReturnType<MigrationMetadataStore['readSchema']>> | undefined;
+            try {
+              record = await migrationMetadata.readSchema();
+            } catch (error) {
+              if (!isSqliteContentionError(error)) throw error;
+              record = undefined;
+            }
+            if (record !== undefined) {
+              migrationLockSeen = false;
+              if (
+                record &&
+                (record.schemaVersion !== (ir.schemaVersion ?? 1) ||
+                  record.schemaFingerprint !== (ir.schemaFingerprint ?? ''))
+              ) {
+                schemaOutdated = true;
+              } else {
+                invalidateQueryCache();
+              }
             }
           }
           if (schemaOutdated) {

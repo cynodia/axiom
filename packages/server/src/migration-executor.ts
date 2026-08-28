@@ -9,6 +9,7 @@ import type { MigrationDiagnosticCode, SemanticMigrationPlan } from './migration
 import type { MigrationMetadataStore } from './migration-store.js';
 import type { MigrationDataset, MigrationRowStore } from './migration-row-store.js';
 import { createMemoryRowStore } from './migration-row-store.js';
+import { SqliteContentionError, isSqliteContentionError } from './sqlite-contention.js';
 
 /**
  * The migration executor (spec11 §55, §81).
@@ -166,6 +167,67 @@ async function applySchemaOperation(store: MigrationRowStore, operation: Migrati
   }
 }
 
+/**
+ * A physical SQLite lock is not a semantic result (spec11.2 §5, §15). When a metadata or
+ * row-store call raises {@link SqliteContentionError} during a migration, this re-reads the
+ * migration metadata and answers in Axiom terms:
+ *
+ * - the persisted schema is already at (or past) the target → the race is already won →
+ *   `already-at-target`;
+ * - a valid lease is held by *someone else* → `in-progress`;
+ * - this runner holds the lease and SQLite is still contended → an unrelated writer, not a
+ *   migration owner → `failed`, with the physical cause retained (spec11.2 §35);
+ * - the metadata itself cannot be observed → only migration runners contend those tables, so
+ *   without a lease of our own that means another migration is active → `in-progress`
+ *   (spec11.2 §8, §11).
+ */
+export type ContentionResolution =
+  | { kind: 'already-at-target' }
+  | { kind: 'in-progress'; message: string }
+  | { kind: 'failed'; message: string };
+
+export async function classifyMigrationContention(
+  metadata: MigrationMetadataStore,
+  targetVersion: number,
+  ownToken: string | undefined,
+  error: unknown,
+): Promise<ContentionResolution> {
+  const cause =
+    error instanceof SqliteContentionError ? error.providerCause : 'sqlite: database is locked';
+  try {
+    const record = await metadata.readSchema();
+    if (record && record.schemaVersion >= targetVersion) {
+      return { kind: 'already-at-target' };
+    }
+    const lock = await metadata.readLock();
+    if (lock && lock.token !== ownToken) {
+      return { kind: 'in-progress', message: `a migration is already running, held by ${lock.holder}` };
+    }
+    if (ownToken !== undefined) {
+      return {
+        kind: 'failed',
+        message: `SQLite remained locked while this runner held the migration lease (${cause})`,
+      };
+    }
+    return lock
+      ? { kind: 'in-progress', message: `a migration is already running, held by ${lock.holder}` }
+      : { kind: 'failed', message: `unresolved SQLite lock contention with no migration owner (${cause})` };
+  } catch (reReadError) {
+    if (isSqliteContentionError(reReadError)) {
+      return ownToken !== undefined
+        ? {
+            kind: 'failed',
+            message: `SQLite remained locked while this runner held the migration lease (${cause})`,
+          }
+        : {
+            kind: 'in-progress',
+            message: 'another migration appears to be running (migration metadata is locked)',
+          };
+    }
+    throw reReadError;
+  }
+}
+
 export async function runMigration(
   ir: ServerIR,
   plan: SemanticMigrationPlan,
@@ -181,45 +243,84 @@ export async function runMigration(
   const approved = new Set(options.approveDestructive ?? []);
   const id = planId(plan);
 
-  // --- Idempotency & compatibility, before any lock or write (spec11 §35) --------------
-  const current = await metadata.readSchema();
-  if (current && current.schemaVersion === plan.toVersion) {
-    return { ok: true, phase: 'completed', rowsTransformed: 0, resumed: false, alreadyAtTarget: true };
-  }
-  if (current && current.schemaVersion !== plan.fromVersion) {
+  // A physical SQLite lock this runner cannot wait out is reconciled to an Axiom outcome
+  // (spec11.2 §5, §15). `token` is `undefined` until this runner owns the lease, which is
+  // what lets `classifyMigrationContention` tell "someone else is migrating" from
+  // "I own the lease and an unrelated writer is blocking me".
+  let token: string | undefined;
+  const onContention = async (error: unknown): Promise<RunMigrationResult> => {
+    const resolution = await classifyMigrationContention(metadata, plan.toVersion, token, error);
+    if (resolution.kind === 'already-at-target') {
+      return { ok: true, phase: 'completed', rowsTransformed: 0, resumed: false, alreadyAtTarget: true };
+    }
     return {
       ok: false,
       phase: 'failed',
-      code: MIGRATION_DIAGNOSTIC_CODES.SCHEMA_INCOMPATIBLE,
-      message: `persisted schema ${current.schemaVersion} is not the plan's origin ${plan.fromVersion}`,
+      code:
+        resolution.kind === 'in-progress'
+          ? MIGRATION_DIAGNOSTIC_CODES.MIGRATION_IN_PROGRESS
+          : MIGRATION_DIAGNOSTIC_CODES.MIGRATION_FAILED,
+      message: resolution.message,
     };
-  }
-
-  // --- Destructive approval, before any lock or write (spec11 §21, §106) ---------------
-  const unapproved = plan.destructive.filter((change) => !approved.has(change.operationId));
-  if (unapproved.length > 0) {
-    return {
-      ok: false,
-      phase: 'failed',
-      code: MIGRATION_DIAGNOSTIC_CODES.MIGRATION_APPROVAL_REQUIRED,
-      message: `destructive operations not approved: ${unapproved.map((change) => change.operationId).join(', ')}`,
-    };
-  }
-
-  // --- Take the migration lock (spec11 §66) -----------------------------------------
-  const lockResult = await metadata.acquireLock(options.holder, leaseMs);
-  if (!lockResult.ok || !lockResult.lock) {
-    return {
-      ok: false,
-      phase: 'failed',
-      code: MIGRATION_DIAGNOSTIC_CODES.MIGRATION_IN_PROGRESS,
-      message: `a migration is already running, held by ${lockResult.heldBy?.holder ?? 'another instance'}`,
-    };
-  }
-  const token = lockResult.lock.token;
-  const operations = plan.steps.flatMap((step) => step.operations);
+  };
 
   try {
+    // --- Idempotency & compatibility, before any lock or write (spec11 §35) ------------
+    const current = await metadata.readSchema();
+    if (current && current.schemaVersion === plan.toVersion) {
+      return { ok: true, phase: 'completed', rowsTransformed: 0, resumed: false, alreadyAtTarget: true };
+    }
+    if (current && current.schemaVersion !== plan.fromVersion) {
+      return {
+        ok: false,
+        phase: 'failed',
+        code: MIGRATION_DIAGNOSTIC_CODES.SCHEMA_INCOMPATIBLE,
+        message: `persisted schema ${current.schemaVersion} is not the plan's origin ${plan.fromVersion}`,
+      };
+    }
+
+    // --- Destructive approval, before any lock or write (spec11 §21, §106) -------------
+    const unapproved = plan.destructive.filter((change) => !approved.has(change.operationId));
+    if (unapproved.length > 0) {
+      return {
+        ok: false,
+        phase: 'failed',
+        code: MIGRATION_DIAGNOSTIC_CODES.MIGRATION_APPROVAL_REQUIRED,
+        message: `destructive operations not approved: ${unapproved.map((change) => change.operationId).join(', ')}`,
+      };
+    }
+
+    // --- Take the migration lock (spec11 §66) ---------------------------------------
+    const lockResult = await metadata.acquireLock(options.holder, leaseMs);
+    if (!lockResult.ok || !lockResult.lock) {
+      return {
+        ok: false,
+        phase: 'failed',
+        code: MIGRATION_DIAGNOSTIC_CODES.MIGRATION_IN_PROGRESS,
+        message: `a migration is already running, held by ${lockResult.heldBy?.holder ?? 'another instance'}`,
+      };
+    }
+    token = lockResult.lock.token;
+    const operations = plan.steps.flatMap((step) => step.operations);
+
+    // Re-check the persisted version *under the lock*. A competing runner can complete the
+    // whole transition — commit `toVersion` and release its lease — between this runner's
+    // pre-lock read and its acquisition. Without this check that runner would re-run a
+    // non-idempotent transform on already-migrated rows (spec11.2 §17, §19). The lock is
+    // what makes "check the version, then transform" atomic across processes.
+    const afterLock = await metadata.readSchema();
+    if (afterLock && afterLock.schemaVersion === plan.toVersion) {
+      return { ok: true, phase: 'completed', rowsTransformed: 0, resumed: false, alreadyAtTarget: true };
+    }
+    if (afterLock && afterLock.schemaVersion !== plan.fromVersion) {
+      return {
+        ok: false,
+        phase: 'failed',
+        code: MIGRATION_DIAGNOSTIC_CODES.SCHEMA_INCOMPATIBLE,
+        message: `persisted schema ${afterLock.schemaVersion} is not the plan's origin ${plan.fromVersion}`,
+      };
+    }
+
     const checkpoint = await metadata.readCheckpoint();
     if (checkpoint && checkpoint.planId !== id) {
       return {
@@ -368,6 +469,11 @@ export async function runMigration(
         message: error.message,
       };
     }
+    if (isSqliteContentionError(error)) {
+      // Ordinary cross-process SQLite contention resolves to an Axiom outcome, never a
+      // leaked provider error (spec11.2 §5, §29).
+      return onContention(error);
+    }
     return {
       ok: false,
       phase: 'failed',
@@ -375,6 +481,14 @@ export async function runMigration(
       message: error instanceof Error ? error.message : String(error),
     };
   } finally {
-    await metadata.releaseLock(token);
+    if (token !== undefined) {
+      // Best-effort lease release. If SQLite is still contended here the lease simply
+      // expires on its own (spec11.2 §16); nothing else may mask the real result.
+      try {
+        await metadata.releaseLock(token);
+      } catch (releaseError) {
+        if (!isSqliteContentionError(releaseError)) throw releaseError;
+      }
+    }
   }
 }

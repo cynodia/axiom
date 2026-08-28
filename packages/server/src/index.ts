@@ -37,6 +37,15 @@ export * from './migration-executor.js';
 export * from './migration-execute.js';
 export * from './migration-conformance.js';
 export {
+  SqliteContentionError,
+  isSqliteContentionError,
+  runWithBusyHandling,
+  DEFAULT_BUSY_TIMEOUT_MS,
+  DEFAULT_BUSY_ATTEMPTS,
+  DEFAULT_BUSY_BACKOFF_MS,
+} from './sqlite-contention.js';
+export type { BusyHandlingOptions } from './sqlite-contention.js';
+export {
   createSqliteMigrationStore,
   createSqliteRowStore,
   isSqliteMigrationAvailable,

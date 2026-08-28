@@ -4,10 +4,11 @@ import type { MigrationDiagnosticCode, SemanticMigrationPlan } from './migration
 import { planMigration } from './migration.js';
 import type { MigrationMetadataStore } from './migration-store.js';
 import type { MigrationDataset, MigrationRowStore } from './migration-row-store.js';
-import { runMigration } from './migration-executor.js';
+import { classifyMigrationContention, runMigration } from './migration-executor.js';
 import type { RunMigrationResult } from './migration-executor.js';
 import { evaluateSchemaGate } from './migration-gate.js';
 import type { SchemaGateResult } from './migration-gate.js';
+import { isSqliteContentionError } from './sqlite-contention.js';
 
 /**
  * Migration execution (spec11 §55, §73, §74).
@@ -106,7 +107,27 @@ export async function executeMigration(
   }
 
   const requiredVersion = options.ir.schemaVersion ?? 1;
-  const record = await options.metadata.readSchema();
+
+  // `executeMigration` itself never holds the migration lease — `runMigration` does — so a
+  // SQLite lock this orchestrator hits is always another runner establishing/holding
+  // ownership (spec11.2 §6, §15). Reconcile it to a semantic outcome, never a leaked
+  // provider error.
+  let record: Awaited<ReturnType<MigrationMetadataStore['readSchema']>>;
+  try {
+    record = await options.metadata.readSchema();
+  } catch (error) {
+    if (!isSqliteContentionError(error)) throw error;
+    const resolution = await classifyMigrationContention(options.metadata, requiredVersion, undefined, error);
+    if (resolution.kind === 'in-progress') {
+      return { ok: false, code: MIGRATION_DIAGNOSTIC_CODES.MIGRATION_IN_PROGRESS, message: resolution.message };
+    }
+    if (resolution.kind === 'failed') {
+      return { ok: false, code: MIGRATION_DIAGNOSTIC_CODES.MIGRATION_FAILED, message: resolution.message };
+    }
+    // already-at-target: a competing runner won the race. Re-read once — it succeeds now
+    // that the winner has released the writer lock — and fall through to the no-op path.
+    record = await options.metadata.readSchema();
+  }
   const fromVersion = options.fromVersion ?? record?.schemaVersion ?? 1;
 
   if (fromVersion === requiredVersion) {
@@ -166,9 +187,33 @@ export interface MigrationStatus {
 }
 
 export async function getMigrationStatus(metadata: MigrationMetadataStore): Promise<MigrationStatus> {
-  const record = await metadata.readSchema();
-  const lock = await metadata.readLock();
-  const checkpoint = await metadata.readCheckpoint();
+  // Host inspection must stay usable during a concurrent migration — a consumer may not be
+  // required to catch SQLite-native errors to read migration state (spec11.2 §12, §32).
+  // After the store's own bounded busy handling, residual contention on the
+  // `_axiom_migration_*` tables means a migration is active, so a read that still contends
+  // is reported as a coherent in-progress status rather than a thrown provider error.
+  let contended = false;
+  const read = async <T>(fn: () => Promise<T>): Promise<T | null> => {
+    try {
+      return await fn();
+    } catch (error) {
+      if (isSqliteContentionError(error)) {
+        contended = true;
+        return null;
+      }
+      throw error;
+    }
+  };
+  const record = await read(() => metadata.readSchema());
+  const lock = await read(() => metadata.readLock());
+  const checkpoint = await read(() => metadata.readCheckpoint());
+  const phase: MigrationRuntimePhase = lock
+    ? 'in-progress'
+    : contended
+      ? 'in-progress'
+      : checkpoint
+        ? 'checkpointed'
+        : 'idle';
   return {
     schemaVersion: record?.schemaVersion ?? null,
     schemaFingerprint: record?.schemaFingerprint ?? null,
@@ -187,6 +232,6 @@ export async function getMigrationStatus(metadata: MigrationMetadataStore): Prom
           batchCursor: checkpoint.batchCursor,
         }
       : null,
-    phase: lock ? 'in-progress' : checkpoint ? 'checkpointed' : 'idle',
+    phase,
   };
 }
