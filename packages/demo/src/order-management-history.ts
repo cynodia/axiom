@@ -238,6 +238,12 @@ export function createOrderHistoryGraph(letter: SchemaLetter): ApplicationGraph 
   return graph;
 }
 
+/** Zero-argument builders, so a tool that expects `export const build = () => graph` can load one. */
+export const createOrderHistoryGraphA = (): ApplicationGraph => createOrderHistoryGraph('A');
+export const createOrderHistoryGraphB = (): ApplicationGraph => createOrderHistoryGraph('B');
+export const createOrderHistoryGraphC = (): ApplicationGraph => createOrderHistoryGraph('C');
+export const createOrderHistoryGraphD = (): ApplicationGraph => createOrderHistoryGraph('D');
+
 /** Deterministic source rows at schema A, for driving the evolution end to end. */
 export function orderHistoryDataset(customers = 6, ordersPerCustomer = 3) {
   const names = ['Ada Lovelace', 'Grace Hopper', 'Alan Turing', 'Edsger Dijkstra', 'Barbara Liskov', 'Ken Thompson'];

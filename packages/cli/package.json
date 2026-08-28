@@ -28,7 +28,8 @@
   "dependencies": {
     "@cynodia/axiom-core": "0.10.0-alpha.1",
     "@cynodia/axiom-compiler": "0.10.0-alpha.1",
-    "@cynodia/axiom-server": "0.10.0-alpha.1"
+    "@cynodia/axiom-server": "0.10.0-alpha.1",
+    "@cynodia/axiom-agent-api": "0.10.0-alpha.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json"

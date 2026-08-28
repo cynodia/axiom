@@ -26,6 +26,10 @@ export {
   orderHistoryDataset,
   historyIds,
   SCHEMA_LETTERS,
+  createOrderHistoryGraphA,
+  createOrderHistoryGraphB,
+  createOrderHistoryGraphC,
+  createOrderHistoryGraphD,
 } from './order-management-history.js';
 export type { SchemaLetter } from './order-management-history.js';
 

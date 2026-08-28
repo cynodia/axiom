@@ -8,13 +8,21 @@ import {
   createAxiomServer,
   createMemoryPersistence,
   createServerHost,
+  createSqliteMigrationStore,
   createSqlitePersistence,
+  createSqliteRowStore,
   dispatch,
+  executeMigration,
+  explainMigration,
+  getMigrationStatus,
   isSqliteAvailable,
+  migrationAuthority,
+  planMigration,
 } from '@cynodia/axiom-server';
 import type { AxiomServer, PersistenceAdapter } from '@cynodia/axiom-server';
-import { ApplicationGraph, formatLocation, semanticContextFromGraph, validateGraph } from '@cynodia/axiom-core';
+import { ApplicationGraph, diffSchema, formatLocation, semanticContextFromGraph, validateGraph } from '@cynodia/axiom-core';
 import type { AnyNode, NodeKind, Operation, SemanticContext, ValidationResult } from '@cynodia/axiom-core';
+import { explainSchemaDiff, inspectSchema, migrationImpact } from '@cynodia/axiom-agent-api';
 
 const GRAPH_EXPORT_CANDIDATES = ['default', 'createGraph', 'createApplicationGraph'];
 
@@ -25,35 +33,73 @@ interface Options {
   port: number;
   /** Where authoritative state persists. Absent, it is held in memory. */
   store?: string;
+  /** Schema-evolution flags. */
+  from?: number;
+  approve?: string[];
+  sqlite?: string;
+  against?: string;
+  againstExport?: string;
 }
+
+/** `<group> <sub>` command forms. `migrate` alone (no sub) is also valid. */
+const SUBCOMMANDS: Record<string, Set<string>> = {
+  schema: new Set(['status', 'diff']),
+  migrate: new Set(['plan', 'status']),
+};
 
 function parseArguments(argv: string[]): Options | null {
   const positional: string[] = [];
   let exportName: string | undefined;
   let port = 3000;
   let store: string | undefined;
+  let from: number | undefined;
+  let approve: string[] | undefined;
+  let sqlite: string | undefined;
+  let against: string | undefined;
+  let againstExport: string | undefined;
 
   for (const argument of argv) {
     if (argument.startsWith('--export=')) {
       exportName = argument.slice('--export='.length);
-      continue;
-    }
-    if (argument.startsWith('--port=')) {
+    } else if (argument.startsWith('--port=')) {
       port = Number(argument.slice('--port='.length)) || port;
-      continue;
-    }
-    if (argument.startsWith('--store=')) {
+    } else if (argument.startsWith('--store=')) {
       store = argument.slice('--store='.length);
-      continue;
+    } else if (argument.startsWith('--from=')) {
+      from = Number(argument.slice('--from='.length));
+    } else if (argument.startsWith('--approve=')) {
+      approve = argument.slice('--approve='.length).split(',').filter(Boolean);
+    } else if (argument.startsWith('--sqlite=')) {
+      sqlite = argument.slice('--sqlite='.length);
+    } else if (argument.startsWith('--against=')) {
+      against = argument.slice('--against='.length);
+    } else if (argument.startsWith('--against-export=')) {
+      againstExport = argument.slice('--against-export='.length);
+    } else {
+      positional.push(argument);
     }
-    positional.push(argument);
   }
 
-  const [command, modelFile] = positional;
+  let [command, modelFile] = positional;
+  if (command && SUBCOMMANDS[command]?.has(positional[1] ?? '')) {
+    command = `${command} ${positional[1]}`;
+    modelFile = positional[2];
+  }
   if (!command || !modelFile) {
     return null;
   }
-  return { command, modelFile, exportName, port, ...(store ? { store } : {}) };
+  return {
+    command,
+    modelFile,
+    exportName,
+    port,
+    ...(store ? { store } : {}),
+    ...(from !== undefined ? { from } : {}),
+    ...(approve ? { approve } : {}),
+    ...(sqlite ? { sqlite } : {}),
+    ...(against ? { against } : {}),
+    ...(againstExport ? { againstExport } : {}),
+  };
 }
 
 function toGraph(candidate: unknown): ApplicationGraph | null {
@@ -74,6 +120,11 @@ function toGraph(candidate: unknown): ApplicationGraph | null {
  * a function that builds it; nothing about the application itself is assumed.
  */
 async function loadGraph(options: Options): Promise<ApplicationGraph> {
+  return loadGraphModule(options.modelFile, options.exportName);
+}
+
+async function loadGraphModule(modelFile: string, exportName?: string): Promise<ApplicationGraph> {
+  const options = { modelFile, exportName } as Options;
   const resolved = path.resolve(process.cwd(), options.modelFile);
   const module = (await import(pathToFileURL(resolved).href)) as Record<string, unknown>;
 
@@ -323,17 +374,156 @@ async function serve(options: Options): Promise<void> {
 /** The one endpoint every Axiom authority answers on. */
 const SEMANTIC_ENDPOINT = '/axiom';
 
+// --- Schema evolution (spec11 §89-91) --------------------------------------
+// Thin wrappers over the already-tested library functions. The CLI is a consumer,
+// never the definition of behaviour.
+
+function schemaStatus(graph: ApplicationGraph): string {
+  const s = inspectSchema(graph);
+  const lines = [
+    `semantic schema version : ${s.schemaVersion}`,
+    `schema fingerprint      : ${s.schemaFingerprint}`,
+    `migration chain          : ${s.chainComplete ? 'complete (1 → ' + s.schemaVersion + ')' : 'INCOMPLETE'}`,
+    `entities                 : ${s.entities.length}`,
+    `persisted states         : ${s.persistedStates.length}`,
+    `relationships            : ${s.relationships.length}`,
+    `read policies            : ${s.readPolicies.length}`,
+  ];
+  if (s.migrations.length > 0) {
+    lines.push('migrations:');
+    for (const migration of s.migrations) {
+      lines.push(
+        `  ${migration.fromSchema} → ${migration.toSchema}  ${migration.id}  (${migration.operationCount} ops, ${migration.destructiveOperationCount} destructive)`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+async function schemaDiff(options: Options): Promise<string> {
+  if (!options.against) {
+    throw new Error('schema diff needs a --against=<file> naming the previous schema');
+  }
+  const previous = await loadGraphModule(options.against, options.againstExport);
+  const next = await loadGraph(options);
+  const diff = diffSchema(previous, next);
+  const impact = migrationImpact(previous, next);
+  const parts = [
+    explainSchemaDiff(diff),
+    '',
+    `verdict            : ${impact.verdict}`,
+    `data loss possible : ${impact.dataLossPossible}`,
+    `migration covers it: ${impact.covered}${impact.covered ? '' : ' — uncovered: ' + impact.uncovered.map((e) => e.fieldId ?? e.entityId).join(', ')}`,
+    `affected queries   : ${impact.affectedQueries.length}`,
+    `affected actions   : ${impact.affectedActions.length}`,
+    `affected constraints: ${impact.affectedConstraints.length}`,
+    `affected UI nodes  : ${impact.affectedUiNodes.length}`,
+  ];
+  if (impact.authorizationChanges.length > 0) {
+    parts.push(`authorization changes: ${impact.authorizationChanges.join(', ')}`);
+  }
+  return parts.join('\n');
+}
+
+async function migratePlan(options: Options): Promise<string> {
+  const graph = await loadGraph(options);
+  const ir = compileToServerIR(graph, { validate: false });
+  const from = options.from ?? 1;
+  const result = planMigration(ir, { fromVersion: from });
+  if (!result.ok) {
+    process.exitCode = 1;
+    return result.diagnostics.map((d) => `${d.code}: ${d.message}`).join('\n');
+  }
+  return explainMigration(result.plan);
+}
+
+async function migrateStatus(options: Options): Promise<string> {
+  if (!options.sqlite) {
+    throw new Error('migrate status needs --sqlite=<path> to read the provider metadata');
+  }
+  if (!(await isSqliteAvailable())) {
+    throw new Error('this Node build has no node:sqlite');
+  }
+  const metadata = await createSqliteMigrationStore({ location: options.sqlite });
+  const status = await getMigrationStatus(metadata);
+  return [
+    `schema version : ${status.schemaVersion ?? '(unstamped)'}`,
+    `fingerprint    : ${status.schemaFingerprint ?? '(none)'}`,
+    `phase          : ${status.phase}`,
+    `lock           : ${status.lock ? status.lock.holder : 'free'}`,
+    `checkpoint     : ${status.checkpoint ? `op ${status.checkpoint.operationIndex}, ${status.checkpoint.rowsProcessed} rows` : 'none'}`,
+    `history        : ${status.history.map((h) => `${h.fromSchema}→${h.toSchema}`).join(', ') || 'none'}`,
+  ].join('\n');
+}
+
+async function migrateRun(options: Options): Promise<string> {
+  if (!options.sqlite) {
+    return `${await migratePlan(options)}\n\n(supply --sqlite=<path> to execute this migration against a SQLite database)`;
+  }
+  if (!(await isSqliteAvailable())) {
+    throw new Error('this Node build has no node:sqlite');
+  }
+  const graph = await loadGraph(options);
+  const ir = compileToServerIR(graph, { validate: false });
+  const rows = await createSqliteRowStore({ location: options.sqlite, ir });
+  const metadata = await createSqliteMigrationStore({
+    location: options.sqlite,
+    database: (rows as { database: unknown }).database,
+  });
+  const result = await executeMigration({
+    ir,
+    metadata,
+    rows,
+    principal: migrationAuthority('axiom-cli'),
+    ...(options.from !== undefined ? { fromVersion: options.from } : {}),
+    approveDestructive: options.approve ?? [],
+  });
+  if (!result.ok) {
+    process.exitCode = 1;
+    return `${result.code}: ${result.message}`;
+  }
+  return [
+    `migrated ${result.plan.fromVersion} → ${result.plan.toVersion}`,
+    `rows transformed : ${result.run.rowsTransformed}`,
+    `resumed          : ${result.run.resumed}`,
+    `gate now         : ${result.gate.status}`,
+  ].join('\n');
+}
+
 async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2));
   if (!options) {
     console.error(
-      'Usage: axiom <build|inspect|validate|serve> <modelFile> [--export=name] [--port=3000] [--store=state.db]',
+      [
+        'Usage:',
+        '  axiom <build|inspect|validate|serve> <modelFile> [--export=name] [--port=3000] [--store=state.db]',
+        '  axiom schema status  <modelFile> [--export=name]',
+        '  axiom schema diff    <modelFile> --against=<prevFile> [--export=name] [--against-export=name]',
+        '  axiom migrate plan   <modelFile> [--export=name] [--from=<version>]',
+        '  axiom migrate        <modelFile> [--export=name] [--from=<version>] [--approve=op1,op2] [--sqlite=<path>]',
+        '  axiom migrate status <modelFile> --sqlite=<path>',
+      ].join('\n'),
     );
     process.exitCode = 1;
     return;
   }
 
   switch (options.command) {
+    case 'schema status':
+      console.log(schemaStatus(await loadGraph(options)));
+      return;
+    case 'schema diff':
+      console.log(await schemaDiff(options));
+      return;
+    case 'migrate plan':
+      console.log(await migratePlan(options));
+      return;
+    case 'migrate status':
+      console.log(await migrateStatus(options));
+      return;
+    case 'migrate':
+      console.log(await migrateRun(options));
+      return;
     case 'build':
       await build(options);
       return;

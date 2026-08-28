@@ -17,6 +17,9 @@
     },
     {
       "path": "../server/tsconfig.json"
+    },
+    {
+      "path": "../agent-api/tsconfig.json"
     }
   ]
 }
