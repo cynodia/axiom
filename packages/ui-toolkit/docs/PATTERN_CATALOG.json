@@ -2,7 +2,7 @@
   "catalog": "axiom.ui.catalog.v1",
   "toolkit": "@cynodia/axiom-ui",
   "version": "0.7.0",
-  "release": "0.11.0-alpha.1",
+  "release": "0.11.1-alpha.1",
   "description": "Semantic UI patterns for Axiom. A pattern is not a component: it expands, at authoring time, into ordinary Axiom UI nodes and has no runtime existence. Declare the UX concept; the expansion is explicit, inspectable application semantics.",
   "ownership": {
     "default": "declaration",

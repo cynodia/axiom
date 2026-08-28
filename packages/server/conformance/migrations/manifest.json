@@ -1,7 +1,7 @@
 {
   "conformance": "axiom.conformance.v5",
   "baseContract": "axiom.server.v7",
-  "release": "0.11.0-alpha.1",
+  "release": "0.11.1-alpha.1",
   "description": "Portable migration conformance fixtures (spec11 §84-86). Each file carries a compiled axiom.server.v7 target Server IR with its MigrationDef chain, the schema version the persisted data starts at, the source rows, any destructive approvals, and the exact expected outcome. Running one needs only a row store and the semantics in docs/MIGRATIONS.md + docs/AUTHORITY.md. Every fixture must produce equivalent target data on the memory and SQLite providers (spec11 §83).",
   "fixtures": [
     {

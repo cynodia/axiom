@@ -1,6 +1,6 @@
 # Schema evolution & semantic migrations
 
-Axiom 0.11.0-alpha.1. The operational contract for evolving a deployed application's
+Axiom 0.11.1-alpha.1. The operational contract for evolving a deployed application's
 semantic model and its persisted canonical data over time — adding a required field,
 splitting one field into two, removing an obsolete one, migrating millions of
 provider-backed rows — **without** an application-authored SQL migration, an ORM migration,
@@ -19,7 +19,7 @@ tarball. This document plus the `.d.ts` declarations, the `axiom.server.v7` sche
 ## Semantic schema identity
 
 An application has a **semantic schema version** — `graph.schemaVersion`, a monotonic
-integer, default `1`. It is a distinct concept from the npm package version (`0.11.0`) and
+integer, default `1`. It is a distinct concept from the npm package version (`0.11.1`) and
 from the Server IR contract (`axiom.server.v7`). A `MigrationDef` chain connects consecutive
 integers.
 
