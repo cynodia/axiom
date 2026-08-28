@@ -95,7 +95,7 @@ import {
 } from './query-cursor.js';
 import type { CursorPayload } from './query-cursor.js';
 import { MIGRATION_DIAGNOSTIC_CODES } from './migration.js';
-import { evaluateSchemaGate, gateAllowsStart } from './migration-gate.js';
+import { evaluateSchemaGate, gateAllowsStart, schemaGateWithoutStore } from './migration-gate.js';
 import type { SchemaGateResult } from './migration-gate.js';
 import type { MigrationMetadataStore } from './migration-store.js';
 import { getMigrationStatus } from './migration-execute.js';
@@ -1735,10 +1735,11 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       // is not re-validated as though it were being proposed.
       const persisted = await persistence.load();
 
-      // The schema-compatibility gate (spec11 §11-12). There is no hopeful startup: the
-      // authority refuses to serve against persisted data it cannot reconcile with the
-      // graph, rather than failing queries and actions in arbitrary ways later.
-      if (migrationMetadata && declaresSchemaVersion) {
+      // The schema-compatibility gate (spec11 §11-12, hardened spec11.1 §4-14). There is no
+      // hopeful startup, and no `compatible` claim for a relationship that was never checked.
+      if (migrationMetadata) {
+        // Run the gate whenever a store is supplied — this catches an unversioned graph
+        // pointed at a versioned provider (spec11.1 §7, D-2).
         const gate = await evaluateSchemaGate(ir, migrationMetadata, {
           hasPersistedData: persisted.length > 0,
         });
@@ -1748,6 +1749,12 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         if (gate.status === 'fresh') {
           await migrationMetadata.writeSchema(ir.schemaVersion ?? 1, ir.schemaFingerprint ?? '');
         }
+      } else if (declaresSchemaVersion) {
+        // A graph that declares semantic schema evolution but was given no metadata store:
+        // the gate cannot run, so startup is refused rather than silently assuming
+        // compatibility (spec11.1 §8, D-2).
+        const gate = schemaGateWithoutStore(ir);
+        throw new Error(`${gate.code}: ${gate.message}`);
       }
 
       for (const entry of persisted) {
@@ -1791,10 +1798,10 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
             ],
           };
         }
-        if (migrationMetadata && declaresSchemaVersion) {
+        if (migrationMetadata) {
           // While a migration is running, authoritative traffic is refused rather than
-          // applied to data that is mid-transition (spec11 §68). 0.11 has no online
-          // migration; a host that wants zero-downtime must sequence it itself.
+          // applied to data that is mid-transition (spec11 §68, spec11.1 §12). 0.11 has no
+          // online migration; a host that wants zero-downtime must sequence it itself.
           if (await migrationMetadata.readLock()) {
             migrationLockSeen = true;
             return {
@@ -1899,15 +1906,9 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     blobLog: () =>
       [...effectRecords.values()].filter((entry) => entry.storage !== undefined).map((entry) => ({ ...entry })),
     async schemaGate(): Promise<SchemaGateResult> {
-      if (!migrationMetadata || !declaresSchemaVersion) {
-        return {
-          status: 'compatible',
-          message: migrationMetadata
-            ? 'document declares no semantic schema version; gate disabled'
-            : 'no migration metadata store configured; gate disabled',
-          requiredVersion: ir.schemaVersion ?? 1,
-          persistedVersion: null,
-        };
+      // Never claim `compatible` for a relationship that was not checked (spec11.1 §5).
+      if (!migrationMetadata) {
+        return schemaGateWithoutStore(ir);
       }
       return evaluateSchemaGate(ir, migrationMetadata, {
         hasPersistedData: (await persistence.load()).length > 0,

@@ -2,8 +2,10 @@ import {
   DEFAULT_SCHEMA_VERSION,
   diffSchema,
   migrationCoversDiff,
+  migrationPath,
   schemaFingerprint,
   schemaProjection,
+  sortMigrations,
 } from '@cynodia/axiom-core';
 import type {
   ApplicationGraph,
@@ -129,14 +131,46 @@ export function explainSchemaDiff(diff: SchemaDiff): string {
   return lines.join('\n');
 }
 
+/**
+ * How `covered` was decided (spec11.1 §23-24).
+ *
+ * - `step` — `previous` and `next` are one schema version apart, so coverage is evaluated
+ *   against the operations of the single `N → N+1` migration. This is the authoritative
+ *   check and agrees with `migrationCoversDiff` and `validateGraph`.
+ * - `chain` — `previous` and `next` are more than one version apart. A single endpoint diff
+ *   has no ordinary per-step coverage, so `covered` reports only whether a complete
+ *   migration chain connects the two versions; `steps` lists the migrations it would run.
+ * - `none` — `previous` and `next` declare the same schema version, or a downgrade.
+ */
+export type CoverageMode = 'step' | 'chain' | 'none';
+
+export interface MigrationCoverageStep {
+  migrationId: string;
+  fromSchema: number;
+  toSchema: number;
+  operationCount: number;
+}
+
 export interface MigrationImpact {
   fromVersion: number;
   toVersion: number;
   diff: SchemaDiff;
   verdict: SchemaChangeClass;
-  /** Whether the migration chain in `next` accounts for every data-affecting diff entry. */
+  /**
+   * Whether the migration accounts for the data-affecting part of this diff. For a
+   * single-step diff (`coverageMode: 'step'`) this is the authoritative answer and matches
+   * `migrationCoversDiff(diff, thatStep.operations).covered`. For a multi-step diff
+   * (`coverageMode: 'chain'`) it reports only whether a complete chain exists. Always
+   * accompanied by `uncovered` / `unmatched` / `steps` explaining the value (spec11.1 §25).
+   */
   covered: boolean;
+  coverageMode: CoverageMode;
+  /** Data-affecting diff entries with no matching migration operation. */
   uncovered: SchemaDiffEntry[];
+  /** Migration operations in the evaluated step that correspond to no diff entry. */
+  unmatched: MigrationOperation[];
+  /** The migration steps between `fromVersion` and `toVersion`, in order. */
+  steps: MigrationCoverageStep[];
   dataLossPossible: boolean;
   affectedEntities: string[];
   affectedFields: string[];
@@ -172,9 +206,46 @@ export function migrationImpact(previous: ApplicationGraph, next: ApplicationGra
     diff.entries.map((entry) => entry.entityId).filter(Boolean) as string[],
   );
 
-  const migrations = next.getNodesByKind('migration') as MigrationDef[];
-  const operations: MigrationOperation[] = migrations.flatMap((migration) => migration.operations);
-  const coverage = migrationCoversDiff(diff, operations);
+  // Coverage is scoped to the semantic transition being evaluated, NOT the whole chain in
+  // `next` (spec11.1 §22-24). Feeding every historical operation into an endpoint diff
+  // produces false negatives.
+  const migrations = sortMigrations(next.getNodesByKind('migration') as MigrationDef[]);
+  const fromV = diff.fromVersion;
+  const toV = diff.toVersion;
+  const chain = toV > fromV ? migrationPath(migrations, fromV, toV) : [];
+  const steps: MigrationCoverageStep[] = (chain ?? []).map((migration) => ({
+    migrationId: String(migration.id),
+    fromSchema: migration.fromSchema,
+    toSchema: migration.toSchema,
+    operationCount: migration.operations.length,
+  }));
+
+  let coverageMode: CoverageMode;
+  let covered: boolean;
+  let uncovered: SchemaDiffEntry[] = [];
+  let unmatched: MigrationOperation[] = [];
+
+  if (toV <= fromV) {
+    // Same version (nothing to cover) or a downgrade (no reverse path is evaluated here).
+    coverageMode = 'none';
+    covered = toV === fromV;
+  } else if (toV === fromV + 1) {
+    // Single step: evaluate the diff against exactly the `fromV → fromV+1` migration.
+    coverageMode = 'step';
+    const step = migrations.find((migration) => migration.fromSchema === fromV);
+    const result = migrationCoversDiff(diff, step?.operations ?? []);
+    covered = result.covered;
+    uncovered = result.uncovered;
+    unmatched = result.unmatched;
+  } else {
+    // Multi-step: a single endpoint diff has no ordinary step coverage. Report only whether
+    // a complete chain connects the two versions (spec11.1 §24, option B).
+    coverageMode = 'chain';
+    covered = chain !== null;
+    if (chain === null) {
+      uncovered = diff.needsMigration;
+    }
+  }
 
   const touchesChange = (nodeId: string): boolean => {
     for (const edge of next.getEdges(nodeId as never, { kinds: ['reads', 'writes', 'references'] })) {
@@ -217,8 +288,11 @@ export function migrationImpact(previous: ApplicationGraph, next: ApplicationGra
     toVersion: diff.toVersion,
     diff,
     verdict: diff.verdict,
-    covered: coverage.covered,
-    uncovered: coverage.uncovered,
+    covered,
+    coverageMode,
+    uncovered,
+    unmatched,
+    steps,
     dataLossPossible: diff.destructive.length > 0,
     affectedEntities: [...changedEntities].sort(),
     affectedFields: [...changedFields].sort(),

@@ -509,8 +509,10 @@ does for a local failure.
 | `MIGRATION_VALIDATION_FAILED` | Post-migration validation found persisted data that does not satisfy the target semantic schema (spec11 §37). |
 | `MIGRATION_CHECKPOINT_INVALID` | A resume was attempted from a checkpoint that does not match the current plan or schema fingerprint. |
 | `MIGRATION_FINGERPRINT_MISMATCH` | The persisted schema fingerprint does not match the origin of the resolved migration path — the stored data is not the shape the chain expects. |
-| `MIGRATION_NOT_AUTHORIZED` | The caller is not the host-controlled migration principal. Naming a migration id over the client protocol does nothing (spec11 §73, §74). |
+| `MIGRATION_NOT_AUTHORIZED` | The caller is not the host-minted migration capability. Naming a migration id over the client protocol does nothing; an object built with the capability's visible fields (or a spread copy of a real one) is rejected — authorization is by provenance, not shape (spec11 §73-74, spec11.1 §15-17). |
 | `MIGRATION_FAILED` | A migration failed for a reason with no more specific code; the target schema version was not committed and the recovery state is defined. |
+| `SCHEMA_IDENTITY_REQUIRED` | The provider's persisted metadata declares a semantic schema version, but the application graph declares none — so compatibility cannot be established. The gate fails closed rather than assuming the unversioned graph is safely compatible with schema 1 (spec11.1 §7). |
+| `SCHEMA_METADATA_REQUIRED` | The application graph declares semantic schema evolution (a `schemaVersion` past 1, or any `MigrationDef`), but `createAxiomServer` was given no `migrationMetadata` store, so the startup gate could not run. Startup is refused rather than silently assuming compatibility (spec11.1 §8). |
 
 **Migration execution is host-controlled.** `executeMigration()` is a standalone function,
 not a `ServerRequest` branch — there is no path from a client through the semantic protocol

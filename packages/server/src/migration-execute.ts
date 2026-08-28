@@ -24,27 +24,42 @@ import type { SchemaGateResult } from './migration-gate.js';
 
 /**
  * The authority to run a migration. Deliberately **not** the nullable `PRINCIPAL` an action
- * authorization reads (spec11 §74): it is a distinct, host-minted token, so migration
- * authority can never be confused with ordinary application authorization.
+ * authorization reads (spec11 §74): it is a distinct, host-minted capability.
+ *
+ * Authorization is by **provenance, not shape** (spec11.1 §16-17). The object returned by
+ * `migrationAuthority()` is registered in a process-private `WeakSet` and frozen;
+ * `isMigrationPrincipal` checks membership of that set. An object a consumer builds with the
+ * same visible fields — `{ kind: 'axiom.migration-authority', grantedBy: 'operator' }` — or a
+ * spread copy `{ ...migrationAuthority('operator') }` is **not** in the set and is rejected.
+ * `grantedBy` remains visible as a descriptive audit label; it is not the source of
+ * authorization.
+ *
+ * The capability is process-local (spec11.1 §19) and is never serialized (spec11.1 §18):
+ * migration durability lives in the `MigrationMetadataStore`, the lease and the checkpoints,
+ * not in a portable token.
  */
 export interface MigrationPrincipal {
   readonly kind: 'axiom.migration-authority';
-  /** A free-form label the host records for the audit trail — an operator id, a deploy job. */
+  /** A descriptive audit label — an operator id, a deploy job. Not the source of authorization. */
   readonly grantedBy: string;
 }
 
-/** Construct migration authority. Only a host calls this. */
+/** Process-private registry of genuine, host-minted migration capabilities. */
+const MINTED_AUTHORITIES = new WeakSet<object>();
+
+/** Mint migration authority. Only a host calls this; the result cannot be reconstructed by shape. */
 export function migrationAuthority(grantedBy: string): MigrationPrincipal {
-  return { kind: 'axiom.migration-authority', grantedBy };
+  const principal: MigrationPrincipal = Object.freeze({
+    kind: 'axiom.migration-authority' as const,
+    grantedBy: String(grantedBy),
+  });
+  MINTED_AUTHORITIES.add(principal);
+  return principal;
 }
 
+/** True only for the exact object `migrationAuthority()` returned — provenance, not duck typing. */
 export function isMigrationPrincipal(value: unknown): value is MigrationPrincipal {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as MigrationPrincipal).kind === 'axiom.migration-authority' &&
-    typeof (value as MigrationPrincipal).grantedBy === 'string'
-  );
+  return typeof value === 'object' && value !== null && MINTED_AUTHORITIES.has(value as object);
 }
 
 export interface ExecuteMigrationOptions {

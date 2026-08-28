@@ -145,17 +145,25 @@ test('a held migration lock makes the gate migration-in-progress and start() ref
   await assert.rejects(server.start(), /MIGRATION_IN_PROGRESS/);
 });
 
-test('a pre-v7 document skips the gate entirely', async () => {
+test('a pre-v7 document with an unversioned provider is not-applicable, never compatible (spec11.1 §5)', async () => {
   const graph = graphAt(1); // schemaVersion 1, no migrations
   const ir = compileToServerIR(graph, { validate: false });
   assert.equal(ir.schemaVersion, undefined);
   const metadata = createMemoryMigrationStore({ now: () => 1 });
   const server = createAxiomServer({ ir, migrationMetadata: metadata });
-  await server.start(); // must not throw
+  await server.start(); // must not throw — there is no versioned persistence to protect
   const gate = await server.schemaGate();
-  assert.equal(gate.status, 'compatible');
+  assert.equal(gate.status, 'not-applicable');
+  assert.notEqual(gate.status, 'compatible');
   // Nothing was stamped, because the document declares no schema version.
   assert.equal(await metadata.readSchema(), null);
+});
+
+test('a pre-v7 document with NO metadata store is not-applicable, and start() succeeds', async () => {
+  const ir = compileToServerIR(graphAt(1), { validate: false });
+  const server = createAxiomServer({ ir });
+  await server.start();
+  assert.equal((await server.schemaGate()).status, 'not-applicable');
 });
 
 test('evaluateSchemaGate is pure and reports the persisted vs required versions', async () => {

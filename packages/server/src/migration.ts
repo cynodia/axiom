@@ -89,6 +89,18 @@ export const MIGRATION_DIAGNOSTIC_CODES = {
   MIGRATION_NOT_AUTHORIZED: 'MIGRATION_NOT_AUTHORIZED',
   /** A migration failed for a reason not covered by a more specific code; the target version was not committed. */
   MIGRATION_FAILED: 'MIGRATION_FAILED',
+  /**
+   * Persisted data declares a semantic schema version, but the application does not — so
+   * compatibility cannot be established. The gate fails closed rather than assuming the
+   * unversioned graph is safely compatible (spec11.1 §7).
+   */
+  SCHEMA_IDENTITY_REQUIRED: 'SCHEMA_IDENTITY_REQUIRED',
+  /**
+   * The graph declares semantic schema evolution, but `createAxiomServer` was given no
+   * `migrationMetadata` store, so the startup gate could not run. Startup is refused rather
+   * than silently assuming compatibility (spec11.1 §8).
+   */
+  SCHEMA_METADATA_REQUIRED: 'SCHEMA_METADATA_REQUIRED',
 } as const;
 
 export type MigrationDiagnosticCode =
