@@ -603,7 +603,7 @@ authoring an application that crosses the trust boundary.
 10. **FORM SUBMIT** — a declared submit button invokes with its own arguments, clicked or submitted.
 11. **IDEMPOTENCY** — a generated request id is unique across runtime instances; records are scoped by principal.
 12. **CHANGES** — `changes` names every observable state whose value moved, and no others.
-13. **PORTABILITY** — `axiom.server.v1` is frozen and language-independent.
+13. **PORTABILITY** — `axiom.server.v1` is frozen and language-independent. It is not the *current* contract: a document declares the oldest contract that carries its vocabulary; `axiom.server.v7` is current (migrations, schema identity).
 14. **INTEGRATION** — external systems are accessed through typed integration operations.
 15. **QUERY** — an external query is explicit action/trigger execution, never a pure `Expression`.
 16. **EFFECT** — external effects are not rollback-capable state mutations.
@@ -947,8 +947,12 @@ Providers: `createMemoryRowStore` + `createMemoryMigrationStore` (deterministic 
 `runMigrationConformanceFixture` over the `axiom.conformance.v5` fixtures in
 `conformance/migrations/`.
 
-CLI (private): `axiom schema status` / `schema diff --against=<prev>` / `migrate plan
---from=N` / `migrate --sqlite=<path> --approve=op,op` / `migrate status --sqlite=<path>`.
+There is **no published Axiom CLI**. Every schema/migration operation is a public library
+function — `inspectSchema`, `diffSchema`, `explainSchemaDiff`, `migrationImpact` (from
+`@cynodia/axiom-agent-api`); `planMigration`, `explainMigration`, `executeMigration`,
+`getMigrationStatus` (from `@cynodia/axiom-server`). A host builds its own command around
+them. (The Axiom repository has a private, unpublished CLI over the same functions for
+maintainer use.)
 
 Diagnostics: `SCHEMA_MIGRATION_REQUIRED` `SCHEMA_INCOMPATIBLE` `MIGRATION_IN_PROGRESS`
 `MIGRATION_STATE_CORRUPTED` `MIGRATION_PATH_NOT_FOUND` `MIGRATION_APPROVAL_REQUIRED`

@@ -22,21 +22,37 @@ SQLite), `TransportAdapter` (in-process and HTTP), `ServerHost` for time, identi
 scheduling and authentication, and `IntegrationAdapter` for external systems. Nothing in
 an ApplicationGraph mentions HTTP, SQL, a route or an SDK.
 
-As of 0.8 this package also owns timed and event-driven execution: it schedules and
-dispatches `TriggerDef`s, records `integration-effect` intent atomically with the state
-write that requested it (the transactional outbox), dispatches an effect's committed
-intents to its `IntegrationAdapter` post-commit with retry, and translates verified
-webhook deliveries into semantic events. See
-[`docs/INTEGRATIONS.md`](https://github.com/cynodia/axiom/blob/main/docs/INTEGRATIONS.md),
-[`docs/EFFECTS.md`](https://github.com/cynodia/axiom/blob/main/docs/EFFECTS.md) and
-[`docs/TRIGGERS.md`](https://github.com/cynodia/axiom/blob/main/docs/TRIGGERS.md).
+This package also owns the parts of an application that only the authority can run:
+
+- **Timed and event-driven execution** (0.8) — scheduling and dispatching `TriggerDef`s,
+  the transactional outbox for `integration-effect` intent, post-commit effect delivery
+  with retry, and verified-webhook → semantic-event translation. See
+  [`docs/INTEGRATIONS.md`](https://github.com/cynodia/axiom/blob/main/docs/INTEGRATIONS.md),
+  [`docs/EFFECTS.md`](https://github.com/cynodia/axiom/blob/main/docs/EFFECTS.md),
+  [`docs/TRIGGERS.md`](https://github.com/cynodia/axiom/blob/main/docs/TRIGGERS.md).
+- **Inbound streams and binary storage** (0.9) — long-lived `SubscriptionDef` sources
+  feeding the event pipeline, and `StorageDef` object stores behind host blob transports.
+  See [`docs/SUBSCRIPTIONS.md`](https://github.com/cynodia/axiom/blob/main/docs/SUBSCRIPTIONS.md),
+  [`docs/STORAGE.md`](https://github.com/cynodia/axiom/blob/main/docs/STORAGE.md).
+- **The query layer** (0.10) — demand-driven `QueryDef` reads over authoritative data too
+  large to materialize, `DataProvider`s (`createMemoryDataProvider` / `createSqliteDataProvider`),
+  fingerprinted keyset cursors, and a principal/policy-scoped result cache. See
+  [`docs/QUERIES.md`](https://github.com/cynodia/axiom/blob/main/docs/QUERIES.md).
+- **Schema evolution** (0.11) — `planMigration` / `explainMigration`, the host-controlled
+  `executeMigration`, the durable `MigrationMetadataStore` and lease lock, keyset-batched
+  crash-resumable migration, memory and SQLite `MigrationRowStore`s, and the
+  `createAxiomServer` startup gate. See
+  [`docs/MIGRATIONS.md`](https://github.com/cynodia/axiom/blob/main/docs/MIGRATIONS.md).
 
 Main exports: `createAxiomServer`, `createMemoryPersistence`, `createSqlitePersistence`,
 `createServerHost`, `createDeterministicServerHost`, `createDirectTransport`,
 `createHttpTransport`, `createRemoteGateway`, `serveOverHttp`, `serveAxiomApplication`,
 `createFakeIntegrationAdapter`, `createHttpIntegrationAdapter`, `createTriggerRuntime`,
-`createEffectRunner`, `runConformanceFixture`, `runConformanceSuite`,
-`SERVER_DIAGNOSTIC_CODES`.
+`createEffectRunner`, `createMemoryDataProvider`, `createSqliteDataProvider`,
+`createMemoryMigrationStore`, `createSqliteMigrationStore`, `createMemoryRowStore`,
+`createSqliteRowStore`, `planMigration`, `explainMigration`, `executeMigration`,
+`getMigrationStatus`, `migrationAuthority`, `runConformanceFixture`, `runConformanceSuite`,
+`runQueryConformanceFixture`, `runMigrationConformanceFixture`, `SERVER_DIAGNOSTIC_CODES`.
 
 `serveAxiomApplication` is the whole deployment story: it serves the generated page at `GET /`
 and the semantic endpoint at `POST /axiom`, from one process, for any Axiom application. No
@@ -44,17 +60,26 @@ route, controller, handler or SQL statement is written by an application author.
 
 ### Portable artifacts
 
-`axiom.server.v1` is a frozen, language-independent contract, and this package ships what an
-implementation in another language needs to conform to it:
+The Server IR contract is versioned. **`axiom.server.v1` is frozen** — its bytes and
+semantics never change — but it is **not the current contract**: a document declares the
+oldest contract that can carry its vocabulary, computed from the document. The current
+contract is **`axiom.server.v7`** (0.11 schema-evolution vocabulary); `v1`–`v6` are frozen
+and shipped for compatibility. This package ships what an implementation in another language
+needs to conform:
 
 ```
-@cynodia/axiom-server/conformance                       the fixture manifest
-@cynodia/axiom-server/conformance/<name>.json           one fixture: IR, state, invocations, expectations
-@cynodia/axiom-server/schema/server-ir.v1.schema.json   JSON Schema for the frozen v1 IR
-@cynodia/axiom-server/schema/server-ir.v2.schema.json   JSON Schema for v2 (+ group, expression-ref)
-@cynodia/axiom-server/schema/server-ir.v3.schema.json   JSON Schema for v3 (+ integrations, effects, triggers, events)
-@cynodia/axiom-server/schema/server-ir.v4.schema.json   JSON Schema for v4 (+ invocation source, structured effect outcome)
-@cynodia/axiom-server/schema/protocol.v1.schema.json    JSON Schema for the protocol
+@cynodia/axiom-server/conformance                          the base fixture manifest
+@cynodia/axiom-server/conformance/<name>.json              one base fixture: IR, state, invocations, expectations
+@cynodia/axiom-server/conformance/queries/<name>.json      one query conformance fixture (axiom.conformance.v4)
+@cynodia/axiom-server/conformance/migrations/<name>.json   one migration conformance fixture (axiom.conformance.v5)
+@cynodia/axiom-server/schema/server-ir.v1.schema.json      JSON Schema for the frozen v1 IR
+@cynodia/axiom-server/schema/server-ir.v2.schema.json      v2 (+ group, expression-ref)
+@cynodia/axiom-server/schema/server-ir.v3.schema.json      v3 (+ integrations, effects, triggers, events)
+@cynodia/axiom-server/schema/server-ir.v4.schema.json      v4 (+ invocation source, structured effect outcome)
+@cynodia/axiom-server/schema/server-ir.v5.schema.json      v5 (+ subscriptions, storage, blob operations)
+@cynodia/axiom-server/schema/server-ir.v6.schema.json      v6 (+ queries, relationships, read policies)
+@cynodia/axiom-server/schema/server-ir.v7.schema.json      v7 (+ migrations, schema version + fingerprint) — current
+@cynodia/axiom-server/schema/protocol.v1.schema.json       JSON Schema for the protocol
 ```
 
 The fixtures are pure data. Running them requires no part of this implementation — which is

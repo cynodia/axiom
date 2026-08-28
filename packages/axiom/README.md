@@ -70,7 +70,7 @@ reports its absence rather than failing at import.
 | `Theme` | Translation of presentation intent into visual design. |
 | Renderer | Platform-specific materialization. Not part of the graph. |
 | `StateDef.authority` | Who may commit a value: the client, or the server. The one declaration the split follows from. |
-| `ServerIR` | The half an authority executes. Portable JSON, frozen as `axiom.server.v1`. |
+| `ServerIR` | The half an authority executes. Portable JSON. `axiom.server.v1` is frozen; the current contract is `axiom.server.v7`, computed from the document's vocabulary. |
 | Semantic protocol | What a client may ask for: named actions with arguments, never mutation programs. |
 | `PersistenceAdapter` | Where a decided value survives. Not part of the semantics. |
 

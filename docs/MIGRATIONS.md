@@ -9,8 +9,10 @@ a migration callback, a repository script, or a manual schema-version check.
 > The graph owns the meaning of the change. The migration model owns the transition between
 > semantic versions. The provider owns the physical execution.
 
-Full research and rationale: `reports/AXIOM_0_11_MIGRATION_RESEARCH.md`.
-Implementation report: `reports/AXIOM_0_11_IMPLEMENTATION_REPORT.md`.
+The design rationale, the architecture research and the implementation reports are
+maintainer artifacts in the Axiom repository (`reports/`); they are not shipped in the npm
+tarball. This document plus the `.d.ts` declarations, the `axiom.server.v7` schema and the
+`axiom.conformance.v5` fixtures are the complete consumer contract.
 
 ---
 
@@ -65,7 +67,7 @@ does not silently skip a semantic transition.
 | `populate-field` | `entityId`, `fieldId`, `value` (expression) | migration-required |
 | `transform-field` | `entityId`, `fieldId`, `fromType`, `toType`, `expression` | migration-required; narrowing → destructive |
 | `transform-record` | `entityId`, `produce` (an `object` expression), `removesFields?`, `addsFields?` | migration-required; discards info → destructive |
-| `add-relationship` | `relationship` | compatible / migration-required (required) |
+| `add-relationship` | `relationship` | compatible (metadata; no per-row rewrite) |
 | `remove-relationship` | `relationshipId` | compatible (metadata only) |
 
 Split and merge are **not** dedicated primitives: both are `transform-record` with
@@ -117,13 +119,35 @@ The **safe type-change set** is small: an identical type, a widening to `optiona
 same inner type, and enum membership growth. Everything else is `migration-required` at
 best and `destructive` if narrowing.
 
-`migrationCoversDiff(diff, operations)` proves the migration chain accounts for exactly the
+`migrationCoversDiff(diff, operations)` proves a set of operations accounts for exactly the
 data-affecting part of the diff: every `migration-required` / `destructive` entry has a
 matching operation, and no operation describes a change the graphs do not contain.
 
+**Coverage is scoped to the semantic transition being evaluated** (spec11.1 §22-24), not to
+the whole chain. `migrationImpact(previous, next)` picks the operations by the version gap:
+
+- `next.schemaVersion === previous.schemaVersion + 1` → `coverageMode: 'step'`. Coverage is
+  evaluated against exactly the `N → N+1` migration's operations. This is authoritative and
+  agrees with `migrationCoversDiff` and `validateGraph`; historical operations from earlier
+  migrations in `next` do **not** count as unmatched.
+- more than one version apart → `coverageMode: 'chain'`. A single endpoint diff has no
+  ordinary per-step coverage, so `covered` reports only whether a complete migration chain
+  connects the two versions; `steps[]` lists the migrations that would run.
+- same version, or a downgrade → `coverageMode: 'none'`.
+
+`covered: false` is never an unexplained boolean — the result carries `uncovered`,
+`unmatched` and `steps`.
+
 `AgentAPI` surface: `inspectSchema()`, `diffSchema(previous)`, `migrationImpact(previous)`
-(§57 — the diff, coverage, `dataLossPossible`, and which queries / actions / read policies /
-constraints / UI nodes reference a changed field), and `explainSchemaDiff(diff)`.
+(§57 — the diff, coverage + `coverageMode`/`uncovered`/`unmatched`/`steps`,
+`dataLossPossible`, and which queries / actions / read policies / constraints / UI nodes
+reference a changed field), and `explainSchemaDiff(diff)`. These agree with runtime and
+compiler validation on whether a valid migration step covers its semantic diff (spec11.1 §26).
+
+**`RelationshipDef.required`.** There is no public relationship-requiredness authoring
+concept in 0.11.x. The fingerprint projection reserves a `required` slot for relationships
+that is **always `false`**, so that adding the capability in a future minor need not bump
+`SCHEMA_FINGERPRINT_VERSION` (an existing graph, unable to set it, fingerprints identically).
 
 ---
 
@@ -153,8 +177,17 @@ executeMigration({
 
 - **Migration execution is host-controlled.** `executeMigration` is a standalone function,
   not a `ServerRequest` branch — there is no path from a client through the semantic
-  protocol that runs a migration. It requires a `MigrationPrincipal` minted by the host with
-  `migrationAuthority(grantedBy)`; a call without one is `MIGRATION_NOT_AUTHORIZED`.
+  protocol that runs a migration, and no `migrate` / `execute-migration` request kind. It
+  requires a `MigrationPrincipal` minted by the host with `migrationAuthority(grantedBy)`; a
+  call without one is `MIGRATION_NOT_AUTHORIZED`.
+- **Migration authority is opaque, and authorization is by provenance, not shape.** The
+  object `migrationAuthority()` returns is frozen and registered in a process-private
+  registry. Constructing an object with the same visible fields —
+  `{ kind: 'axiom.migration-authority', grantedBy: 'operator' }` — or a spread copy of a
+  real one — `{ ...migrationAuthority('operator') }` — does **not** recreate authority and
+  is rejected. `grantedBy` is a descriptive audit label, not the source of authorization.
+  The capability is process-local and is never serialized; durability lives in the
+  `MigrationMetadataStore`, the lease and the checkpoints.
 - **"A migration exists" is not "the operator approved data loss."** Every destructive
   operation id MUST appear in `approveDestructive`, or the migration is refused
   (`MIGRATION_APPROVAL_REQUIRED`) with **zero writes** and the schema version unchanged.
@@ -186,19 +219,44 @@ checkpoint, and an `idle` / `in-progress` / `checkpointed` phase.
 
 ## The startup gate
 
-When a document declares a semantic schema version and `createAxiomServer` is given
-`migrationMetadata`, `start()` runs a compatibility check. **There is no hopeful startup.**
+**There is no hopeful startup, and `compatible` never means "not checked".** A
+machine-readable `compatible` verdict means compatibility was *actually established* against
+the provider's durable record.
 
-| Verdict | Outcome |
-| --- | --- |
-| **compatible** | stored `(version, fingerprint)` match — start normally |
-| **fresh** | no stored metadata — stamp the provider and start |
-| **migration-required** | stored version `<` required, a chain exists — `start()` throws `SCHEMA_MIGRATION_REQUIRED` |
-| **migration-in-progress** | a migration lock is held — `start()` throws `MIGRATION_IN_PROGRESS` |
-| **incompatible** | stored version `>` required (`SCHEMA_INCOMPATIBLE`), or no chain (`MIGRATION_PATH_NOT_FOUND`) — `start()` throws |
-| **corrupted** | same version, different fingerprint (`MIGRATION_FINGERPRINT_MISMATCH`), or data present with no metadata — `start()` throws |
+### What must be configured
 
-`server.schemaGate()` returns the verdict without starting.
+- A graph that **declares semantic schema evolution** — a `schemaVersion` past `1`, or any
+  `MigrationDef` — MUST be given a `migrationMetadata` store. `createAxiomServer({ ir })`
+  with no store, for such a graph, refuses `start()` with `SCHEMA_METADATA_REQUIRED`: the
+  gate could not run, so serving is not permitted.
+- A graph that declares **no** semantic schema identity does not need a store. If one is
+  supplied and it records a versioned schema, the mismatch is still caught (below).
+
+### Verdicts
+
+`start()` proceeds only on `compatible`, `fresh` or `not-applicable`; every other verdict
+throws with its diagnostic code. `server.schemaGate()` returns the verdict without starting.
+
+| Verdict | Meaning | `start()` |
+| --- | --- | --- |
+| **compatible** | stored `(version, fingerprint)` were compared and match | proceeds |
+| **fresh** | the graph declares a schema, the provider has no metadata, and no persisted data exists — the provider is stamped at the graph's version | proceeds |
+| **not-applicable** | the graph declares no schema identity and there is no versioned persistence to protect — the gate genuinely does not apply | proceeds |
+| **migration-required** | stored version `<` required and a complete chain exists — `SCHEMA_MIGRATION_REQUIRED` | refused |
+| **migration-in-progress** | a migration lock is held — `MIGRATION_IN_PROGRESS` | refused |
+| **incompatible** | stored version `>` required (`SCHEMA_INCOMPATIBLE`), or no chain to it (`MIGRATION_PATH_NOT_FOUND`) | refused |
+| **corrupted** | same version, wrong fingerprint (`MIGRATION_FINGERPRINT_MISMATCH`); or persisted data present with no metadata and a schema-evolving graph (`MIGRATION_STATE_CORRUPTED`) | refused |
+| **schema-identity-required** | the provider records a schema version but the graph declares none — compatibility cannot be established (`SCHEMA_IDENTITY_REQUIRED`) | refused |
+| **schema-metadata-required** | the graph declares schema evolution but no metadata store was supplied (`SCHEMA_METADATA_REQUIRED`) | refused |
+
+### `fresh` ≠ `compatible` ≠ `not-applicable`
+
+`fresh` is a new database for a schema-evolving application — it initializes to the graph's
+declared schema through the documented fresh-start path, with no migration from imaginary
+history. `not-applicable` is an application with no persisted semantic schema to protect —
+often a trivial in-memory program. Neither is `compatible`, which means an actual match was
+verified. An unversioned graph pointed at an existing versioned provider is
+`schema-identity-required`, never any of the three.
 
 **Serving during a migration.** While a migration lock is held, the authority refuses every
 request with `MIGRATION_IN_PROGRESS`. Once the lock clears, if the persisted schema still
@@ -240,6 +298,23 @@ migration is refused **before any write** (`MIGRATION_PROVIDER_UNSUPPORTED`).
 
 **No application-authored SQL.** The memory and SQLite providers must derive semantically
 equivalent target data from the same fixture.
+
+### Where the rows come from
+
+A migration operates on persistence the host already has — a production SQLite file, a
+Postgres database. `MigrationRowStore` deliberately has **no insert operation**: seeding
+data is not a migration step. For tests, bootstrap and the conformance runner, the
+reference stores accept pre-existing rows through their own constructors:
+
+```ts
+createMemoryRowStore(dataset)                                  // dataset: Map<entityId, Row[]>
+await createSqliteRowStore({ location, ir, seed })             // seed: Record<entityId, Row[]>
+```
+
+The `seed` is source-shape data; the SQLite store reconciles it to the columns the seed
+carries so the database genuinely starts at the *source* schema and the migration's own
+`ALTER TABLE`s move it to the target. `seed` is a constructor convenience, not part of the
+migration model.
 
 ---
 

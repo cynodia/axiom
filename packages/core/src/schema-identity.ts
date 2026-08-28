@@ -62,6 +62,12 @@ export interface RelationshipShape {
   from: { entityId: string; fieldId: string };
   to: { entityId: string; fieldId: string };
   cardinality: 'to-one' | 'to-many';
+  /**
+   * Reserved. `RelationshipDef` has no public `required` authoring concept in 0.11.x, so
+   * this is **always `false`**. The slot is kept in the projection so that adding relationship
+   * requiredness in a future minor does not have to bump `SCHEMA_FINGERPRINT_VERSION` — an
+   * existing graph, which cannot set it, fingerprints identically either way (spec11.1 §36).
+   */
   required: boolean;
 }
 
@@ -188,7 +194,8 @@ export function schemaProjection(input: SchemaInput): SchemaProjection {
         fieldId: String(relationship.to.fieldId),
       },
       cardinality: relationship.cardinality,
-      required: (relationship as { required?: boolean }).required === true,
+      // Reserved slot — always `false` in 0.11.x (see `RelationshipShape.required`).
+      required: false,
     })),
   );
 
