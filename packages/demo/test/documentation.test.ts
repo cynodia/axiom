@@ -473,6 +473,24 @@ test('every relative link between documents resolves', () => {
   assert.deepEqual(broken, []);
 });
 
+test('a shipped document names reports/ only to say it is a maintainer artifact (spec11.1 §32)', () => {
+  // `reports/` holds design research and implementation reports. It is never packed into any
+  // tarball, so a contract document that points a consumer at `reports/AXIOM_x.md` is a
+  // dangling reference the reader cannot follow — exactly the drift spec11.1 §32 removed.
+  // A document may still mention the directory, but only to state that it is not shipped.
+  const offenders: string[] = [];
+  for (const [file, source] of ALL_DOCS) {
+    for (const match of source.matchAll(/[^\n.]*\breports\/[\w./-]+\.md[^\n]*/g)) {
+      const sentence = match[0];
+      const disclaimed = /not shipped|not (?:in|part of) the (?:npm )?tarball|maintainer artifact|not published|repository/i;
+      if (!disclaimed.test(sentence)) {
+        offenders.push(`${file} → ${sentence.trim()}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], 'a shipped document points a consumer at an unpacked reports/ file');
+});
+
 test('the documentation states the version it describes', () => {
   const version = JSON.parse(read('package.json')).version as string;
   assert.ok(README.includes(version), `the README does not state ${version}`);
