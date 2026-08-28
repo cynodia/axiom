@@ -509,6 +509,9 @@ const BUILTIN_PROBES: Record<string, { expression: Expression; expected?: unknow
   sum: { expression: sum(literal([1, 2, 3])), expected: 6 },
   lowercase: { expression: call('lowercase', literal('AB')), expected: 'ab' },
   'to-string': { expression: call('to-string', literal(12)), expected: '12' },
+  trim: { expression: call('trim', literal('  x  ')), expected: 'x' },
+  'substring-before': { expression: call('substring-before', literal('Ada Lovelace'), literal(' ')), expected: 'Ada' },
+  'substring-after': { expression: call('substring-after', literal('Ada Lovelace'), literal(' ')), expected: 'Lovelace' },
   now: { expression: call('now') },
   uuid: { expression: call('uuid') },
 };

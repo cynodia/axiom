@@ -132,6 +132,9 @@ export type BuiltinFunction =
   | 'sum'
   | 'lowercase'
   | 'to-string'
+  | 'trim'
+  | 'substring-before'
+  | 'substring-after'
   | 'now'
   | 'uuid';
 
@@ -148,6 +151,9 @@ export const BUILTIN_FUNCTIONS: readonly BuiltinFunction[] = [
   'sum',
   'lowercase',
   'to-string',
+  'trim',
+  'substring-before',
+  'substring-after',
   'now',
   'uuid',
 ];

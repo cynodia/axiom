@@ -31,7 +31,7 @@ Three coercions decide most edge cases. They are shared by every kind.
 A collection is truthy only when non-empty. This is the one coercion most likely to
 surprise: use `count(...) > 0` when you mean "has members" and want it to read that way.
 
-**Text** (`concat`, `to-string`, `lowercase`, comparison of non-numbers, rendering):
+**Text** (`concat`, `to-string`, `lowercase`, `trim`, `substring-before`, `substring-after`, comparison of non-numbers, rendering):
 `null`/`undefined` → `''`; string → itself; number/boolean → `String(v)`; anything else →
 `JSON.stringify(v)`.
 
@@ -210,7 +210,7 @@ Validation: `UNKNOWN_EXPRESSION_DEF` for a reference to something that is not on
 
 ## Built-in functions
 
-14 names, enumerated by `BUILTIN_FUNCTIONS`. `AGGREGATE_FUNCTIONS` lists those that reduce
+17 names, enumerated by `BUILTIN_FUNCTIONS`. `AGGREGATE_FUNCTIONS` lists those that reduce
 a collection of numbers (`sum`).
 
 | Function | Arity | Input | Output | Notes |
@@ -227,6 +227,9 @@ a collection of numbers (`sum`).
 | `sum` | 1 | `Collection<number>` | `number` | **Fails on `null`, and on any non-finite or non-numeric member.** `[]` → `0`. |
 | `lowercase` | 1 | any | `string` | Text form, lower-cased. |
 | `to-string` | 1 | any | `string` | Text form. |
+| `trim` | 1 | any | `string` | Text form with leading/trailing whitespace removed. |
+| `substring-before` | 2 | text, separator | `string` | Text before the first occurrence of `separator`; the whole string if it does not occur (empty separator → whole string). |
+| `substring-after` | 2 | text, separator | `string` | Text after the first occurrence of `separator`; `''` if it does not occur. |
 | `now` | 0 | — | `string` | ISO timestamp from the host. |
 | `uuid` | 0 | — | `string` | Identifier from the host. |
 

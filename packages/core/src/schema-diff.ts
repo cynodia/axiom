@@ -453,32 +453,41 @@ export function migrationCoversDiff(
     matched: false,
   }));
 
+  const matches = (entry: SchemaDiffEntry, target: (typeof opTargets)[number]): boolean => {
+    if (entry.entityId && target.entityId && target.entityId !== entry.entityId) {
+      return false;
+    }
+    if (entry.fieldId) {
+      return target.fieldIds.has(entry.fieldId);
+    }
+    return (
+      (entry.entityId !== undefined && target.entityId === entry.entityId) ||
+      entry.kind === 'relationship-changed' ||
+      entry.kind === 'relationship-added' ||
+      entry.kind === 'relationship-removed' ||
+      entry.kind === 'state-type-changed' ||
+      entry.kind === 'state-kind-changed' ||
+      entry.kind === 'entity-added' ||
+      entry.kind === 'entity-removed'
+    );
+  };
+
+  // Every data-affecting entry must be covered by an operation.
   const uncovered: SchemaDiffEntry[] = [];
   for (const entry of diff.needsMigration) {
-    const match = opTargets.find((target) => {
-      if (entry.entityId && target.entityId && target.entityId !== entry.entityId) {
-        return false;
-      }
-      if (entry.fieldId) {
-        return target.fieldIds.has(entry.fieldId);
-      }
-      // Entity/state/relationship-level entries match an operation on the same subject.
-      return (
-        (entry.entityId !== undefined && target.entityId === entry.entityId) ||
-        entry.kind === 'relationship-changed' ||
-        entry.kind === 'relationship-added' ||
-        entry.kind === 'state-type-changed' ||
-        entry.kind === 'state-kind-changed'
-      );
-    });
+    const match = opTargets.find((target) => matches(entry, target));
     if (match) {
       match.matched = true;
     } else {
       uncovered.push(entry);
     }
   }
-
-  const unmatched = opTargets.filter((target) => !target.matched).map((target) => target.operation);
+  // An operation is only "unmatched" if it corresponds to *no* diff entry at all — an
+  // operation for a persistence-compatible change (making a field optional, adding a
+  // relationship) is legitimate and matches its compatible entry.
+  const unmatched = opTargets
+    .filter((target) => !target.matched && !diff.entries.some((entry) => matches(entry, target)))
+    .map((target) => target.operation);
   return { covered: uncovered.length === 0 && unmatched.length === 0, uncovered, unmatched };
 }
 

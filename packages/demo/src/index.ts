@@ -20,6 +20,14 @@ export {
   ORDER_STATUSES,
 } from './order-management.js';
 export type { OrderManagementDataset } from './order-management.js';
+export {
+  createOrderHistoryGraph,
+  migrationsUpTo,
+  orderHistoryDataset,
+  historyIds,
+  SCHEMA_LETTERS,
+} from './order-management-history.js';
+export type { SchemaLetter } from './order-management-history.js';
 
 export interface DemoApplication {
   slug: string;

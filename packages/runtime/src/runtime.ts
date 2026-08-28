@@ -1103,6 +1103,20 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         return toText(values[0]).toLowerCase();
       case 'to-string':
         return toText(values[0]);
+      case 'trim':
+        return toText(values[0]).trim();
+      case 'substring-before': {
+        const text = toText(values[0]);
+        const separator = toText(values[1]);
+        const index = separator === '' ? -1 : text.indexOf(separator);
+        return index < 0 ? text : text.slice(0, index);
+      }
+      case 'substring-after': {
+        const text = toText(values[0]);
+        const separator = toText(values[1]);
+        const index = separator === '' ? -1 : text.indexOf(separator);
+        return index < 0 ? '' : text.slice(index + separator.length);
+      }
       case 'now':
         return host.now();
       case 'uuid':

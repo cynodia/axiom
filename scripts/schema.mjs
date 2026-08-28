@@ -13,6 +13,7 @@ import { repoRoot, version } from './packages.mjs';
 const core = await import(path.join(repoRoot, 'packages/core/dist/index.js'));
 const {
   BUILTIN_FUNCTIONS,
+  SERVER_IR_V7_BUILTIN_FUNCTIONS,
   EXPRESSION_KINDS,
   OPERATION_KINDS,
   SERVER_IR_CONTRACTS,
@@ -171,7 +172,7 @@ const buildServerIR = (contract) => ({
         variant('object', { entityId: id, entries: { type: 'array', items: ref('ObjectEntry') } }, ['entries']),
         variant('binary', { operator: { enum: BINARY_OPERATORS }, left: expression, right: expression }, ['operator', 'left', 'right']),
         variant('unary', { operator: { enum: UNARY_OPERATORS }, operand: expression }, ['operator', 'operand']),
-        variant('call', { function: { enum: [...BUILTIN_FUNCTIONS] }, arguments: { type: 'array', items: expression } }, ['function', 'arguments']),
+        variant('call', { function: { enum: builtinFunctionsFor(contract) }, arguments: { type: 'array', items: expression } }, ['function', 'arguments']),
         variant('filter', { source: expression, scopeId: id, predicate: expression }, ['source', 'scopeId', 'predicate']),
         variant('find', { source: expression, scopeId: id, predicate: expression }, ['source', 'scopeId', 'predicate']),
         variant('map', { source: expression, scopeId: id, projection: expression }, ['source', 'scopeId', 'projection']),
@@ -731,6 +732,12 @@ function expressionKindsFor(contract) {
   return contract === 'axiom.server.v1'
     ? EXPRESSION_KINDS.filter((kind) => !SERVER_IR_V2_EXPRESSION_KINDS.includes(kind))
     : [...EXPRESSION_KINDS];
+}
+
+function builtinFunctionsFor(contract) {
+  return atLeast(contract, 'axiom.server.v7')
+    ? [...BUILTIN_FUNCTIONS]
+    : BUILTIN_FUNCTIONS.filter((name) => !SERVER_IR_V7_BUILTIN_FUNCTIONS.includes(name));
 }
 
 function operationKindsFor(contract) {

@@ -101,6 +101,9 @@ const SUPPORTED_CALLS = new Set([
   'contains',
   'lowercase',
   'to-string',
+  'trim',
+  'substring-before',
+  'substring-after',
   'coalesce',
   'is-empty',
   'non-empty',
@@ -218,6 +221,20 @@ function evaluateCall(fn: string, args: unknown[]): unknown {
       return typeof args[0] === 'string' ? args[0].toLowerCase() : args[0];
     case 'to-string':
       return args[0] === null || args[0] === undefined ? '' : String(args[0]);
+    case 'trim':
+      return (args[0] === null || args[0] === undefined ? '' : String(args[0])).trim();
+    case 'substring-before': {
+      const text = args[0] === null || args[0] === undefined ? '' : String(args[0]);
+      const separator = args[1] === null || args[1] === undefined ? '' : String(args[1]);
+      const index = separator === '' ? -1 : text.indexOf(separator);
+      return index < 0 ? text : text.slice(0, index);
+    }
+    case 'substring-after': {
+      const text = args[0] === null || args[0] === undefined ? '' : String(args[0]);
+      const separator = args[1] === null || args[1] === undefined ? '' : String(args[1]);
+      const index = separator === '' ? -1 : text.indexOf(separator);
+      return index < 0 ? '' : text.slice(index + separator.length);
+    }
     case 'coalesce':
       return args.find((value) => value !== null && value !== undefined) ?? null;
     case 'is-empty':

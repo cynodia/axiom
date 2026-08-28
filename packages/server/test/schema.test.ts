@@ -11,6 +11,7 @@ import {
   SERVER_IR_V2_EXPRESSION_KINDS,
   SERVER_IR_V5_OPERATION_KINDS,
   SERVER_IR_V6_OPERATION_KINDS,
+  SERVER_IR_V7_BUILTIN_FUNCTIONS,
 } from '@cynodia/axiom-core';
 import {
   PROTOCOL_VERSION,
@@ -203,11 +204,24 @@ test('the schema names exactly the vocabulary the runtime implements', () => {
     'axiom.server.v1 gained no operation vocabulary',
   );
 
-  const call = (defs.Expression.oneOf as Schema[]).find(
-    (branch) => ((branch.properties as Record<string, Schema>).kind as Schema).const === 'call',
+  const callFunctionsOf = (schema: Schema): string[] => {
+    const branch = ((schema.$defs as Record<string, Schema>).Expression.oneOf as Schema[]).find(
+      (candidate) => ((candidate.properties as Record<string, Schema>).kind as Schema).const === 'call',
+    );
+    return ((branch?.properties as Record<string, Schema>).function as Schema).enum as string[];
+  };
+  // The frozen v1 schema carries exactly the builtins that existed when it was frozen; the
+  // 0.11 string builtins are v7 vocabulary.
+  assert.deepEqual(
+    [...callFunctionsOf(irSchema)].sort(),
+    [...BUILTIN_FUNCTIONS].filter((name) => !SERVER_IR_V7_BUILTIN_FUNCTIONS.includes(name)).sort(),
+    'axiom.server.v1 gained no builtin vocabulary',
   );
-  const functions = ((call?.properties as Record<string, Schema>).function as Schema).enum as string[];
-  assert.deepEqual([...functions].sort(), [...BUILTIN_FUNCTIONS].sort());
+  assert.deepEqual(
+    [...callFunctionsOf(latest)].sort(),
+    [...BUILTIN_FUNCTIONS].sort(),
+    'the latest contract carries every builtin',
+  );
 
   for (const [contract, schema] of irSchemas) {
     assert.equal(schema.contract, contract, 'each schema names the contract it describes');

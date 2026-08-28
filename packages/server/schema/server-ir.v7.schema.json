@@ -467,6 +467,9 @@
                 "sum",
                 "lowercase",
                 "to-string",
+                "trim",
+                "substring-before",
+                "substring-after",
                 "now",
                 "uuid"
               ]

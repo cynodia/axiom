@@ -69,6 +69,17 @@ export const SERVER_IR_V6_OPERATION_KINDS: readonly string[] = ['query'];
 export const SERVER_IR_V2_EXPRESSION_KINDS: readonly string[] = ['group', 'expression-ref'];
 
 /**
+ * Builtin functions introduced in 0.11. A pre-v7 runtime does not implement them, so a
+ * document whose expressions call one requires `axiom.server.v7` — the same rule that makes
+ * `group`/`expression-ref` require `v2`.
+ */
+export const SERVER_IR_V7_BUILTIN_FUNCTIONS: readonly string[] = [
+  'trim',
+  'substring-before',
+  'substring-after',
+];
+
+/**
  * The lowest contract that can carry these expressions.
  *
  * Deliberately computed from the document rather than declared by hand: a compiler that
@@ -80,7 +91,13 @@ export function requiredServerContract(expressions: readonly Expression[]): Serv
   for (const expression of expressions) {
     walkExpression(expression, (node) => {
       if (SERVER_IR_V2_EXPRESSION_KINDS.includes(node.kind)) {
-        required = 'axiom.server.v2';
+        required = maxContract(required, 'axiom.server.v2');
+      }
+      if (
+        node.kind === 'call' &&
+        SERVER_IR_V7_BUILTIN_FUNCTIONS.includes((node as { function: string }).function)
+      ) {
+        required = maxContract(required, 'axiom.server.v7');
       }
     });
   }
