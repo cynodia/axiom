@@ -512,6 +512,25 @@ does for a local failure.
 | `MIGRATION_NOT_AUTHORIZED` | The caller is not the host-controlled migration principal. Naming a migration id over the client protocol does nothing (spec11 §73, §74). |
 | `MIGRATION_FAILED` | A migration failed for a reason with no more specific code; the target schema version was not committed and the recovery state is defined. |
 
+**Migration execution is host-controlled.** `executeMigration()` is a standalone function,
+not a `ServerRequest` branch — there is no path from a client through the semantic protocol
+that runs a migration (spec11 §73). It requires a `MigrationPrincipal` minted by the host
+with `migrationAuthority(grantedBy)`; a call without one is `MIGRATION_NOT_AUTHORIZED`.
+Destructive operations additionally require each operation id in `approveDestructive`
+(spec11 §21) — "a migration exists" is never "the operator approved data loss", and an
+unapproved destructive migration performs **zero** writes (spec11 §106).
+
+**Which correctness layers apply during a migration** (spec11 §37-40). Only **schema
+conformance** — required fields present, identity present, declared field types — is checked,
+at the target-record boundary, before the new schema version is committed
+(`MIGRATION_VALIDATION_FAILED`). Entity `ConstraintDef`s are **not** evaluated during a
+migration: a valid migration may pass through representations that are not valid application
+states (spec11 §38), and the target record is what must be valid, expressed by the transform
+itself. `TransitionConstraintDef`s are **never** applied to historical-data migration — a
+migration is not a user edit and must not pretend to be one (spec11 §40). A host that needs
+a business invariant re-checked after a migration does so by starting the authority and
+running its own audit query.
+
 Two client-side codes belong to the boundary as well:
 
 | Code | Meaning |

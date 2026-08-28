@@ -98,6 +98,8 @@ import { MIGRATION_DIAGNOSTIC_CODES } from './migration.js';
 import { evaluateSchemaGate, gateAllowsStart } from './migration-gate.js';
 import type { SchemaGateResult } from './migration-gate.js';
 import type { MigrationMetadataStore } from './migration-store.js';
+import { getMigrationStatus } from './migration-execute.js';
+import type { MigrationStatus } from './migration-execute.js';
 
 /**
  * Diagnostic codes the authority adds to the runtime vocabulary. They describe failures of
@@ -294,6 +296,11 @@ export interface AxiomServer {
    * when no `migrationMetadata` was configured.
    */
   schemaGate(): Promise<SchemaGateResult>;
+  /**
+   * Where the schema is and whether a migration is running / checkpointed (spec11 §93).
+   * `null` when no `migrationMetadata` was configured.
+   */
+  getMigrationStatus(): Promise<MigrationStatus | null>;
   /** Drops every cached query result. A host calls this after an out-of-band data change. */
   clearQueryCache(): void;
   /** Cache observability: how many entries are held and how many reads it has served. */
@@ -1866,6 +1873,9 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       return evaluateSchemaGate(ir, migrationMetadata, {
         hasPersistedData: (await persistence.load()).length > 0,
       });
+    },
+    async getMigrationStatus(): Promise<MigrationStatus | null> {
+      return migrationMetadata ? getMigrationStatus(migrationMetadata) : null;
     },
     clearQueryCache: invalidateQueryCache,
     queryCacheStats: () => ({ entries: queryCache.size, hits: queryCacheHits, enabled: cacheEnabled }),
