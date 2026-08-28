@@ -163,6 +163,7 @@ full in the linked contract.
 37. **Binary data is a `BlobRef` in state and bytes out of band.** Upload and download are one host transport for every application; possession of a key is never permission. Full model: [`docs/STORAGE.md`](docs/STORAGE.md).
 38. **Authoritative data too large to materialize is a `QueryDef`, not a `StateDef`.** The graph names the source, filter, sort, projection, relationships, aggregation, pagination and read policy; a `DataProvider` decides SQL, indexes and execution plan. The client invokes a query by id and never a query language. Full model: [`docs/QUERIES.md`](docs/QUERIES.md).
 39. **A read policy is declared once and enforced on the authority.** Its predicate is AND-ed into every query's effective filter before the provider runs, so it scopes rows, aggregates and relationship traversals uniformly — and a client argument can never remove it.
+40. **A deployed schema evolves through `MigrationDef`, never a SQL migration or a callback.** `graph.schemaVersion` and `schemaFingerprint(graph)` are what the startup gate checks against the provider's durable record — a mismatch refuses startup with a specific diagnostic, never a hopeful start. A transform is an `Expression` tree over the old record; row migration is keyset-batched, checkpointed and crash-resumable; a destructive change needs explicit approval or performs zero writes. Full model: [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md).
 
 ## Installation
 
@@ -523,6 +524,7 @@ the published package — no repository access is needed to obtain the contract.
 | **Live external event streams: lifecycle, delivery, backpressure** | [`docs/SUBSCRIPTIONS.md`](docs/SUBSCRIPTIONS.md) |
 | **Binary data: BlobRef, upload, download, authorization, orphans** | [`docs/STORAGE.md`](docs/STORAGE.md) |
 | **Large authoritative datasets: `QueryDef`, relationships, read policy, providers, cursors** | [`docs/QUERIES.md`](docs/QUERIES.md) |
+| **Evolving a deployed schema: `MigrationDef`, fingerprint, the startup gate, `executeMigration`, providers** | [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md) |
 | Runtime API, startup lifecycle and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
 | Machine queries and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 | Validation codes and what rejects a graph | [`docs/VALIDATION.md`](docs/VALIDATION.md) |

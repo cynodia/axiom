@@ -894,6 +894,70 @@ Diagnostics: `QUERY_NOT_FOUND` `QUERY_ARGUMENT_TYPE_MISMATCH` `QUERY_CAPABILITY_
 `INVALID_QUERY_PARAMETER` `UNSTABLE_PAGINATION` `INVALID_QUERY_OPERATION`
 `INVALID_PROVIDER_RECORD_LOCATION`.
 
+## SCHEMA EVOLUTION & SEMANTIC MIGRATIONS
+
+Full model: [`MIGRATIONS.md`](MIGRATIONS.md).
+
+A deployed application evolves its semantic model and persisted data through
+**`MigrationDef`** nodes — never application SQL, an ORM migration, a callback or a manual
+schema-version check. `graph.schemaVersion` is a monotonic integer (default `1`), distinct
+from the npm version and the Server IR contract. `schemaFingerprint(graph)` is a
+deterministic hash of every persistence-relevant fact and nothing else — renaming a `label`
+does not change it.
+
+A `MigrationDef` has `fromSchema` / `toSchema` (differ by one), and `operations` from a
+closed set of ten: `add-entity` `remove-entity` `add-field` `remove-field` `change-field`
+`populate-field` `transform-field` `transform-record` `add-relationship`
+`remove-relationship` (`MIGRATION_OPERATION_KINDS`). The set of migrations must form a
+contiguous chain `1 → … → schemaVersion`. `transform-record` is the split/merge primitive.
+
+Transform expressions (`populate` / `value` / `expression` / `produce`) are ordinary
+`Expression` trees read in an isolated scope: `field(ref(MIGRATION_OLD_SCOPE), fieldId)`,
+declared constants, and nested iteration scopes only. They MUST be pure — `now` / `uuid` /
+any other scope read throw. The string builtins `trim` `substring-before` `substring-after`
+(v7 vocabulary) exist for record transforms like splitting a name.
+
+Any `MigrationDef`, or a `schemaVersion > 1`, makes the Server IR **`axiom.server.v7`**,
+carrying `schemaVersion`, `schemaFingerprint` and `migrations`.
+
+Authoring-time: `validateGraph` rejects a broken chain, an unmarked destructive op, an
+impure or mistyped transform, an add-required-without-populate. `diffSchema(prev, next)`
+(core) classifies each change; `migrationCoversDiff` proves the chain covers the diff.
+AgentAPI: `inspectSchema()` `diffSchema(previous)` `migrationImpact(previous)`
+`explainSchemaDiff(diff)`.
+
+Runtime (`@cynodia/axiom-server`): `planMigration(ir, { fromVersion })` (pure) →
+`SemanticMigrationPlan`; `explainMigration(plan)` (the §56 account); `executeMigration({ ir,
+metadata, rows, principal: migrationAuthority('id'), approveDestructive })` — **host-only**,
+no `ServerRequest` branch; `getMigrationStatus(metadata)`. Row transforms are keyset-batched
+and checkpointed — a crash resumes to the identical result, a re-run is a no-op, a 2M-row
+migration is bounded memory. Destructive operations need explicit `approveDestructive` or
+zero writes occur. The target version commits only after post-migration validation.
+
+Startup gate: `createAxiomServer({ ir, migrationMetadata })` → `start()` refuses on anything
+but `compatible` / `fresh` — `SCHEMA_MIGRATION_REQUIRED` / `SCHEMA_INCOMPATIBLE` /
+`MIGRATION_IN_PROGRESS` / `MIGRATION_FINGERPRINT_MISMATCH`. `server.schemaGate()` reports
+without starting. While a migration runs, all requests get `MIGRATION_IN_PROGRESS`.
+
+Providers: `createMemoryRowStore` + `createMemoryMigrationStore` (deterministic reference);
+`createSqliteRowStore` + `createSqliteMigrationStore` (real `ALTER TABLE`, batched keyset
+`UPDATE`, `_axiom_migration_*` tables). Both derive equivalent target data. Portable:
+`runMigrationConformanceFixture` over the `axiom.conformance.v5` fixtures in
+`conformance/migrations/`.
+
+CLI (private): `axiom schema status` / `schema diff --against=<prev>` / `migrate plan
+--from=N` / `migrate --sqlite=<path> --approve=op,op` / `migrate status --sqlite=<path>`.
+
+Diagnostics: `SCHEMA_MIGRATION_REQUIRED` `SCHEMA_INCOMPATIBLE` `MIGRATION_IN_PROGRESS`
+`MIGRATION_STATE_CORRUPTED` `MIGRATION_PATH_NOT_FOUND` `MIGRATION_APPROVAL_REQUIRED`
+`MIGRATION_DESTRUCTIVE` `MIGRATION_PROVIDER_UNSUPPORTED` `MIGRATION_TRANSFORM_FAILED`
+`MIGRATION_VALIDATION_FAILED` `MIGRATION_CHECKPOINT_INVALID` `MIGRATION_FINGERPRINT_MISMATCH`
+`MIGRATION_NOT_AUTHORIZED` `MIGRATION_FAILED` (boundary). Validation:
+`INVALID_MIGRATION_VERSION` `MIGRATION_PATH_NOT_FOUND` `MIGRATION_CHAIN_FORK`
+`DUPLICATE_MIGRATION_OPERATION_ID` `MIGRATION_REQUIRED_FIELD_WITHOUT_DEFAULT`
+`MIGRATION_DESTRUCTIVE_UNMARKED` `INVALID_MIGRATION_OPERATION` `MIGRATION_TRANSFORM_IMPURE`
+`MIGRATION_TRANSFORM_TYPE_MISMATCH`.
+
 ## Metadata classes
 
 ```ts

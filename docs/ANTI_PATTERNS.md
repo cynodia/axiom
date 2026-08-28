@@ -566,3 +566,119 @@ read policy. Parsing it, or building your own, breaks continuation the moment th
 does not match — `QUERY_CURSOR_INVALID`. Store `page.nextCursor` and hand it back
 unmodified; the client store's `loadMore` does exactly that. Manual cursor manipulation in
 application code: zero.
+
+## 42. A hand-written SQL migration, an ORM migration, or a repository script
+
+```ts
+// WRONG — the migration lives outside the graph, drifts from it, and is not portable.
+await db.exec('ALTER TABLE t_order ADD COLUMN status TEXT NOT NULL DEFAULT "draft"');
+```
+
+Express the *semantic* change as a `MigrationDef` operation:
+`{ kind: 'add-field', entityId: E_ORDER, field: F_STATUS, populate: literal('draft') }`.
+The provider turns it into `ALTER TABLE` (SQLite), a record transform (memory), or its own
+plan (a future Postgres). Handwritten migration SQL in application code: zero.
+
+## 43. An arbitrary migration callback
+
+```ts
+// WRONG — a stored closure is not serializable, not portable, and not inspectable.
+{ kind: 'transform-record', run: (old) => ({ given: old.name.split(' ')[0] }) }
+```
+
+A transform is an `Expression` tree read in an isolated scope — `object([{ fieldId: F_GIVEN,
+value: call('substring-before', field(ref(MIGRATION_OLD_SCOPE), F_NAME), literal(' ')) }])`.
+It is typed, deterministic and analyzable. `run: fn` does not exist and will not be added.
+
+## 44. Changing a `FieldId` to perform a rename
+
+```ts
+// WRONG — the diff sees a removed field and an added one, not a rename.
+fields: [{ id: fieldId('field_account_name'), /* was field_customer_name */ ... }]
+```
+
+`FieldId` is identity. Changing it makes the migration planner classify `-customer_name`
+`+account_name` as `incompatible-ambiguous` — and if you had wired a `remove-field`, it
+would drop the data. Keep the `FieldId`; change the `label`. That is a presentation-only
+change and needs no migration.
+
+## 45. Silently adding a required field
+
+```ts
+// WRONG — existing rows have no value for it, and none is invented.
+{ kind: 'add-field', entityId: E_ORDER, field: { id: F_STATUS, required: true } }
+```
+
+`validateGraph` rejects this (`MIGRATION_REQUIRED_FIELD_WITHOUT_DEFAULT`). Supply a
+`populate` expression, an explicit `populate-field`, or provider proof that every row
+already satisfies it. Axiom does not invent a zero / empty / null value.
+
+## 46. Deleting a populated field without approval
+
+```ts
+// WRONG — the migration exists, but nobody approved data loss.
+await executeMigration({ ir, metadata, rows, principal });   // no approveDestructive
+```
+
+A destructive operation is refused (`MIGRATION_APPROVAL_REQUIRED`) with **zero writes**
+until every destructive operation id appears in `approveDestructive`. "A migration exists"
+is never "the operator approved data loss."
+
+## 47. Assuming the package version is the schema version
+
+```ts
+// WRONG — three independent version concepts, conflated.
+if (pkg.version === persisted.axiomVersion) startNormally();
+```
+
+`@cynodia/axiom` `0.11.0`, `axiom.server.v7`, and `graph.schemaVersion` `14` are unrelated.
+Compare `schemaFingerprint(graph)` and `graph.schemaVersion` against what the provider
+durably recorded — which is exactly what the startup gate does.
+
+## 48. Starting an application against a mismatched persisted schema
+
+```ts
+// WRONG — the server starts, then queries and actions fail in arbitrary ways.
+const server = createAxiomServer({ ir });   // no migrationMetadata, schema has moved on
+await server.start();
+```
+
+Pass `migrationMetadata`. `start()` then refuses on anything but `compatible` / `fresh`
+with a specific diagnostic (`SCHEMA_MIGRATION_REQUIRED`, `SCHEMA_INCOMPATIBLE`, …). There is
+no hopeful startup.
+
+## 49. Loading the whole provider dataset into JS to migrate it
+
+```ts
+// WRONG — a 2,000,000-row table does not fit in a JS array.
+const all = await provider.loadAll(E_ORDER_LINE);
+for (const row of all) row.gross = row.total * 1.25;
+await provider.writeAll(E_ORDER_LINE, all);
+```
+
+`executeMigration` reads a **keyset-ordered batch**, transforms it, writes it back,
+checkpoints, and moves on. Peak memory is one batch, whatever the table size. Unbounded
+load-all transformations: zero.
+
+## 50. Wall-clock time or randomness inside a transform
+
+```ts
+// WRONG — the migration result depends on when it ran.
+{ kind: 'populate-field', value: call('now') }
+```
+
+`now` and `uuid` throw inside a migration transform (`MIGRATION_TRANSFORM_IMPURE`). A
+migration must be reproducible: the same source record and the same operation produce the
+same target record on every run, on every provider, in every language.
+
+## 51. Editing the provider's stored migration metadata by hand
+
+```sql
+-- WRONG — the schema version and the data no longer agree.
+UPDATE _axiom_migration_schema SET version = 7;
+```
+
+The stored version, fingerprint and step history are written only by the migration
+executor, atomically with the work they describe. Hand-editing them produces
+`MIGRATION_FINGERPRINT_MISMATCH` or `MIGRATION_STATE_CORRUPTED` at startup — the gate's
+whole purpose is to catch exactly this.

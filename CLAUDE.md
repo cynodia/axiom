@@ -74,8 +74,22 @@ turn it into a working browser application whose generated JavaScript nobody rea
   fingerprinted result cache, `axiom.server.v6` and the `axiom.conformance.v4` fixture
   format. Reports: `AXIOM_0_10_IMPLEMENTATION_REPORT.md` and `AXIOM_0_10_QUERY_RESEARCH.md`.
   Full model: `docs/QUERIES.md`.
+* `specs/spec11.md` — the **0.11 schema evolution & semantic migrations**: `graph.schemaVersion`
+  (a monotonic integer) and a deterministic `schemaFingerprint` over persistence-relevant
+  structure only; `MigrationDef` with a closed vocabulary of ten operations and pure
+  `Expression` transforms read in the `MIGRATION_OLD_SCOPE`; a classified `diffSchema` +
+  `migrationCoversDiff`; `axiom.server.v7`; the server planner (`planMigration` /
+  `explainMigration`), the durable `MigrationMetadataStore` + lease lock, a keyset-batched
+  crash-resumable executor (`runMigration`), memory + SQLite `MigrationRowStore`s with
+  verified parity; `executeMigration` under a host-minted `MigrationPrincipal` with explicit
+  destructive approval; the `createAxiomServer` startup gate (no hopeful start);
+  `getMigrationStatus`; cursor + query-cache invalidation on migration; the
+  `axiom.conformance.v5` fixture tier; AgentAPI `inspectSchema` / `diffSchema` /
+  `migrationImpact`; the string builtins `trim` / `substring-before` / `substring-after`
+  (v7). Reports: `AXIOM_0_11_IMPLEMENTATION_REPORT.md` and `AXIOM_0_11_MIGRATION_RESEARCH.md`.
+  Full model: `docs/MIGRATIONS.md`.
 
-Together, spec2–spec10 are the authority on design decisions — **except where the
+Together, spec2–spec11 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 
@@ -146,6 +160,13 @@ node packages/cli/dist/index.js inspect  packages/demo/dist/inventory.js --expor
 node packages/cli/dist/index.js validate packages/demo/dist/issue-tracker.js --export=createIssueTrackerGraph
 node packages/cli/dist/index.js build    packages/demo/dist/issue-tracker.js --export=createIssueTrackerGraph
 node packages/cli/dist/index.js serve    packages/demo/dist/inventory.js --export=createInventoryGraph --port=3000
+
+# Schema evolution (spec11). `<model>` is a compiled module exporting a graph or a builder.
+node packages/cli/dist/index.js schema status  packages/demo/dist/order-management-history.js --export=createOrderHistoryGraphD
+node packages/cli/dist/index.js schema diff    packages/demo/dist/order-management-history.js --export=createOrderHistoryGraphD --against=packages/demo/dist/order-management-history.js --against-export=createOrderHistoryGraphA
+node packages/cli/dist/index.js migrate plan   packages/demo/dist/order-management-history.js --export=createOrderHistoryGraphD --from=1
+node packages/cli/dist/index.js migrate        packages/demo/dist/order-management-history.js --export=createOrderHistoryGraphD --from=1 --approve=op_split_name,op_drop_legacy --sqlite=state.db
+node packages/cli/dist/index.js migrate status packages/demo/dist/order-management-history.js --sqlite=state.db
 ```
 
 `inspect` renders locations in readable form, which is the fastest way to see what an

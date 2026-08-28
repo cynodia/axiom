@@ -190,6 +190,7 @@ focused document when the reference is not specific enough for the question at h
 | Live inbound streams: lifecycle, delivery, deduplication, backpressure | [`docs/SUBSCRIPTIONS.md`](docs/SUBSCRIPTIONS.md) |
 | Binary data: `BlobRef`, upload, download, authorization, orphans | [`docs/STORAGE.md`](docs/STORAGE.md) |
 | Large authoritative datasets: `QueryDef`, relationships, read policy, providers, cursors, cache | [`docs/QUERIES.md`](docs/QUERIES.md) |
+| Evolving a deployed schema: `MigrationDef`, fingerprint, the startup gate, `executeMigration`, providers | [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md) |
 | Machine queries, mutation impact and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 
 `docs/AGENT_REFERENCE.md` plus the `.d.ts` declarations are intended to be sufficient on
