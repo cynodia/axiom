@@ -35,6 +35,7 @@ export * from './migration-gate.js';
 export * from './migration-eval.js';
 export * from './migration-executor.js';
 export * from './migration-execute.js';
+export * from './migration-conformance.js';
 export {
   createSqliteMigrationStore,
   createSqliteRowStore,

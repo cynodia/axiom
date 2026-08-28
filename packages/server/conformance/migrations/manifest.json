@@ -1,0 +1,129 @@
+{
+  "conformance": "axiom.conformance.v5",
+  "baseContract": "axiom.server.v7",
+  "release": "0.10.0-alpha.1",
+  "description": "Portable migration conformance fixtures (spec11 §84-86). Each file carries a compiled axiom.server.v7 target Server IR with its MigrationDef chain, the schema version the persisted data starts at, the source rows, any destructive approvals, and the exact expected outcome. Running one needs only a row store and the semantics in docs/MIGRATIONS.md + docs/AUTHORITY.md. Every fixture must produce equivalent target data on the memory and SQLite providers (spec11 §83).",
+  "fixtures": [
+    {
+      "name": "metadata-only-change",
+      "covers": [
+        "spec11 §16",
+        "metadata-only change"
+      ]
+    },
+    {
+      "name": "add-optional-field",
+      "covers": [
+        "spec11 §17",
+        "add optional field"
+      ]
+    },
+    {
+      "name": "add-required-field-with-default",
+      "covers": [
+        "spec11 §18",
+        "add required field + default"
+      ]
+    },
+    {
+      "name": "transform-field",
+      "covers": [
+        "spec11 §24",
+        "transform field"
+      ]
+    },
+    {
+      "name": "remove-empty-field",
+      "covers": [
+        "spec11 §19",
+        "remove empty field"
+      ]
+    },
+    {
+      "name": "destructive-removal-refused",
+      "covers": [
+        "spec11 §20",
+        "spec11 §21",
+        "spec11 §106",
+        "destructive populated-field removal"
+      ]
+    },
+    {
+      "name": "destructive-removal-approved",
+      "covers": [
+        "spec11 §21",
+        "destructive populated-field removal"
+      ]
+    },
+    {
+      "name": "relationship-addition",
+      "covers": [
+        "spec11 §41",
+        "relationship addition"
+      ]
+    },
+    {
+      "name": "record-transformation",
+      "covers": [
+        "spec11 §27",
+        "spec11 §28",
+        "record transformation"
+      ]
+    },
+    {
+      "name": "large-batched-transformation",
+      "covers": [
+        "spec11 §29",
+        "spec11 §30",
+        "large batched transformation"
+      ]
+    },
+    {
+      "name": "crash-and-resume",
+      "covers": [
+        "spec11 §31",
+        "spec11 §32",
+        "spec11 §120",
+        "crash/resume"
+      ]
+    },
+    {
+      "name": "idempotent-rerun",
+      "covers": [
+        "spec11 §35",
+        "idempotent rerun"
+      ]
+    },
+    {
+      "name": "missing-migration-path",
+      "covers": [
+        "spec11 §13",
+        "missing migration path"
+      ]
+    },
+    {
+      "name": "invalid-target-record",
+      "covers": [
+        "spec11 §37",
+        "spec11 §105",
+        "invalid target record"
+      ]
+    },
+    {
+      "name": "migration-lock",
+      "covers": [
+        "spec11 §66",
+        "spec11 §102",
+        "migration lock"
+      ]
+    },
+    {
+      "name": "schema-fingerprint-mismatch",
+      "covers": [
+        "spec11 §9",
+        "spec11 §11",
+        "schema fingerprint mismatch"
+      ]
+    }
+  ]
+}

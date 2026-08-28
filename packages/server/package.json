@@ -20,6 +20,7 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "conformance/*.json",
+    "conformance/**/*.json",
     "schema/*.json",
     "README.md",
     "LICENSE"

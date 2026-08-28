@@ -271,12 +271,9 @@ export async function createSqliteRowStore(
     );
   };
 
-  for (const entity of options.ir.entities) {
-    createTable(String(entity.id));
-  }
-  // The seed is data in the *source* schema shape; the IR describes the *target*. Ensure
-  // every field a seed row carries exists as a column before inserting, so a migration's
-  // `remove-field` / `transform-field` has something to act on.
+  // The database starts at the *source* schema shape — the seed's columns — and the
+  // migration's own operations run the real ALTER TABLEs toward the target. The IR
+  // (`options.ir`) describes the target and is used only for column types on `add-entity`.
   for (const [entityId, rows] of Object.entries(options.seed ?? {})) {
     if (!tableExists(entityId)) {
       db.exec(`CREATE TABLE IF NOT EXISTS ${tableName(entityId)} (_seq INTEGER);`);

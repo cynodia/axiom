@@ -1,0 +1,159 @@
+{
+  "conformance": "axiom.conformance.v5",
+  "name": "transform-field",
+  "covers": [
+    "spec11 §24",
+    "transform field"
+  ],
+  "description": "Order.total is scaled by 100 through a typed, deterministic expression over the old record.",
+  "serverIR": {
+    "contract": "axiom.server.v7",
+    "id": "migration-conformance",
+    "name": "Migration Conformance",
+    "version": "0.10.0-alpha.1",
+    "schemaVersion": 2,
+    "schemaFingerprint": "f9f0f88b1d0cd25eb570c1401fe3f96ca899330d8c210e79ef50a10e91ad236d",
+    "migrations": [
+      {
+        "kind": "migration",
+        "id": "m_1_2",
+        "fromSchema": 1,
+        "toSchema": 2,
+        "operations": [
+          {
+            "id": "op_scale",
+            "kind": "transform-field",
+            "entityId": "entity_order",
+            "fieldId": "field_order_total",
+            "fromType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "toType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "expression": {
+              "kind": "binary",
+              "operator": "multiply",
+              "left": {
+                "kind": "field",
+                "source": {
+                  "kind": "ref",
+                  "targetId": "axiom_migration_old"
+                },
+                "fieldId": "field_order_total"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 100
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "entities": [
+      {
+        "kind": "entity",
+        "id": "entity_order",
+        "identityFieldId": "field_order_id",
+        "fields": [
+          {
+            "id": "field_order_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          },
+          {
+            "id": "field_order_total",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            }
+          }
+        ]
+      }
+    ],
+    "fields": {
+      "field_order_id": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_order_total": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_total",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          }
+        }
+      }
+    },
+    "states": [
+      {
+        "id": "state_entity_order",
+        "kind": "state",
+        "valueType": {
+          "kind": "collection",
+          "itemType": {
+            "kind": "entity",
+            "entityId": "entity_order"
+          }
+        },
+        "authority": "server"
+      }
+    ],
+    "actions": {},
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_entity_order"
+    ]
+  },
+  "fromVersion": 1,
+  "sourceData": {
+    "entity_order": [
+      {
+        "field_order_id": "order-0000",
+        "field_order_total": 0
+      },
+      {
+        "field_order_id": "order-0001",
+        "field_order_total": 1
+      },
+      {
+        "field_order_id": "order-0002",
+        "field_order_total": 2
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "status": "completed",
+    "targetData": {
+      "entity_order": [
+        {
+          "field_order_id": "order-0000",
+          "field_order_total": 0
+        },
+        {
+          "field_order_id": "order-0001",
+          "field_order_total": 100
+        },
+        {
+          "field_order_id": "order-0002",
+          "field_order_total": 200
+        }
+      ]
+    }
+  }
+}

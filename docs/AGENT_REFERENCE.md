@@ -731,6 +731,7 @@ Portable artifacts, for a runtime written in another language:
 @cynodia/axiom-server/schema/server-ir.v7.schema.json JSON Schema for axiom.server.v7 (latest)
 @cynodia/axiom-server/schema/protocol.v1.schema.json  JSON Schema for the protocol
 @cynodia/axiom-server/conformance/queries/<name>.json one query conformance fixture (axiom.conformance.v4)
+@cynodia/axiom-server/conformance/migrations/<name>.json one migration conformance fixture (axiom.conformance.v5)
 ```
 
 This list is generated/tested content, not hand-maintained prose: `packages/demo/test

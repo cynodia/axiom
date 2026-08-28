@@ -1,0 +1,258 @@
+{
+  "conformance": "axiom.conformance.v5",
+  "name": "relationship-addition",
+  "covers": [
+    "spec11 §41",
+    "relationship addition"
+  ],
+  "description": "A relationship between Order and Account is added; the foreign key already exists, so no row is rewritten.",
+  "serverIR": {
+    "contract": "axiom.server.v7",
+    "id": "migration-conformance",
+    "name": "Migration Conformance",
+    "version": "0.10.0-alpha.1",
+    "schemaVersion": 2,
+    "schemaFingerprint": "4b8e155b1b02f04b28cadd78f580b4ac35f5ba0149e4809e31bbabd145852af4",
+    "migrations": [
+      {
+        "kind": "migration",
+        "id": "m_1_2",
+        "fromSchema": 1,
+        "toSchema": 2,
+        "operations": [
+          {
+            "id": "op_add_rel",
+            "kind": "add-relationship",
+            "relationship": {
+              "id": "rel_order_account",
+              "kind": "relationship",
+              "cardinality": "to-one",
+              "from": {
+                "entityId": "entity_order",
+                "fieldId": "field_order_account_id"
+              },
+              "to": {
+                "entityId": "entity_account",
+                "fieldId": "field_account_id"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "entities": [
+      {
+        "kind": "entity",
+        "id": "entity_order",
+        "identityFieldId": "field_order_id",
+        "fields": [
+          {
+            "id": "field_order_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          },
+          {
+            "id": "field_order_total",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            }
+          },
+          {
+            "id": "field_order_account_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          }
+        ]
+      },
+      {
+        "kind": "entity",
+        "id": "entity_account",
+        "identityFieldId": "field_account_id",
+        "fields": [
+          {
+            "id": "field_account_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          },
+          {
+            "id": "field_account_name",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          }
+        ]
+      }
+    ],
+    "fields": {
+      "field_order_id": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_order_total": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_total",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          }
+        }
+      },
+      "field_order_account_id": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_account_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_account_id": {
+        "entityId": "entity_account",
+        "field": {
+          "id": "field_account_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_account_name": {
+        "entityId": "entity_account",
+        "field": {
+          "id": "field_account_name",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      }
+    },
+    "states": [
+      {
+        "id": "state_entity_order",
+        "kind": "state",
+        "valueType": {
+          "kind": "collection",
+          "itemType": {
+            "kind": "entity",
+            "entityId": "entity_order"
+          }
+        },
+        "authority": "server"
+      },
+      {
+        "id": "state_entity_account",
+        "kind": "state",
+        "valueType": {
+          "kind": "collection",
+          "itemType": {
+            "kind": "entity",
+            "entityId": "entity_account"
+          }
+        },
+        "authority": "server"
+      }
+    ],
+    "actions": {},
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_entity_order",
+      "state_entity_account"
+    ],
+    "relationships": [
+      {
+        "kind": "relationship",
+        "id": "rel_order_account",
+        "cardinality": "to-one",
+        "from": {
+          "entityId": "entity_order",
+          "fieldId": "field_order_account_id"
+        },
+        "to": {
+          "entityId": "entity_account",
+          "fieldId": "field_account_id"
+        }
+      }
+    ]
+  },
+  "fromVersion": 1,
+  "sourceData": {
+    "entity_order": [
+      {
+        "field_order_id": "order-0000",
+        "field_order_total": 0,
+        "field_order_account_id": "acc-0"
+      },
+      {
+        "field_order_id": "order-0001",
+        "field_order_total": 1,
+        "field_order_account_id": "acc-1"
+      },
+      {
+        "field_order_id": "order-0002",
+        "field_order_total": 2,
+        "field_order_account_id": "acc-0"
+      }
+    ],
+    "entity_account": [
+      {
+        "field_account_id": "acc-0",
+        "field_account_name": "Acme"
+      },
+      {
+        "field_account_id": "acc-1",
+        "field_account_name": "Globex"
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "status": "completed",
+    "targetData": {
+      "entity_order": [
+        {
+          "field_order_id": "order-0000",
+          "field_order_total": 0,
+          "field_order_account_id": "acc-0"
+        },
+        {
+          "field_order_id": "order-0001",
+          "field_order_total": 1,
+          "field_order_account_id": "acc-1"
+        },
+        {
+          "field_order_id": "order-0002",
+          "field_order_total": 2,
+          "field_order_account_id": "acc-0"
+        }
+      ],
+      "entity_account": [
+        {
+          "field_account_id": "acc-0",
+          "field_account_name": "Acme"
+        },
+        {
+          "field_account_id": "acc-1",
+          "field_account_name": "Globex"
+        }
+      ]
+    }
+  }
+}

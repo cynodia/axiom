@@ -1,0 +1,176 @@
+{
+  "conformance": "axiom.conformance.v5",
+  "name": "record-transformation",
+  "covers": [
+    "spec11 §27",
+    "spec11 §28",
+    "record transformation"
+  ],
+  "description": "Every Order record is rewritten: gross = total * 1.25, and total is dropped (destructive, approved).",
+  "serverIR": {
+    "contract": "axiom.server.v7",
+    "id": "migration-conformance",
+    "name": "Migration Conformance",
+    "version": "0.10.0-alpha.1",
+    "schemaVersion": 2,
+    "schemaFingerprint": "428fde4036f9c14ec63905ce893e907318542fd1a89e6f946b4400713c80a4de",
+    "migrations": [
+      {
+        "kind": "migration",
+        "id": "m_1_2",
+        "fromSchema": 1,
+        "toSchema": 2,
+        "operations": [
+          {
+            "id": "op_reshape",
+            "kind": "transform-record",
+            "entityId": "entity_order",
+            "produce": {
+              "kind": "object",
+              "entries": [
+                {
+                  "fieldId": "field_order_gross",
+                  "value": {
+                    "kind": "binary",
+                    "operator": "multiply",
+                    "left": {
+                      "kind": "field",
+                      "source": {
+                        "kind": "ref",
+                        "targetId": "axiom_migration_old"
+                      },
+                      "fieldId": "field_order_total"
+                    },
+                    "right": {
+                      "kind": "literal",
+                      "value": 1.25
+                    }
+                  }
+                }
+              ]
+            },
+            "addsFields": [
+              "field_order_gross"
+            ],
+            "removesFields": [
+              "field_order_total"
+            ]
+          }
+        ]
+      }
+    ],
+    "entities": [
+      {
+        "kind": "entity",
+        "id": "entity_order",
+        "identityFieldId": "field_order_id",
+        "fields": [
+          {
+            "id": "field_order_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            }
+          },
+          {
+            "id": "field_order_gross",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            }
+          }
+        ]
+      }
+    ],
+    "fields": {
+      "field_order_id": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        }
+      },
+      "field_order_gross": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_gross",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          }
+        }
+      }
+    },
+    "states": [
+      {
+        "id": "state_entity_order",
+        "kind": "state",
+        "valueType": {
+          "kind": "collection",
+          "itemType": {
+            "kind": "entity",
+            "entityId": "entity_order"
+          }
+        },
+        "authority": "server"
+      }
+    ],
+    "actions": {},
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_entity_order"
+    ]
+  },
+  "fromVersion": 1,
+  "approvals": [
+    "op_reshape"
+  ],
+  "sourceData": {
+    "entity_order": [
+      {
+        "field_order_id": "order-0000",
+        "field_order_total": 80
+      },
+      {
+        "field_order_id": "order-0001",
+        "field_order_total": 80
+      },
+      {
+        "field_order_id": "order-0002",
+        "field_order_total": 80
+      },
+      {
+        "field_order_id": "order-0003",
+        "field_order_total": 80
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "status": "completed",
+    "targetData": {
+      "entity_order": [
+        {
+          "field_order_id": "order-0000",
+          "field_order_gross": 100
+        },
+        {
+          "field_order_id": "order-0001",
+          "field_order_gross": 100
+        },
+        {
+          "field_order_id": "order-0002",
+          "field_order_gross": 100
+        },
+        {
+          "field_order_id": "order-0003",
+          "field_order_gross": 100
+        }
+      ]
+    }
+  }
+}
