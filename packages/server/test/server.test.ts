@@ -563,21 +563,25 @@ test('many concurrent requests never oversell', async () => {
   assert.equal(stockOf(server, 'bolt'), 0);
 });
 
-test('a persistence conflict refuses the commit and restores memory', async () => {
+test('after a remote commit, the authority reconciles and the next action runs from the winning state (spec12.1 F1)', async () => {
   const persistence = createMemoryPersistence();
   const { server, invoke } = await harness({ persistence });
   await invoke(ACTION_RESERVE, { [PARAM_PART]: 'bolt', [PARAM_QUANTITY]: 1 });
 
-  // Something else committed to the same store — another instance sharing it.
+  // Something else committed to the same store — another authority sharing it.
   await persistence.commit({
     writes: [{ stateId: STATE_PARTS, value: [{ [F_PART_ID]: 'bolt', [F_PART_STOCK]: 99 }] }],
     expected: { [STATE_PARTS]: 1 },
   });
 
+  // spec12.1 §11, §14: this authority MUST NOT stay wedged on the stale revision. It
+  // reconciles to the durable state before executing, so the action succeeds from 99.
   const answer = await invoke(ACTION_RESERVE, { [PARAM_PART]: 'bolt', [PARAM_QUANTITY]: 1 });
-  assert.equal(answer.ok, false);
-  assert.equal(answer.diagnostics[0].code, SERVER_DIAGNOSTIC_CODES.CONCURRENCY_CONFLICT);
-  assert.equal(stockOf(server, 'bolt'), 9, 'the refused commit left nothing behind in memory');
+  assert.equal(answer.ok, true, 'the authority is not permanently wedged');
+  assert.equal(stockOf(server, 'bolt'), 98, 'it ran from the winning durable value, not its stale copy');
+
+  const snap = await server.coherentSnapshot();
+  assert.ok(snap.revision >= 3);
 });
 
 // --------------------------------------------------------------- observability

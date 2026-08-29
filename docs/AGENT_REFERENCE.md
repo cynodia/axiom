@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.12.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.12.1-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -1016,6 +1016,18 @@ cursor through any authority.
 Cache coherence: durable revision observation — each entry records `observedRevision`,
 re-checked against `persistence.revision()` before every authoritative read → staleness
 bound **0** revisions; correctness does not depend on broadcast. `CACHE_COHERENCE` states it.
+
+State coherence (spec12.1): a running authority's in-memory `StateDef` is an
+**authority-local cache** of persisted truth, not an independent store. The durable revision
+is re-observed before **every** authoritative operation (`handle(SnapshotRequest)`, action
+invocation, trigger / scheduled / event action, transaction start); a behind authority
+reloads the persisted state so it executes from a coherent revision. A transaction begins
+from the revision it will commit against. After a lost optimistic race the losing
+invocation returns `CONCURRENCY_CONFLICT` (no silent replay) **and** the authority reloads
+the winning state — it never stays wedged. `localRevision` is monotonic. No sticky-session
+routing and no application `reloadState()` call are required. Sync `snapshot()` / `getState()`
+are the local view as of the last request; `coherentSnapshot()` and the protocol
+`SnapshotRequest` reconcile first. `inspectDistributedSemantics().stateCoherence` states it.
 
 Version skew: the **compatibility key** is `{ schemaVersion, schemaFingerprint,
 serverContract, semanticFingerprint }`, compared **fail-closed**. `semanticFingerprint`

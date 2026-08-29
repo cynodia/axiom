@@ -1,6 +1,6 @@
 # Distributed authority
 
-*This document describes Axiom `0.12.0-alpha.1`.*
+*This document describes Axiom `0.12.1-alpha.1`.*
 
 The authoritative runtime (`docs/AUTHORITY.md`) may run as **more than one process at the
 same time**, over one shared persistence provider, without any change to the
@@ -240,6 +240,45 @@ notification changes nothing about correctness.
 
 `CACHE_COHERENCE` = `{ mechanism: 'durable-revision-observation', stalenessBoundRevisions:
 0, requiresBroadcast: false, checkPerRead: true }`.
+
+## 13a. Authority-local state is a cache
+
+> **A running Axiom authority is not the owner of application truth. Persistence is.**
+
+The in-memory `StateDef` representation inside a running `AxiomServer` is an
+**authority-local cache** of persisted authoritative state — never an independent store. The
+same durable-revision mechanism (§13) keeps it coherent:
+
+- Before **every** operation whose semantic result depends on authoritative `StateDef` state
+  — a protocol `SnapshotRequest`, an `ActionDef` invocation, a trigger / scheduled /
+  event-invoked / effect-outcome action, transaction opening, guard / authorization /
+  constraint evaluation — the authority re-observes `persistence.revision()`. If another
+  authority has committed since, it reloads the persisted state so execution proceeds from a
+  coherent revision.
+- A transaction **begins** from the snapshot at the revision it will attempt to commit
+  against (not "refresh only after a commit fails").
+- `localAuthoritativeRevision` is **monotonic**: an authority never publishes local state at
+  a revision below one it has already observed.
+- A refresh always corresponds to **one** coherent persisted revision — if the store moves
+  during the load, the refresh repeats rather than mixing revisions.
+- After a lost optimistic race (`CONCURRENCY_CONFLICT`), the losing invocation returns the
+  conflict (no silent replay), and the authority **reloads the winning durable state** before
+  it processes the next request. It never stays wedged on the stale revision.
+
+Optimistic concurrency is unchanged: two authorities that begin from the same revision may
+race, and one legitimately gets `CONCURRENCY_CONFLICT`. What is forbidden is a *permanent*
+conflict caused by an authority never re-observing the durable revision.
+
+`AgentAPI.inspectDistributedSemantics().stateCoherence` = `{ mechanism:
+'durable-revision-observation', stalenessBoundRevisions: 0, requiresBroadcast: false,
+refreshBeforeAuthoritativeOperation: true }`.
+
+**API surface.** `handle(SnapshotRequest)` and every action reconcile first, so the protocol
+path is always coherent. The synchronous `snapshot()` / `getState()` / `revision()` are the
+**authority-local view as of the last handled request** — a multi-authority host reads
+authoritative state through the protocol or through the async `coherentSnapshot()`. No
+sticky-session routing and no application `reloadState()` call are ever required for
+correctness (spec12.1).
 
 ## 14. Version skew
 

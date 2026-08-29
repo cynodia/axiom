@@ -168,6 +168,7 @@ test(
       // inspectDistributedWork() surfaces the durable work item and its final state (spec12 §55).
       const inspection = await a.server.inspectDistributedWork();
       assert.equal(inspection.authority.distributed, true);
+      assert.ok(Array.isArray(inspection.schedules), 'spec12.1 F4: schedules is a real field');
       assert.equal(inspection.incompatibleEffects.length, 0, 'both authorities share one build');
       assert.ok(
         inspection.effects.some((e) => e.state === 'succeeded'),

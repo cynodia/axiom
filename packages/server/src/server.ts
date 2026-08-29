@@ -297,10 +297,25 @@ export interface AxiomServer {
   start(): Promise<void>;
   /** The one entry point. Every transport funnels through here. */
   handle(request: ServerRequest): Promise<ServerResponse>;
-  /** Authoritative values of every observable state. */
+  /**
+   * This authority's **local view** of every observable state — the state as of the most
+   * recently handled request (spec12.1 §6, §39, §40). It is a synchronous read of the
+   * authority-local cache and does not itself reconcile with persistence. In a multi-authority
+   * deployment, read authoritative state through `handle(SnapshotRequest)` or an action, both
+   * of which reconcile to the durable revision first; or call {@link coherentSnapshot}.
+   */
   snapshot(): StateSnapshot;
+  /** A single state's value from the authority-local view. See {@link snapshot} for the coherence contract. */
   getState(id: NodeId): unknown;
+  /** The durable store revision this authority's local view is at (spec12.1 §22, monotonic). */
   revision(): number;
+  /**
+   * Reconcile to the durable revision (reloading persisted state if another authority has
+   * committed) and return a revision-coherent snapshot (spec12.1 §7, §38, §40). This is the
+   * async counterpart of {@link snapshot}; `handle(SnapshotRequest)` performs the same
+   * reconciliation for the protocol path.
+   */
+  coherentSnapshot(): Promise<StateSnapshot>;
   /** Every mutation this authority has applied, with its outcome. */
   mutationLog(): MutationLogEntry[];
   /**
@@ -376,6 +391,8 @@ export interface AxiomServer {
 export interface DistributedWorkInspection {
   authority: AuthorityInfo;
   effects: import('./durable-work.js').DurableWorkItemView[];
+  /** Logical scheduled firings this authority knows about, with their lease liveness (spec12.1 §53). */
+  schedules: import('./durable-work.js').DurableWorkItemView[];
   incompatibleEffects: import('./durable-work.js').DurableWorkItem[];
 }
 
@@ -819,6 +836,55 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       states[stateId] = runtime.getState(stateId);
     }
     return { revision: storeRevision, states, ...(incremental ? { partial: true } : {}) };
+  }
+
+  /**
+   * Distributed state coherence (spec12.1 §6-§9, §11, §17-§22).
+   *
+   * The in-memory `StateDef` representation inside a running authority is an **authority-local
+   * cache** of persisted authoritative state — never an independent store. Before any
+   * operation whose semantic result depends on authoritative `StateDef` state, this
+   * re-observes the durable revision; if another authority has committed since, it reloads
+   * the persisted state so execution proceeds from a coherent revision.
+   *
+   * - The correctness mechanism is durable-revision observation, never a broadcast: a lost
+   *   notification cannot leave this authority indefinitely stale (§17).
+   * - A refresh always corresponds to one coherent persisted revision — if the store moves
+   *   while loading, it repeats (bounded) rather than mixing revisions (§19, §20).
+   * - `storeRevision` is monotonic: this never publishes local state at a revision below one
+   *   already observed (§22).
+   *
+   * Everything that calls this runs inside the server's single serialized queue, so there is
+   * never a concurrent refresh within one authority.
+   */
+  async function ensureStateCoherent(): Promise<void> {
+    let observed = await persistence.revision();
+    if (observed <= storeRevision) {
+      return;
+    }
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const rows = await persistence.load();
+      const after = await persistence.revision();
+      if (after !== observed && attempt < 7) {
+        observed = after;
+        continue;
+      }
+      for (const row of rows) {
+        const state = statesById.get(row.stateId);
+        if (!state || state.derivation) {
+          continue;
+        }
+        runtime.hydrateState(row.stateId, row.value);
+        revisions.set(row.stateId, row.revision);
+      }
+      if (observed > storeRevision) {
+        storeRevision = observed;
+      }
+      // A reload may change any cached query result (a principal/policy-scoped entry
+      // included); the query cache already invalidates blindly on any commit (spec 0.10 §72).
+      invalidateQueryCache();
+      return;
+    }
   }
 
   /**
@@ -1307,6 +1373,13 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   ): Promise<ServerResponse> {
     const startedAt = Date.now();
 
+    // spec12.1 §9, §41-§44: an ActionDef transaction MUST begin from a StateDef snapshot
+    // corresponding to the persistence revision it will attempt to commit against — for a
+    // client request, a trigger, a scheduled firing, an event-invoked action or an
+    // effect-outcome action alike. Reconcile to the durable revision before any
+    // state-dependent semantics (guards, authorization, constraints, operations) run.
+    await ensureStateCoherent();
+
     // The caller is bound for the whole invocation, not only for the authorization check.
     // An operation that records who acted — `field(ref(PRINCIPAL), F_USER_ID)` — must resolve
     // whether or not the action also happens to carry an authorization rule. It is also what
@@ -1456,6 +1529,13 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       for (const stateId of writes) {
         runtime.hydrateState(stateId, before.get(stateId));
       }
+      // spec12.1 §11, §14, §15: this authority lost an optimistic concurrency race. The
+      // losing invocation returns CONCURRENCY_CONFLICT (no silent replay, §12) — but the
+      // authority itself MUST recover: its local StateDef is now known invalid, so reload
+      // the winning durable state before it processes any subsequent request. Without this,
+      // the base revision stays stale and every future commit fails the same way (the F1
+      // wedge).
+      await ensureStateCoherent();
       const diagnostics = [
         diagnostic(
           SERVER_DIAGNOSTIC_CODES.CONCURRENCY_CONFLICT,
@@ -1917,13 +1997,27 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         throw new Error(`${gate.code}: ${gate.message}`);
       }
 
-      for (const entry of persisted) {
+      // spec12.1 §37: publish a coherent (state, revision) pair. `persisted` above may be a
+      // read behind by now (the migration gate did async work); re-load so the hydrated
+      // state and `storeRevision` identify the same durable revision, repeating if a
+      // concurrent authority commits during the load (§19, §20).
+      let coherent: typeof persisted;
+      let coherentAt: number;
+      for (let attempt = 0; ; attempt += 1) {
+        coherentAt = await persistence.revision();
+        coherent = await persistence.load();
+        const after = await persistence.revision();
+        if (after === coherentAt || attempt >= 7) {
+          break;
+        }
+      }
+      for (const entry of coherent) {
         if (statesById.has(entry.stateId)) {
           runtime.hydrateState(entry.stateId, entry.value);
           revisions.set(entry.stateId, entry.revision);
         }
       }
-      storeRevision = await persistence.revision();
+      storeRevision = coherentAt;
       // A crash between an effect intent's commit and its dispatch must not lose it: every
       // pending intent found on restart resumes dispatch here (spec §19,96,140).
       const pending = (await persistence.loadPendingEffects?.()) ?? [];
@@ -2050,6 +2144,12 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
               ],
             };
           }
+          // spec12.1 §8.1, §13, §38, §64: a SnapshotRequest arriving after another
+          // authority's commit MUST observe state at least as new as that commit. Reconcile
+          // to the durable revision before answering — this is the protocol path a real
+          // consumer reads authoritative state through, and it is a permanent regression
+          // requirement.
+          await ensureStateCoherent();
           report({ kind: 'snapshot', revision: storeRevision });
           const response: SnapshotResponse = {
             kind: 'snapshot',
@@ -2087,9 +2187,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       });
     },
 
-    snapshot: snapshotOf,
+    snapshot: () => snapshotOf(),
     getState: (id: NodeId) => runtime.getState(id),
     revision: () => storeRevision,
+    async coherentSnapshot(): Promise<StateSnapshot> {
+      return serialize(async () => {
+        await ensureStateCoherent();
+        return snapshotOf();
+      });
+    },
     mutationLog: () => runtime.getMutationLog(),
     effectLog: () => [...effectRecords.values()].map((entry) => ({ ...entry })),
     subscriptionLog: () => subscriptionRuntime.status(),
@@ -2138,11 +2244,12 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         compatibilityKey,
       };
       if (!distributedWorkStore) {
-        return { authority: authorityInfo, effects: [], incompatibleEffects: [] };
+        return { authority: authorityInfo, effects: [], schedules: [], incompatibleEffects: [] };
       }
       return {
         authority: authorityInfo,
         effects: await distributedWorkStore.list('effect'),
+        schedules: await distributedWorkStore.list(SCHEDULE_FIRING_WORK_CLASS),
         incompatibleEffects: await distributedWorkStore.listIncompatible('effect'),
       };
     },

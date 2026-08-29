@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.12.0-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.12.1-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -809,3 +809,47 @@ Durable work records the **compatibility key** of the build that created it —
 whose key differs refuses to claim it (`INCOMPATIBLE_AUTHORITY`); the item waits for a
 compatible authority. A rolling deploy that lets an old build run new-schema work is exactly
 the mixed-semantic execution the fail-closed check exists to prevent.
+
+## 62. Treating a running authority's loaded state as truth
+
+```ts
+// WRONG — "this process started with ledger = 0, so 0 is authoritative until *I* write."
+const server = createAxiomServer({ persistence });
+await server.start();
+// ...another authority commits ledger = 5...
+server.snapshot(); // still 0, and every future commit here fails CONCURRENCY_CONFLICT
+```
+
+The in-memory `StateDef` inside a running `AxiomServer` is an **authority-local cache** of
+persisted truth. The durable persistence revision determines whether that cache is still
+current. The runtime re-observes it before every authoritative operation and reloads when
+behind — `handle(SnapshotRequest)`, actions and `coherentSnapshot()` are always coherent;
+the synchronous `snapshot()` / `getState()` are the local view as of the last request. See
+[`DISTRIBUTED_AUTHORITY.md`](DISTRIBUTED_AUTHORITY.md).
+
+## 63. Sticky-session routing for `StateDef` correctness
+
+```
+WRONG — topology is not application semantics:
+    route every stateful user to the same authority "so StateDef works"
+```
+
+Correctness must not depend on routing a user, a stateful action or an event to a
+designated authority. Any compatible authority serves any request; it reconciles to the
+durable revision first. Sticky routing may exist as a *performance* tuning, never as a
+correctness requirement.
+
+## 64. Blindly replaying an action after a concurrency conflict
+
+```ts
+// WRONG — chargeCard() / sendMessage() / generateEffect() are not safely replayable.
+while (true) {
+  const r = await server.handle(invoke);
+  if (r.ok) break; // retried the whole action on every CONCURRENCY_CONFLICT
+}
+```
+
+A lost optimistic race returns `CONCURRENCY_CONFLICT` to the losing invocation and the
+authority refreshes itself for subsequent requests. The framework does **not** silently
+replay the action — replay is only safe when an existing contract proves it. A caller that
+wants to retry must decide, per action, that re-running it is semantically safe.

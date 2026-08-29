@@ -6,6 +6,11 @@ import type {
   PersistenceCommit,
 } from './persistence.js';
 import type { NodeId } from './deps.js';
+import {
+  DEFAULT_BUSY_TIMEOUT_MS,
+  SqliteContentionError,
+  runWithBusyHandling,
+} from './sqlite-contention.js';
 
 /**
  * Durable persistence on SQLite, through Node's built-in `node:sqlite`.
@@ -17,11 +22,29 @@ import type { NodeId } from './deps.js';
  *
  * The whole semantic transaction is written inside one SQL transaction, so a crash cannot
  * leave half of an action committed.
+ *
+ * **Multi-process contention (spec12.1 §27-§34).** This adapter is part of the supported
+ * SQLite multi-authority reference path: independent OS processes, independent connections,
+ * one database file. SQLite's single-writer file lock surfaces physical contention as
+ * `SQLITE_BUSY` / `SQLITE_LOCKED`; that MUST NOT escape as a semantic result during ordinary
+ * operation. Every statement runs behind a short `PRAGMA busy_timeout` plus the bounded
+ * {@link runWithBusyHandling} retry shared with the migration and coordination providers —
+ * physical contention is absorbed, a genuine constraint / corruption / IO / programmer error
+ * passes straight through, and a semantic optimistic `CONCURRENCY_CONFLICT` is never
+ * manufactured from a lock wait (§32). Waiting is always bounded (§28).
  */
 export interface SqlitePersistenceOptions {
   /** A file path, or `':memory:'`. */
   location: string;
   table?: string;
+  /**
+   * The SQLite native busy wait, in ms (spec12.1 §30). Infrastructure tuning, never
+   * application semantics. `0` disables the native wait; the bounded retry still applies.
+   * Defaults to the value the migration / coordination providers use.
+   */
+  busyTimeoutMs?: number;
+  /** Test seam — deterministic sleep for the bounded busy retry. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 interface SqliteStatement {
@@ -54,25 +77,37 @@ export async function createSqlitePersistence(
   };
   const table = options.table ?? 'axiom_state';
   const database = new module.DatabaseSync(options.location);
+  const busyMs = Math.max(0, Math.floor(options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS));
+
+  const guard = <T>(context: string, fn: () => T): Promise<T> =>
+    runWithBusyHandling(fn, {
+      context,
+      ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
+    });
 
   const effectsTable = `${table}_effects`;
 
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS ${table} (
-      state_id TEXT PRIMARY KEY,
-      revision INTEGER NOT NULL,
-      value TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS ${table}_meta (
-      key TEXT PRIMARY KEY,
-      value INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS ${effectsTable} (
-      effect_id TEXT PRIMARY KEY,
-      record TEXT NOT NULL,
-      status TEXT NOT NULL
-    );
-  `);
+  // Schema creation is itself a write and can hit a concurrent initializer's lock (spec12.1
+  // §33) — run it behind the same bounded handling as everything else.
+  await guard('sqlitePersistence.init', () => {
+    database.exec(`PRAGMA busy_timeout = ${busyMs};`);
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS ${table} (
+        state_id TEXT PRIMARY KEY,
+        revision INTEGER NOT NULL,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS ${table}_meta (
+        key TEXT PRIMARY KEY,
+        value INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS ${effectsTable} (
+        effect_id TEXT PRIMARY KEY,
+        record TEXT NOT NULL,
+        status TEXT NOT NULL
+      );
+    `);
+  });
 
   const readAll = database.prepare(`SELECT state_id, revision, value FROM ${table}`);
   const readRevision = database.prepare(`SELECT value FROM ${table}_meta WHERE key = 'revision'`);
@@ -100,61 +135,88 @@ export async function createSqlitePersistence(
 
   return {
     async load(): Promise<PersistedState[]> {
-      return readAll.all().map((row) => ({
-        stateId: String(row.state_id) as NodeId,
-        revision: Number(row.revision),
-        value: JSON.parse(String(row.value)) as unknown,
-      }));
+      return guard('sqlitePersistence.load', () =>
+        readAll.all().map((row) => ({
+          stateId: String(row.state_id) as NodeId,
+          revision: Number(row.revision),
+          value: JSON.parse(String(row.value)) as unknown,
+        })),
+      );
     },
 
     async commit(commit: PersistenceCommit): Promise<CommitOutcome> {
-      const conflicts = commit.writes
-        .map((write) => write.stateId)
-        .filter(
-          (stateId) =>
-            Number(readOne.get(stateId)?.revision ?? 0) !== (commit.expected[stateId] ?? 0),
-        );
-      if (conflicts.length > 0) {
-        return { committed: false, revision: currentRevision(), conflicts };
-      }
-
-      const revision = currentRevision() + 1;
-      // One SQL transaction for one semantic transaction — the state writes and the effect
-      // intents this transaction recorded commit atomically, which is the outbox invariant
-      // (spec §18): a crash right after this call cannot lose an intent that was here.
-      database.exec('BEGIN IMMEDIATE');
+      // The whole commit — the conflict check and the atomic write — runs behind bounded
+      // busy handling. A physical lock we wait out then re-checks conflicts against the
+      // now-current revisions, so a concurrent writer's commit becomes a legitimate
+      // CONCURRENCY_CONFLICT rather than a leaked SQLITE_BUSY (spec12.1 §32).
       try {
-        for (const write of commit.writes) {
-          upsert.run(write.stateId, revision, JSON.stringify(write.value ?? null));
-        }
-        setRevision.run(revision);
-        for (const effect of commit.effects ?? []) {
-          insertEffect.run(effect.id, JSON.stringify(effect), effect.status);
-        }
-        database.exec('COMMIT');
+        return await guard('sqlitePersistence.commit', () => {
+          const conflicts = commit.writes
+            .map((write) => write.stateId)
+            .filter(
+              (stateId) =>
+                Number(readOne.get(stateId)?.revision ?? 0) !== (commit.expected[stateId] ?? 0),
+            );
+          if (conflicts.length > 0) {
+            return { committed: false, revision: currentRevision(), conflicts };
+          }
+
+          const revision = currentRevision() + 1;
+          database.exec('BEGIN IMMEDIATE');
+          try {
+            for (const write of commit.writes) {
+              upsert.run(write.stateId, revision, JSON.stringify(write.value ?? null));
+            }
+            setRevision.run(revision);
+            for (const effect of commit.effects ?? []) {
+              insertEffect.run(effect.id, JSON.stringify(effect), effect.status);
+            }
+            database.exec('COMMIT');
+          } catch (error) {
+            try {
+              database.exec('ROLLBACK');
+            } catch {
+              /* nothing open */
+            }
+            throw error;
+          }
+          return { committed: true, revision, conflicts: [] };
+        });
       } catch (error) {
-        database.exec('ROLLBACK');
+        if (error instanceof SqliteContentionError) {
+          // Physical contention outlasted the bounded window. Report a refused commit (like
+          // an optimistic conflict) so the authority reconciles and the caller may retry —
+          // never a raw provider error (spec12.1 §27, §67).
+          return {
+            committed: false,
+            revision: await guard('sqlitePersistence.revision', currentRevision),
+            conflicts: commit.writes.map((write) => write.stateId),
+          };
+        }
         throw error;
       }
-      return { committed: true, revision, conflicts: [] };
     },
 
     async revision(): Promise<number> {
-      return currentRevision();
+      return guard('sqlitePersistence.revision', currentRevision);
     },
 
     async loadPendingEffects(): Promise<EffectRecord[]> {
-      return readPendingEffects.all().map((row) => JSON.parse(String(row.record)) as EffectRecord);
+      return guard('sqlitePersistence.loadPendingEffects', () =>
+        readPendingEffects.all().map((row) => JSON.parse(String(row.record)) as EffectRecord),
+      );
     },
 
     async recordEffectAttempt(id: string, update: Partial<EffectRecord>): Promise<void> {
-      const row = readEffect.get(id);
-      if (!row) {
-        return;
-      }
-      const existing = JSON.parse(String(row.record)) as EffectRecord;
-      const updated: EffectRecord = { ...existing, ...update };
-      updateEffect.run(JSON.stringify(updated), updated.status, id);
+      await guard('sqlitePersistence.recordEffectAttempt', () => {
+        const row = readEffect.get(id);
+        if (!row) {
+          return;
+        }
+        const existing = JSON.parse(String(row.record)) as EffectRecord;
+        const updated: EffectRecord = { ...existing, ...update };
+        updateEffect.run(JSON.stringify(updated), updated.status, id);
+      });
     },
 
     async close(): Promise<void> {

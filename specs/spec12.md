@@ -3,8 +3,8 @@
 ## Distributed Authority
 
 Status: major semantic milestone
-Target: `@cynodia/axiom 0.12.0-alpha.1`
-Baseline: `0.12.0-alpha.1`
+Target: `@cynodia/axiom 0.12.1-alpha.1`
+Baseline: `0.12.1-alpha.1`
 
 ---
 
@@ -2728,8 +2728,8 @@ A
 Published:
 
 ```
-@cynodia/axiom@0.12.0-alpha.1
-@cynodia/axiom-server@0.12.0-alpha.1
+@cynodia/axiom@0.12.1-alpha.1
+@cynodia/axiom-server@0.12.1-alpha.1
 ```
 
 Cold consumer.

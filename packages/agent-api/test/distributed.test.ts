@@ -127,6 +127,34 @@ test('the four §56 categories are kept separate', () => {
   ]);
 });
 
+test('spec12.1 F4: every runtimeStateAvailableFrom pointer names a real public surface', () => {
+  const info = inspectDistributedSemantics(buildGraph(true));
+  // The public AxiomServer inspection surface these pointers may name.
+  const RESOLVES = [
+    'AxiomServer.inspectDistributedWork().effects',
+    'AxiomServer.inspectDistributedWork().schedules',
+    'AxiomServer.inspectDistributedWork().incompatibleEffects',
+    'AxiomServer.subscriptionLog()',
+    'AxiomServer.authority()',
+  ];
+  for (const wc of info.workClasses) {
+    assert.ok(
+      RESOLVES.includes(wc.runtimeStateAvailableFrom),
+      `${wc.workClass}: "${wc.runtimeStateAvailableFrom}" must name a real inspection surface`,
+    );
+  }
+});
+
+test('spec12.1 §54: stateCoherence is exposed machine-readably alongside cacheCoherence', () => {
+  const info = inspectDistributedSemantics(buildGraph());
+  assert.deepEqual(info.stateCoherence, {
+    mechanism: 'durable-revision-observation',
+    stalenessBoundRevisions: 0,
+    requiresBroadcast: false,
+    refreshBeforeAuthoritativeOperation: true,
+  });
+});
+
 test('compatibility identity is the four-field key, fail-closed, exposed through AgentAPI (spec12 §45, §56)', () => {
   const agent = new AgentAPI(buildGraph());
   const info = agent.inspectDistributedSemantics();

@@ -181,6 +181,19 @@ test(
         inspection.effects.some((e) => e.state === 'succeeded' && e.uncertainAttempts >= 1),
         'the durable work item records the reclaimed attempt as uncertain, then succeeded',
       );
+
+      // spec12.1 §89: application StateDef observed through the *protocol* on B matches the
+      // one-authority final semantic state — framework-owned async work and application
+      // state alike are topology-independent.
+      const bProtocol = (await b.server.handle({
+        protocol: 'axiom.protocol.v1',
+        kind: 'snapshot',
+      } as never)) as { snapshot: { states: Record<string, unknown> } };
+      assert.equal(
+        bProtocol.snapshot.states[ids.STATE_LAST_EFFECT_MESSAGE],
+        'Rebooted: online',
+        'the coherent protocol snapshot agrees with the local view',
+      );
     } finally {
       if (!aStopped) await a.server.stop().catch(() => {});
       await b.server.stop().catch(() => {});

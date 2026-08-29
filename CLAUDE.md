@@ -107,8 +107,26 @@ turn it into a working browser application whose generated JavaScript nobody rea
   vocabulary); the `axiom.conformance.v6` tier + `runCoordinationConformanceSuite`; real-OS-process
   race/chaos/8-authority/large-queue tests. Reports: `AXIOM_0_12_IMPLEMENTATION_REPORT.md` and
   `AXIOM_0_12_DISTRIBUTED_RESEARCH.md`. Full model: `docs/DISTRIBUTED_AUTHORITY.md`.
+* `specs/spec12.1.md` — the **0.12.1 distributed state coherence hardening** release, closing
+  four Phase 20 blind-regression findings: **F1** (release-blocking) — a running `AxiomServer`
+  now treats its in-memory `StateDef` as an authority-local cache and re-observes the durable
+  `persistence.revision()` before every authoritative operation (`ensureStateCoherent` in
+  `server.ts` — `handle(SnapshotRequest)`, `invokeCore`, the `!outcome.committed` recovery
+  path, `start()`), reloading when behind; a lost optimistic race returns `CONCURRENCY_CONFLICT`
+  and the authority reconciles instead of wedging. New async `server.coherentSnapshot()`; the
+  sync `snapshot()`/`getState()` are documented as the local view as of the last request.
+  **F2** — `createSqlitePersistence` wraps every statement in `runWithBusyHandling` + `PRAGMA
+  busy_timeout` (new `busyTimeoutMs` option); no raw `SQLITE_BUSY`/`ERR_SQLITE_ERROR` escapes,
+  residual contention on commit is a refused `CommitOutcome`. **F3** — `validateTypeRef` /
+  `containsGroupType` / `describeType` are null-safe; a malformed `TypeRef` is `INVALID_TYPE_REF`,
+  never a thrown `TypeError`. **F4** — `AxiomServer.inspectDistributedWork()` gains `.schedules`;
+  `inspectDistributedSemantics()` pointers all resolve and it gains `stateCoherence`. No new
+  graph/IR vocabulary; Server IR stays `axiom.server.v7`, conformance stays `axiom.conformance.v6`,
+  `schemaFingerprint`/`semanticFingerprint` unchanged. Named regressions:
+  `distributed-state-coherence*.test.ts`, `sqlite-persistence-contention.test.ts` (real OS
+  processes). Report: `AXIOM_0_12_1_IMPLEMENTATION_REPORT.md`.
 
-Together, spec2–spec12 are the authority on design decisions — **except where the
+Together, spec2–spec12.1 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 

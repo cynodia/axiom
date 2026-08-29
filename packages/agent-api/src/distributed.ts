@@ -43,10 +43,25 @@ export interface DistributedSemanticsInspection {
   activation: 'automatic-when-coordination-provider-and-durable-persistence-shared';
   compatibility: AuthorityCompatibilityKey & { note: string };
   workClasses: DistributedWorkClassInfo[];
+  /**
+   * How a query result cache stays coherent across authorities (spec12 §32-§34).
+   */
   cacheCoherence: {
     mechanism: 'durable-revision-observation';
     stalenessBoundRevisions: 0;
     requiresBroadcast: false;
+  };
+  /**
+   * How a running authority's in-memory `StateDef` view stays coherent with state another
+   * authority committed (spec12.1 §6-§9, §54). The in-memory view is an authority-local
+   * cache; the durable persistence revision is re-observed before every authoritative
+   * operation and the view is reloaded when behind.
+   */
+  stateCoherence: {
+    mechanism: 'durable-revision-observation';
+    stalenessBoundRevisions: 0;
+    requiresBroadcast: false;
+    refreshBeforeAuthoritativeOperation: true;
   };
   operationalTuning: string[];
 }
@@ -119,7 +134,7 @@ export function inspectDistributedSemantics(
       orderingScope: 'per-subscription',
       delivery: { guarantee: 'at-least-once', duplicatesPossible: true },
       providerCapabilityRequired: ['distributed-lease', 'fencing', 'durable-subscription-cursor', 'event-dedup'],
-      runtimeStateAvailableFrom: 'AxiomServer.subscriptionLog() + inspectDistributedWork().subscriptionCursors',
+      runtimeStateAvailableFrom: 'AxiomServer.subscriptionLog()',
     });
   }
 
@@ -139,6 +154,12 @@ export function inspectDistributedSemantics(
       mechanism: 'durable-revision-observation',
       stalenessBoundRevisions: 0,
       requiresBroadcast: false,
+    },
+    stateCoherence: {
+      mechanism: 'durable-revision-observation',
+      stalenessBoundRevisions: 0,
+      requiresBroadcast: false,
+      refreshBeforeAuthoritativeOperation: true,
     },
     operationalTuning: [
       'instanceId',

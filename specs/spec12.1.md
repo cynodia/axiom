@@ -4,7 +4,7 @@
 
 **Status:** Corrective hardening release
 **Target:** `@cynodia/axiom 0.12.1-alpha.1`
-**Baseline:** `0.12.0-alpha.1`
+**Baseline:** `0.12.1-alpha.1`
 **Primary input:** Axiom 0.12 Phase 20 Blind External Regression
 **Target classification:** D1 / E1 / S1
 
@@ -22,7 +22,7 @@ observableMeaning(execute(G, N authorities))
 
 for compatible authorities sharing the same durable application state.
 
-The published `0.12.0-alpha.1` blind external regression established:
+The published `0.12.1-alpha.1` blind external regression established:
 
 ```text
 Discoverability   D1

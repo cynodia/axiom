@@ -681,7 +681,7 @@ function describeType(type: TypeRef | undefined): string {
     case 'optional':
       return `optional ${describeType(type.valueType)}`;
     case 'enum':
-      return `enum(${type.values.join('|')})`;
+      return `enum(${(Array.isArray(type.values) ? type.values : []).join('|')})`;
     case 'group':
       return `group of ${describeType(type.itemType)} by ${describeType(type.keyType)}`;
     default:
@@ -1777,6 +1777,19 @@ function validateTypeRef(
   field?: FieldId,
   inCollection = false,
 ): void {
+  // spec12.1 §52 (F3): malformed user graph data must produce a structured diagnostic, not
+  // a JavaScript `TypeError`. A missing `TypeRef`, a non-object, or a missing `kind` — and,
+  // in the branches below, a missing nested `itemType` / `valueType` / `keyType` or a
+  // non-array `enum.values` — is reported and does not throw.
+  if (type === null || typeof type !== 'object' || typeof (type as { kind?: unknown }).kind !== 'string') {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidTypeRef,
+      message: `Type reference in ${ownerId} is missing or malformed`,
+      nodeId: ownerId,
+      ...(field ? { fieldId: field } : {}),
+    });
+    return;
+  }
   switch (type.kind) {
     case 'primitive':
       return;
@@ -1811,7 +1824,7 @@ function validateTypeRef(
       validateTypeRef(type.itemType, ownerId, context, field, true);
       return;
     case 'enum':
-      if (type.values.length === 0) {
+      if (!Array.isArray(type.values) || type.values.length === 0) {
         context.errors.push({
           code: VALIDATION_CODES.invalidTypeRef,
           message: `Enum type in ${ownerId} declares no values`,
@@ -1830,13 +1843,18 @@ function validateTypeRef(
 }
 
 function containsGroupType(type: TypeRef): boolean {
+  // Null-safe: a malformed `TypeRef` is reported by `validateTypeRef`; this must not throw
+  // (spec12.1 §52).
+  if (type === null || typeof type !== 'object') {
+    return false;
+  }
   switch (type.kind) {
     case 'group':
       return true;
     case 'collection':
-      return containsGroupType(type.itemType);
+      return type.itemType !== undefined && containsGroupType(type.itemType);
     case 'optional':
-      return containsGroupType(type.valueType);
+      return type.valueType !== undefined && containsGroupType(type.valueType);
     default:
       return false;
   }
