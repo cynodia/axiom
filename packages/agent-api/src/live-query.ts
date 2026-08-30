@@ -41,6 +41,11 @@ export interface LiveQueryAnalysis {
   dependencies: {
     entityIds: string[];
     stateIds: string[];
+    /**
+     * `StateDef` ids a clause references that the query cannot bind (spec13.1 F2). Non-empty
+     * ⇒ the query is not validly executable and `capability` is `not-live-capable`.
+     */
+    unsupportedStateRefs: string[];
     broad: boolean;
     /** The read policy AND-ed into every evaluation, if one governs the source entity. */
     readPolicyId: string | null;
@@ -89,7 +94,7 @@ export function analyzeLiveQuery(graph: ApplicationGraph, queryId: string): Live
     ? readPolicies.find((candidate) => String(candidate.id) === String(query.readPolicyId))
     : readPolicyForEntity(readPolicies, query.source);
 
-  const capability = queryLiveCapability(query, sourceIdentityFieldId);
+  const capability = queryLiveCapability(query, sourceIdentityFieldId, stateIds);
   const aggregate = (query.aggregate?.length ?? 0) > 0 || (query.groupBy?.length ?? 0) > 0;
   const ordered = (query.sort?.length ?? 0) > 0;
   const deps = queryDependencies(query, policy, relationships, stateIds);
@@ -104,6 +109,7 @@ export function analyzeLiveQuery(graph: ApplicationGraph, queryId: string): Live
     dependencies: {
       entityIds: [...deps.entityIds].sort(),
       stateIds: [...deps.stateIds].sort(),
+      unsupportedStateRefs: [...deps.unsupportedStateRefs].sort(),
       broad: deps.broad,
       readPolicyId: policy ? String(policy.id) : null,
     },

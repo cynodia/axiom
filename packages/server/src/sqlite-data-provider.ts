@@ -115,6 +115,22 @@ export async function createSqliteDataProvider(
       `CREATE TABLE IF NOT EXISTS ${tableName(entity.id)} (${columns.join(', ')}, _seq INTEGER);`,
     );
   }
+
+  // A durable, monotone count of committed mutation batches (spec13.1 F1). It is advanced
+  // *inside* the `applyMutations` transaction, so a committed provider mutation and its
+  // observable evidence are atomic — there is no crash window in which the rows changed but
+  // no authority can tell (§16, §17, §36). `CREATE … IF NOT EXISTS` + `INSERT OR IGNORE`
+  // make concurrent first-time initialization by N processes safe (§39, §40, §41).
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS _axiom_provider_meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);`,
+  );
+  db.exec(`INSERT OR IGNORE INTO _axiom_provider_meta (key, value) VALUES ('mutation_generation', 0);`);
+  const readGeneration = db.prepare(
+    `SELECT value FROM _axiom_provider_meta WHERE key = 'mutation_generation'`,
+  );
+  const bumpGeneration = db.prepare(
+    `UPDATE _axiom_provider_meta SET value = value + 1 WHERE key = 'mutation_generation'`,
+  );
   for (const [entityId, rows] of Object.entries(options.seed ?? {})) {
     const columns = columnsOf(entityId as NodeId);
     const insert = db.prepare(
@@ -294,6 +310,11 @@ export async function createSqliteDataProvider(
     capabilities: {
       supports: ['filter', 'sort', 'cursor', 'offset', 'projection', 'relationship', 'aggregate', 'group', 'transactional-reads'],
       maxPageSize,
+      mutationObservation: 'durable',
+    },
+
+    async observedMutationGeneration(): Promise<number> {
+      return Number((readGeneration.get() as { value?: number } | undefined)?.value ?? 0);
     },
 
     async query(query: ProviderQuery): Promise<ProviderResult<ProviderPage>> {
@@ -418,6 +439,9 @@ export async function createSqliteDataProvider(
             ).run(...columns.map((column) => bind(row[column])));
           }
         }
+        // Atomic with the row writes above (spec13.1 §17, §36): one committed batch advances
+        // the observable generation once.
+        bumpGeneration.run();
         db.exec('COMMIT');
         return { ok: true, value: null };
       } catch (error) {

@@ -112,6 +112,29 @@ function buildGraph() {
 
 const serverIR = compiler.compileToServerIR(buildGraph());
 
+// spec13.1 F2 / §81, §96: a hand-tampered IR that reintroduces a `StateDef` ref into a
+// query filter — the runtime guard must refuse it, not serve a plausible empty result.
+const S_THRESHOLD = nodeId('state_threshold');
+const tamperedIR = JSON.parse(JSON.stringify(serverIR));
+tamperedIR.states = [
+  ...(tamperedIR.states ?? []),
+  { id: String(S_THRESHOLD), kind: 'state', authority: 'server', valueType: { kind: 'primitive', primitive: 'number' }, initialValue: 0 },
+];
+{
+  const q = tamperedIR.queries.find((x) => x.id === String(Q_OPEN));
+  q.filter = {
+    kind: 'binary',
+    operator: 'and',
+    left: q.filter,
+    right: {
+      kind: 'binary',
+      operator: 'gte',
+      left: { kind: 'field', source: { kind: 'ref', targetId: String(ROW) }, fieldId: String(F_TOTAL) },
+      right: { kind: 'ref', targetId: String(S_THRESHOLD) },
+    },
+  };
+}
+
 const dataset = {
   [E_ORDER]: [
     { [F_ID]: 'a', [F_STATUS]: 'open', [F_TOTAL]: 30 },
@@ -222,6 +245,33 @@ const fixtures = [
     expectInitial: { errorCode: 'LIVE_QUERY_NOT_CAPABLE' },
     steps: [],
   },
+  {
+    name: 'provider-only-sequence', covers: ['insert', 'remove', 'invalidation', 'f1'],
+    description:
+      'Several provider-record-only mutations in a row (no StateDef write): every one moves the observable revision, and folding the delivered stream still equals a fresh one-shot QueryDef.',
+    open: { queryId: Q_OPEN },
+    expectInitial: [row('c', 'open', 20), row('a', 'open', 30)],
+    steps: [
+      { invoke: { actionId: A_STATUS, arguments: { [P_ID]: 'b', [P_STATUS]: 'open' } },
+        expect: { kind: 'update', changes: [{ kind: 'insert', key: 'b' }] } },
+      { invoke: { actionId: A_TOTAL, arguments: { [P_ID]: 'b', [P_TOTAL]: 40 } },
+        expect: { kind: 'update', changes: [{ kind: 'update', key: 'b' }, { kind: 'move', key: 'b' }] } },
+      { invoke: { actionId: A_STATUS, arguments: { [P_ID]: 'a', [P_STATUS]: 'closed' } },
+        expect: { kind: 'update', changes: [{ kind: 'remove', key: 'a' }] } },
+      { invoke: { actionId: A_REMOVE, arguments: { [P_ID]: 'c' } },
+        expect: { kind: 'update', changes: [{ kind: 'remove', key: 'c' }] } },
+    ],
+  },
+  {
+    name: 'f2-state-ref-refused',
+    covers: ['f2', 'query-scope', 'validation'],
+    description:
+      'A hand-tampered Server IR whose query filter references a StateDef. Opening a live query on it is refused with QUERY_STATE_REF_NOT_ALLOWED — the runtime never serves a plausible-but-wrong result (spec13.1 F2, §81).',
+    serverIR: tamperedIR,
+    open: { queryId: Q_OPEN },
+    expectInitial: { errorCode: 'QUERY_STATE_REF_NOT_ALLOWED' },
+    steps: [],
+  },
 ];
 
 const dir = path.join(repoRoot, 'packages/server/conformance/live');
@@ -244,7 +294,7 @@ for (const fixture of fixtures) {
     name: fixture.name,
     covers: fixture.covers,
     description: fixture.description,
-    serverIR,
+    serverIR: fixture.serverIR ?? serverIR,
     dataset,
     open: fixture.open,
     expectInitial: fixture.expectInitial,

@@ -140,10 +140,141 @@ test(
       // Fold every delta/reset B received and compare identity set to a fresh authoritative read.
       const folded = foldMessages(messages);
       assert.deepEqual(folded.sort(), ['a', 'b', 'c'].sort(), 'B converged on the authoritative open set');
+
+      // A deletes a member row (provider-record remove only). B must drop it (§26, §54).
+      assert.equal((await a.send({ type: 'invokeRemove', id: 'a' })).ok, true);
+      messages = await drainUntil(b, (m) => !foldMessages(m).includes('a'));
+      assert.ok(!foldMessages(messages).includes('a'), 'B removed the deleted row');
     } finally {
       a?.stop();
       b?.stop();
       await new Promise((r) => setTimeout(r, 250));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+const TRIALS = Math.max(10, Number(process.env.AXIOM_LIVE_F1_TRIALS ?? 20));
+
+test(
+  `spec13.1 §48/§49/§111: ${TRIALS} provider-record-only remote commits — every one observed, no sync pulse`,
+  { skip: !available },
+  async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'axiom-live-f1-'));
+    const stateDb = path.join(dir, 'state.db');
+    const dataDb = path.join(dir, 'data.db');
+    let a: Authority | undefined;
+    let b: Authority | undefined;
+    try {
+      await seed(dataDb);
+      a = await spawnAuthority(stateDb, dataDb, 'A');
+      b = await spawnAuthority(stateDb, dataDb, 'B');
+
+      assert.equal((await b.send({ type: 'openLive' })).type, 'opened');
+      await drainUntil(b, (m) => m.length >= 1 && m[0].kind === 'initial');
+
+      // Repeatedly flip `b` between closed and open — a provider-record-only mutation each
+      // time. There is no StateDef write anywhere in this graph. After each commit, B's live
+      // result must converge to a fresh one-shot QueryDef executed on A.
+      let observed = 0;
+      for (let i = 0; i < TRIALS; i += 1) {
+        const status = i % 2 === 0 ? 'open' : 'closed';
+        assert.equal((await a.send({ type: 'invokeStatus', id: 'b', status })).ok, true);
+        const want = status === 'open';
+        const messages = await drainUntil(
+          b,
+          (m) => foldMessages(m).includes('b') === want,
+          6000,
+        );
+        if (foldMessages(messages).includes('b') === want) observed += 1;
+      }
+      assert.equal(observed, TRIALS, `every provider-only remote commit was observed (${observed}/${TRIALS})`);
+
+      // The StateDef revision on B must still be 0 — nothing ever wrote a StateDef.
+      const rev = (await b.send({ type: 'revisions' })).value as {
+        applicationRevision: number;
+        stateRevision: number;
+        dataGeneration: number;
+      };
+      assert.equal(rev.stateRevision, 0, 'no StateDef sync pulse was involved');
+      assert.ok(rev.dataGeneration >= TRIALS, 'the durable provider generation carried every commit');
+
+      // Final convergence against A's own one-shot oracle.
+      const oracle = ((await a.send({ type: 'oracle' })).items as Array<Record<string, unknown>>).map((r) =>
+        String(r[F_ID as unknown as string]),
+      );
+      const folded = foldMessages(
+        (await b.send({ type: 'drain' })).messages as LiveQueryMessage[],
+      );
+      assert.deepEqual(folded.sort(), oracle.sort(), 'folded live result == fresh one-shot QueryDef on A');
+    } finally {
+      a?.stop();
+      b?.stop();
+      await new Promise((r) => setTimeout(r, 250));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'spec13.1 §68/§116: a writer killed immediately after a provider-record commit — B still converges',
+  { skip: !available },
+  async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'axiom-live-crash-'));
+    const stateDb = path.join(dir, 'state.db');
+    const dataDb = path.join(dir, 'data.db');
+    let a: Authority | undefined;
+    let b: Authority | undefined;
+    try {
+      await seed(dataDb);
+      a = await spawnAuthority(stateDb, dataDb, 'A');
+      b = await spawnAuthority(stateDb, dataDb, 'B');
+
+      assert.equal((await b.send({ type: 'openLive' })).type, 'opened');
+      await drainUntil(b, (m) => m.length >= 1 && m[0].kind === 'initial');
+
+      // A commits `b → open` (provider-record only) and is SIGKILL'd the instant it returns.
+      a.child.send({ type: 'crashAfterStatus', id: 'b', status: 'open' });
+      await new Promise((r) => setTimeout(r, 300)); // let A die
+
+      // B, on its own poll of the durable provider generation, must still see the committed
+      // change — there is no in-memory notification left, and no StateDef was ever written.
+      const messages = await drainUntil(b, (m) => foldMessages(m).includes('b'), 8000);
+      assert.ok(foldMessages(messages).includes('b'), 'B converged after the writer crash');
+      const rev = (await b.send({ type: 'revisions' })).value as { stateRevision: number };
+      assert.equal(rev.stateRevision, 0, 'no StateDef pulse was involved');
+    } finally {
+      a?.stop();
+      b?.stop();
+      await new Promise((r) => setTimeout(r, 250));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'spec13.1 §39: eight authorities initialize a fresh shared SQLite database concurrently, no raw contention',
+  { skip: !available },
+  async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'axiom-live-startup-'));
+    const stateDb = path.join(dir, 'state.db');
+    const dataDb = path.join(dir, 'data.db');
+    let authorities: Authority[] = [];
+    try {
+      await seed(dataDb); // one row set, then eight independent connections race the meta init
+      authorities = await Promise.all(
+        Array.from({ length: 8 }, (_, i) => spawnAuthority(stateDb, dataDb, `a${i}`)),
+      );
+      assert.equal(authorities.length, 8, 'every authority reached ready with no SQLITE leak');
+      // Each can serve the live query and agrees on the initial result.
+      for (const authority of authorities) {
+        assert.equal((await authority.send({ type: 'openLive' })).type, 'opened');
+        const messages = await drainUntil(authority, (m) => m.length >= 1 && m[0].kind === 'initial');
+        assert.deepEqual(ids((messages[0] as { rows: unknown[] }).rows), ['c', 'a']);
+      }
+    } finally {
+      for (const authority of authorities) authority.stop();
+      await new Promise((r) => setTimeout(r, 300));
       rmSync(dir, { recursive: true, force: true });
     }
   },

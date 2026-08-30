@@ -59,6 +59,16 @@ export interface ProviderCapabilities {
    * (spec §15).
    */
   maxPageSize: number;
+  /**
+   * How a committed provider mutation becomes observable for live-query invalidation
+   * (spec13.1 F1, §33). `'durable'` — a monotone generation advanced *atomically* with
+   * `applyMutations` and readable by any authority sharing the store (the SQLite reference).
+   * `'in-process'` — an in-memory generation; correct within one process, not across OS
+   * processes (the memory reference, which is single-process anyway). `'none'` — no
+   * observable generation; a writable provider like this cannot back a distributed live
+   * query and `openLiveQuery` refuses rather than serving silently-stale peers.
+   */
+  mutationObservation: 'durable' | 'in-process' | 'none';
 }
 
 export function providerSupports(
@@ -212,6 +222,13 @@ export interface DataProvider {
   ): Promise<ProviderResult<Record<string, LiteralValue>[]>>;
   /** Applies an action's row mutations atomically (spec §42, §44). Optional until a provider supports writes. */
   applyMutations?(mutations: readonly ProviderMutation[]): Promise<ProviderResult<null>>;
+  /**
+   * A monotone counter of committed mutation batches, advanced **atomically** with
+   * `applyMutations` (spec13.1 F1, §17, §32). The live-query poll reads it cheaply and often
+   * to learn that another authority may have changed canonical query meaning. A read-only
+   * provider returns `0` forever. Present iff `capabilities.mutationObservation !== 'none'`.
+   */
+  observedMutationGeneration?(): Promise<number>;
   /** The plan the provider would run for this query. Pure — no execution, no I/O. */
   explain(query: ProviderQuery): QueryPlan;
 }

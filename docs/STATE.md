@@ -1,6 +1,6 @@
 # State
 
-Axiom 0.13.0-alpha.1. A `StateDef` is a named application value: stored, or computed from
+Axiom 0.13.1-alpha.1. A `StateDef` is a named application value: stored, or computed from
 other state.
 
 ```ts

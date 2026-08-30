@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.13.0-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.13.1-alpha.1. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -36,7 +36,7 @@ non-numeric collections, and obviously incompatible assignments.
 
 ## Codes
 
-105 codes, exported as `VALIDATION_CODES`. Every one is reachable.
+106 codes, exported as `VALIDATION_CODES`. Every one is reachable.
 
 ### Ids and references
 
@@ -161,6 +161,7 @@ execute rather than letting it validate and then fail at the provider (spec 0.10
 | `INVALID_READ_POLICY` | A `ReadPolicyDef` with a non-boolean predicate, a missing entity, or a colliding row scope; also a query whose `readPolicyId` governs a different entity than the query's `source`. |
 | `DUPLICATE_READ_POLICY` | More than one `ReadPolicyDef` governing the same entity — the effective filter would depend on which the compiler picked. |
 | `INVALID_QUERY_PREDICATE` | A `QueryDef.filter` that is not a boolean expression. |
+| `QUERY_STATE_REF_NOT_ALLOWED` | A `QueryDef` clause (`filter`, `sort`, `projection`, `groupBy`, `aggregate`) or a `ReadPolicyDef` predicate references a `StateDef`. A query executes on the `DataProvider`, which binds no authority state, so the reference would evaluate to nothing at run time. Bind a runtime-varying value through a query parameter instead. |
 | `INVALID_QUERY_SORT` | A `QuerySortKey` whose projected key is not an orderable type (`string`, `number`, `boolean`, `date`, `datetime`, `enum`). |
 | `INVALID_QUERY_PROJECTION` | A projected field that is not on the projection entity, or whose value type is incompatible with the declared field type. |
 | `INVALID_QUERY_AGGREGATE` | A `sum`/`average` aggregate over a non-numeric key, a `min`/`max` over an unorderable key, a `count` that carries a key, or an aggregate with no result field. |

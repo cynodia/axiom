@@ -81,6 +81,7 @@ export {
   diffResults,
   queryDependencies,
   queryLiveCapability,
+  queryStateReferences,
   rowKey,
   LIVE_QUERY_NONDETERMINISTIC_BUILTINS,
   fingerprintProjection,

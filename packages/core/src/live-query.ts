@@ -227,8 +227,69 @@ export function applyDelta(
 export interface QueryDependencySet {
   entityIds: Set<string>;
   stateIds: Set<string>;
+  /**
+   * `StateDef` ids a `QueryDef` clause (or the effective `ReadPolicy` predicate) references
+   * — which the provider cannot bind, so the query is not validly executable (spec13.1 F2).
+   * Never a real dependency; a query with any of these is not live-capable.
+   */
+  unsupportedStateRefs: Set<string>;
   /** A dependency that is not statically enumerable — re-evaluate on every commit (spec13 §29). */
   broad: boolean;
+}
+
+/**
+ * The `StateDef` ids referenced by a `QueryDef`'s clauses outside the query's legal
+ * execution scope (`rowScopeId`, parameters, relationship binds, `PRINCIPAL`, nested
+ * iteration scopes). A query executes on the `DataProvider`, which binds no authority
+ * state, so any such reference would evaluate to nothing — it is a validation error
+ * (spec13.1 F2, §76). `includePolicy` also walks a `ReadPolicyDef` predicate, whose runtime
+ * scope is likewise state-free.
+ */
+export function queryStateReferences(
+  query: QueryDef,
+  knownStateIds: ReadonlySet<string>,
+  policy?: ReadPolicyDef,
+): string[] {
+  const found = new Set<string>();
+  const localScopes = new Set<string>([
+    String(query.rowScopeId),
+    ...(query.parameters ?? []).map((p) => String(p.id)),
+    'PRINCIPAL',
+  ]);
+  for (const use of query.relationships ?? []) {
+    if (use.bindAs) localScopes.add(String(use.bindAs));
+  }
+  if (policy) localScopes.add(String(policy.rowScopeId));
+
+  const scan = (expression: Expression | undefined): void => {
+    if (!expression) return;
+    walkExpression(expression, (node) => {
+      if (
+        node.kind === 'filter' ||
+        node.kind === 'find' ||
+        node.kind === 'map' ||
+        node.kind === 'sort' ||
+        node.kind === 'every' ||
+        node.kind === 'some'
+      ) {
+        const scopeId = (node as { scopeId?: NodeId }).scopeId;
+        if (scopeId) localScopes.add(String(scopeId));
+      }
+      if (node.kind === 'ref') {
+        const id = String(node.targetId);
+        if (!localScopes.has(id) && knownStateIds.has(id)) found.add(id);
+      }
+    });
+  };
+
+  scan(query.filter);
+  for (const key of query.sort ?? []) scan(key.key);
+  for (const field of query.projection?.fields ?? []) scan(field.value);
+  for (const expression of query.groupBy ?? []) scan(expression);
+  for (const aggregate of query.aggregate ?? []) scan(aggregate.key);
+  if (policy) scan(policy.predicate);
+
+  return [...found];
 }
 
 /**
@@ -246,6 +307,7 @@ export function queryDependencies(
 ): QueryDependencySet {
   const entityIds = new Set<string>([String(query.source)]);
   const stateIds = new Set<string>();
+  const unsupportedStateRefs = new Set<string>(queryStateReferences(query, knownStateIds, policy));
   let broad = false;
 
   const localScopes = new Set<string>([
@@ -256,6 +318,7 @@ export function queryDependencies(
   for (const use of query.relationships ?? []) {
     if (use.bindAs) localScopes.add(String(use.bindAs));
   }
+  if (policy) localScopes.add(String(policy.rowScopeId));
 
   const scan = (expression: Expression | undefined): void => {
     if (!expression) return;
@@ -274,6 +337,9 @@ export function queryDependencies(
       if (node.kind === 'ref') {
         const id = String(node.targetId);
         if (localScopes.has(id)) return;
+        // A `StateDef` ref is not a real dependency — the query cannot bind it (spec13.1 F2);
+        // it is collected in `unsupportedStateRefs` above, not here.
+        if (unsupportedStateRefs.has(id)) return;
         if (knownStateIds.has(id)) stateIds.add(id);
         else broad = true; // an unresolved ref — be conservative
       }
@@ -285,12 +351,7 @@ export function queryDependencies(
   for (const field of query.projection?.fields ?? []) scan(field.value);
   for (const expression of query.groupBy ?? []) scan(expression);
   for (const aggregate of query.aggregate ?? []) scan(aggregate.key);
-  if (policy) {
-    // The policy predicate binds a candidate row to its own scope and the caller to
-    // PRINCIPAL — neither is a StateDef dependency (spec 0.10 §56).
-    localScopes.add(String(policy.rowScopeId));
-    scan(policy.predicate);
-  }
+  if (policy) scan(policy.predicate);
 
   for (const relationship of relationships) {
     if (
@@ -303,7 +364,7 @@ export function queryDependencies(
   }
   if (policy) entityIds.add(String(policy.entityId));
 
-  return { entityIds, stateIds, broad };
+  return { entityIds, stateIds, unsupportedStateRefs, broad };
 }
 
 export interface CommitChangeset {
@@ -348,16 +409,27 @@ function usesNondeterministic(expression: Expression | undefined): boolean {
 }
 
 /**
- * Classify a `QueryDef`'s live capability (spec13 §145, §146, §148, §149). A query whose
- * filter / sort / projection / group / aggregate reads a nondeterministic builtin
- * (`now`, `uuid`) is `not-live-capable`; an aggregate / grouped query, or one whose source
- * entity has no identity field, is `live-capable-reset-only` (whole-result resets only);
- * otherwise `live-capable` (incremental `insert`/`remove`/`update`/`move`).
+ * Classify a `QueryDef`'s live capability (spec13 §145, §146, §148, §149; spec13.1 §78). A
+ * query whose clause references a `StateDef` (when `knownStateIds` is supplied) is
+ * `not-live-capable` — it is not validly executable (F2). A query that reads a
+ * nondeterministic builtin (`now`, `uuid`) is `not-live-capable`; an aggregate / grouped
+ * query, or one whose source entity has no identity field, is `live-capable-reset-only`;
+ * otherwise `live-capable`.
  */
 export function queryLiveCapability(
   query: QueryDef,
   sourceIdentityFieldId: string | undefined,
+  knownStateIds?: ReadonlySet<string>,
 ): LiveCapability {
+  if (knownStateIds) {
+    const stateRefs = queryStateReferences(query, knownStateIds);
+    if (stateRefs.length > 0) {
+      return {
+        capability: 'not-live-capable',
+        reason: `query expression references a StateDef (${stateRefs.join(', ')}), which QueryDef execution scope does not bind`,
+      };
+    }
+  }
   const expressions: Array<Expression | undefined> = [
     query.filter,
     ...(query.sort ?? []).map((k) => k.key),

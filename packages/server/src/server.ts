@@ -103,6 +103,7 @@ import {
   liveCursorMatch,
   queryDependencies,
   queryLiveCapability,
+  queryStateReferences,
   type LiveEvaluation,
   type LiveQueryEngine,
   type LiveQueryHandle,
@@ -210,6 +211,10 @@ export const SERVER_DIAGNOSTIC_CODES = {
   QUERY_RESULT_TYPE_MISMATCH: 'QUERY_RESULT_TYPE_MISMATCH',
   /** No `DataProvider` is registered for this query's source entity. */
   QUERY_PROVIDER_MISSING: 'QUERY_PROVIDER_MISSING',
+  /** A QueryDef clause (or a ReadPolicy predicate) references a StateDef the provider cannot bind (spec13.1 F2). */
+  QUERY_STATE_REF_NOT_ALLOWED: 'QUERY_STATE_REF_NOT_ALLOWED',
+  /** A live query's data provider cannot make committed mutations observable to other authorities (spec13.1 §33, §123). */
+  LIVE_QUERY_PROVIDER_NOT_OBSERVABLE: 'LIVE_QUERY_PROVIDER_NOT_OBSERVABLE',
   /** Live mode requested for a QueryDef that cannot be observed live (e.g. nondeterministic). */
   LIVE_QUERY_NOT_CAPABLE: 'LIVE_QUERY_NOT_CAPABLE',
   /** A live-query cursor was tampered with, unsigned, or minted for another query / principal / parameters / policy. */
@@ -367,6 +372,14 @@ export interface AxiomServer {
   closeLiveQuery(subscriptionId: string): void;
   /** Bounded observability listing of the live subscriptions this authority serves (spec13 §96). */
   inspectLiveQueries(): Array<{ subscriptionId: string; revision: number; pending: number; queryId: string }>;
+  /**
+   * The revision quantities live-query invalidation observes (spec13.1 §117, §119). Kept
+   * distinct on purpose: `stateRevision` is `persistence.revision()` (StateDef commits);
+   * `dataGeneration` is the sum of each data provider's durable mutation generation
+   * (provider-record commits); `applicationRevision` is this authority's local monotone
+   * count of distinct observed application-meaning changes, projected from both.
+   */
+  revisionInspection(): Promise<{ applicationRevision: number; stateRevision: number; dataGeneration: number }>;
   /** Every mutation this authority has applied, with its outcome. */
   mutationLog(): MutationLogEntry[];
   /**
@@ -573,8 +586,32 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   // sees a commit made on *another* authority (spec13 §31, §32, §68). A local commit already
   // wakes the engine synchronously; this only covers the remote case. 0 disables it.
   const liveQueryPollMs = Math.max(0, options.liveQueryPollMs ?? 250);
-  let liveRevisionObserved = 0;
   let liveQueryPollTimer: ReturnType<typeof setInterval> | undefined;
+  // spec13.1 F1 — the observable application revision. `applicationRevision` is a local
+  // monotone count of *distinct committed application-meaning changes this authority has
+  // observed*, projected from two durable sources: `observedStateRevision`
+  // (`persistence.revision()`, StateDef commits — 0.6 / 0.12.1) and `observedDataGeneration`
+  // (Σ of each data provider's durable `observedMutationGeneration()`, provider-record
+  // commits). It is not comparable across authorities (each counts its own observations) and
+  // nothing compares it across authorities; it is what the live-query engine's per-
+  // registration dedup and the cursor's `rev` use.
+  let applicationRevision = 0;
+  let observedStateRevision = 0;
+  let observedDataGeneration = 0;
+
+  const distinctDataProviders = (): DataProvider[] => {
+    const set = new Set<DataProvider>();
+    if (defaultDataProvider) set.add(defaultDataProvider);
+    for (const provider of Object.values(dataProviders)) set.add(provider);
+    return [...set];
+  };
+  const sumProviderGenerations = async (): Promise<number> => {
+    let sum = 0;
+    for (const provider of distinctDataProviders()) {
+      if (provider.observedMutationGeneration) sum += await provider.observedMutationGeneration();
+    }
+    return sum;
+  };
 
   // ---- Distributed authority (spec12) ------------------------------------------------
   // A coordination provider activates multi-authority execution automatically (spec12 §88).
@@ -946,30 +983,34 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   }
 
   /**
-   * Re-observe the durable revision on behalf of idle live subscriptions. If it has advanced
-   * past what this authority has already processed — i.e. another authority committed — pull
-   * the winning state in and wake every live subscription with a `broad` changeset (spec13
-   * §31, §32, §68). A local commit already advanced `liveRevisionObserved` and woke the
-   * engine precisely, so this never double-fires for local work.
+   * Re-observe both durable sources (StateDef persistence revision *and* each data
+   * provider's mutation generation) on behalf of idle live subscriptions. If either has
+   * advanced past what this authority has already folded in — i.e. another authority
+   * committed a `StateDef` *or* a provider-record mutation — reconcile and wake every live
+   * subscription with a `broad` changeset (spec13.1 F1, §45, §48). A local commit already
+   * advanced `applicationRevision` and woke the engine precisely, so this never double-fires
+   * for local work.
    */
   let liveRevisionPollRunning = false;
   async function pollRemoteRevisionForLiveQueries(): Promise<void> {
     if (liveRevisionPollRunning || liveEngine.list().length === 0) return;
     liveRevisionPollRunning = true;
     try {
-      const durable = await persistence.revision();
-      if (durable <= liveRevisionObserved) return;
-      liveRevisionObserved = durable;
+      const [state, data] = await Promise.all([persistence.revision(), sumProviderGenerations()]);
+      if (state <= observedStateRevision && data <= observedDataGeneration) return;
+      observedStateRevision = Math.max(observedStateRevision, state);
+      observedDataGeneration = Math.max(observedDataGeneration, data);
+      applicationRevision += 1;
       await ensureStateCoherent();
       await liveEngine.onCommit({
-        toRevision: durable,
+        toRevision: applicationRevision,
         entityIds: new Set<string>(),
         stateIds: new Set<string>(),
         broad: true,
       });
     } catch {
-      // A transient persistence read failure is retried on the next tick; a live query is
-      // never wedged by one missed poll (the durable revision is still authoritative).
+      // A transient persistence / provider read failure is retried on the next tick; a live
+      // query is never wedged by one missed poll (the durable sources stay authoritative).
     } finally {
       liveRevisionPollRunning = false;
     }
@@ -1032,6 +1073,18 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     };
   }
 
+  const knownStateIdStrings = new Set<string>([...statesById.keys()].map(String));
+
+  /**
+   * Defence in depth for spec13.1 F2, §81: `compileToServerIR` already rejects a graph whose
+   * `QueryDef` clause references a `StateDef` (the provider binds no authority state). If a
+   * hand-built IR bypasses that, fail explicitly here rather than serving a plausible but
+   * wrong empty result.
+   */
+  function queryStateRefProblem(query: QueryDef): string[] {
+    return queryStateReferences(query, knownStateIdStrings, policyForQuery(query, readPolicies));
+  }
+
   /**
    * Runs a registered query (spec 0.10 §54). The client names a `QueryDef` and supplies
    * typed arguments; this authority validates them, computes the principal from the
@@ -1052,6 +1105,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       return queryError(
         SERVER_DIAGNOSTIC_CODES.QUERY_PROVIDER_MISSING,
         `No data provider is registered for ${String(query.source)}`,
+        { queryId: query.id },
+      );
+    }
+
+    const stateRefs = queryStateRefProblem(query);
+    if (stateRefs.length > 0) {
+      return queryError(
+        SERVER_DIAGNOSTIC_CODES.QUERY_STATE_REF_NOT_ALLOWED,
+        `Query ${String(query.id)} references StateDef(s) ${stateRefs.join(', ')}, which a query cannot bind`,
         { queryId: query.id },
       );
     }
@@ -1302,6 +1364,27 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         message: `No data provider is registered for ${String(query.source)}`,
       };
     }
+    const stateRefs = queryStateRefProblem(query);
+    if (stateRefs.length > 0) {
+      return {
+        ok: false,
+        code: SERVER_DIAGNOSTIC_CODES.QUERY_STATE_REF_NOT_ALLOWED,
+        message: `Query ${String(query.id)} references StateDef(s) ${stateRefs.join(', ')}, which a query cannot bind`,
+      };
+    }
+    // A live query needs its provider commits to be observable to other authorities
+    // (spec13.1 F1, §33, §123). A writable provider that offers no mutation generation is
+    // refused rather than silently serving stale results on a peer.
+    if (
+      provider.applyMutations &&
+      provider.capabilities.mutationObservation === 'none'
+    ) {
+      return {
+        ok: false,
+        code: SERVER_DIAGNOSTIC_CODES.LIVE_QUERY_PROVIDER_NOT_OBSERVABLE,
+        message: `The data provider for ${String(query.source)} cannot make committed mutations observable across authorities`,
+      };
+    }
     const declared = new Map((query.parameters ?? []).map((p) => [String(p.id), p]));
     const resolvedArgs: Record<string, LiteralValue> = {};
     for (const [key, value] of Object.entries(args ?? {})) {
@@ -1322,7 +1405,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     const policy = policyForQuery(query, readPolicies);
     const sourceIdentityFieldId = entities.get(query.source)?.identityFieldId;
     const identityFieldId = sourceIdentityFieldId ? String(sourceIdentityFieldId) : undefined;
-    const capability = queryLiveCapability(query, identityFieldId);
+    const capability = queryLiveCapability(query, identityFieldId, knownStateIdStrings);
     const ordered = (query.sort?.length ?? 0) > 0;
     const resultCap = Math.min(queryMaxPageSize(query), provider.capabilities.maxPageSize);
 
@@ -1349,14 +1432,16 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       if (queryIsAggregate(query)) {
         const result = await provider.aggregate(providerQuery);
         return {
-          revision: storeRevision,
+          // spec13.1 F1: a live result is stamped with the observable application revision,
+          // which advances for a provider-record commit too — not `storeRevision` (StateDef only).
+          revision: applicationRevision,
           rows: result.ok ? result.value.rows.map((r) => r.values) : [],
           resetOnly: true,
         };
       }
       const result = await provider.query(providerQuery);
       return {
-        revision: storeRevision,
+        revision: applicationRevision,
         rows: result.ok ? result.value.items : [],
         resetOnly: capability.capability !== 'live-capable',
       };
@@ -1660,12 +1745,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         if (!providerFailure) {
           storeRevision += 1;
           invalidateQueryCache();
-          // spec13 §63, §64: a provider-record commit writes no durable `StateDef`, so the
-          // action returns before the durable-commit path below. Wake live queries here
-          // instead — the source entities this action mutated are its dependency signal.
-          liveRevisionObserved = Math.max(liveRevisionObserved, storeRevision);
+          // spec13.1 F1: a provider-record commit writes no durable `StateDef`, so the action
+          // returns before the durable-commit path below and `persistence.revision()` does
+          // not move. The provider's durable `observedMutationGeneration` did move (atomic
+          // with `applyMutations`); fold it into `applicationRevision` here so a remote
+          // authority's poll and this authority's own live queries both see the change.
+          observedDataGeneration = await sumProviderGenerations();
+          applicationRevision += 1;
           void liveEngine.onCommit({
-            toRevision: storeRevision,
+            toRevision: applicationRevision,
             stateIds: new Set<string>(),
             entityIds: new Set(providerEntitiesWritten(action).map((id) => String(id))),
           });
@@ -1759,10 +1847,16 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     // Live queries (spec13 §63, §64, §74): wake every subscription whose dependency set
     // this commit may have touched — the durable state ids it wrote and the provider-backed
     // entity ids the action mutates. Conservative: a `broad` subscription re-evaluates
-    // regardless. Fire-and-forget — the transaction has already committed.
-    liveRevisionObserved = Math.max(liveRevisionObserved, outcome.revision);
+    // regardless. Fire-and-forget — the transaction has already committed. A mixed
+    // StateDef + provider-record action also advanced the provider generation above, so fold
+    // both durable sources in (spec13.1 §24, §62).
+    observedStateRevision = Math.max(observedStateRevision, outcome.revision);
+    if (providerEntitiesWritten(action).length > 0) {
+      observedDataGeneration = await sumProviderGenerations();
+    }
+    applicationRevision += 1;
     void liveEngine.onCommit({
-      toRevision: outcome.revision,
+      toRevision: applicationRevision,
       stateIds: new Set(writes.map((id) => String(id))),
       entityIds: new Set(providerEntitiesWritten(action).map((id) => String(id))),
     });
@@ -2255,11 +2349,14 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       // unless it declared `lifecycle.required`, which is the one case that rejects here.
       await subscriptionRuntime.start();
 
-      // spec13 §31, §32, §68: the idle-authority revision poll for live queries served here
-      // while another authority commits. Harmless for a single authority (it never observes
-      // an advance it did not already process).
+      // spec13.1 F1 / §45: the idle-authority poll for live queries served here while
+      // another authority commits a StateDef *or* a provider-record mutation. Harmless for a
+      // single authority (it never observes an advance it did not already fold in). Seed the
+      // observed points from the current durable state so the first tick is not a spurious
+      // broad wake.
+      observedStateRevision = Math.max(observedStateRevision, await persistence.revision());
+      observedDataGeneration = Math.max(observedDataGeneration, await sumProviderGenerations());
       if (liveQueryPollMs > 0 && !liveQueryPollTimer) {
-        liveRevisionObserved = Math.max(liveRevisionObserved, storeRevision);
         liveQueryPollTimer = setInterval(() => void pollRemoteRevisionForLiveQueries(), liveQueryPollMs);
         liveQueryPollTimer.unref?.();
       }
@@ -2479,6 +2576,13 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
     closeLiveQuery: (subscriptionId) => liveEngine.close(subscriptionId),
     inspectLiveQueries: () => liveEngine.list(),
+    async revisionInspection() {
+      return {
+        applicationRevision,
+        stateRevision: await persistence.revision(),
+        dataGeneration: await sumProviderGenerations(),
+      };
+    },
     authority: (): AuthorityInfo => ({
       instanceId,
       distributed,

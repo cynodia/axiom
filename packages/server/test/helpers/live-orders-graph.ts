@@ -7,18 +7,18 @@ import {
   nodeId,
   primitiveType,
   providerRecordFieldLocation,
+  providerRecordLocation,
   ref,
-  stateLocation,
 } from '@cynodia/axiom-core';
-import type { ActionDef, EntityDef, QueryDef, StateDef } from '@cynodia/axiom-core';
+import type { ActionDef, EntityDef, QueryDef } from '@cynodia/axiom-core';
 import { compileToServerIR } from '@cynodia/axiom-compiler';
 
 /**
- * The shared fixture for the spec13 §159 cross-process live-query trials: a provider-backed
- * `order` entity with a live "open orders" query, plus a durable `ops` counter that every
- * mutating action also bumps — so a provider-record commit still advances the shared
- * persistence revision, which is how an idle authority serving the live query on another
- * process learns that something changed (spec13 §31, §32, §68).
+ * The shared fixture for the spec13 §159 / spec13.1 §48-§53 cross-process live-query
+ * trials: a provider-backed `order` entity with a live "open orders" query and actions that
+ * mutate **only** provider records — no `StateDef` write anywhere. spec13.1 F1 requires a
+ * remote authority to observe these commits through the provider's durable mutation
+ * generation alone; a `StateDef` "sync pulse" is explicitly forbidden here (§50, §111).
  */
 
 export const E_ORDER = nodeId('entity_order');
@@ -26,11 +26,11 @@ export const F_ID = fieldId('field_order_id');
 export const F_STATUS = fieldId('field_order_status');
 export const F_TOTAL = fieldId('field_order_total');
 
-export const S_OPS = nodeId('state_ops');
 export const Q_OPEN = nodeId('query_open_orders');
 
 export const A_SET_STATUS = nodeId('action_set_status');
 export const A_SET_TOTAL = nodeId('action_set_total');
+export const A_REMOVE = nodeId('action_remove');
 export const P_ID = nodeId('param_id');
 export const P_STATUS = nodeId('param_status');
 export const P_TOTAL = nodeId('param_total');
@@ -48,13 +48,6 @@ export function liveOrdersGraph(): ApplicationGraph {
       { id: F_STATUS, valueType: primitiveType('string'), required: true },
       { id: F_TOTAL, valueType: primitiveType('number'), required: true },
     ],
-  });
-  g.addNode<StateDef>({
-    id: S_OPS,
-    kind: 'state',
-    authority: 'server',
-    valueType: primitiveType('number'),
-    initialValue: 0,
   });
   g.addNode<QueryDef>({
     id: Q_OPEN,
@@ -74,7 +67,6 @@ export function liveOrdersGraph(): ApplicationGraph {
     ],
     operations: [
       { kind: 'set', target: providerRecordFieldLocation(E_ORDER, F_ID, ref(P_ID), F_STATUS), value: ref(P_STATUS) },
-      { kind: 'set', target: stateLocation(S_OPS), value: binary('add', ref(S_OPS), literal(1)) },
     ],
   });
   g.addNode<ActionDef>({
@@ -86,8 +78,13 @@ export function liveOrdersGraph(): ApplicationGraph {
     ],
     operations: [
       { kind: 'set', target: providerRecordFieldLocation(E_ORDER, F_ID, ref(P_ID), F_TOTAL), value: ref(P_TOTAL) },
-      { kind: 'set', target: stateLocation(S_OPS), value: binary('add', ref(S_OPS), literal(1)) },
     ],
+  });
+  g.addNode<ActionDef>({
+    id: A_REMOVE,
+    kind: 'action',
+    parameters: [{ id: P_ID, valueType: primitiveType('string'), required: true }],
+    operations: [{ kind: 'remove', target: providerRecordLocation(E_ORDER, F_ID, ref(P_ID)) }],
   });
   return g;
 }

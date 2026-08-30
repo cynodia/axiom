@@ -6,6 +6,7 @@ import {
 } from '@cynodia/axiom-server';
 import type { AxiomServer, LiveQueryHandle, LiveQueryMessage } from '@cynodia/axiom-server';
 import {
+  A_REMOVE,
   A_SET_STATUS,
   A_SET_TOTAL,
   E_ORDER,
@@ -82,6 +83,34 @@ async function main(): Promise<void> {
             arguments: { [P_ID]: msg.id, [P_TOTAL]: msg.total },
           } as never)) as { ok?: boolean };
           process.send?.({ type: 'result', ok: res.ok === true });
+        } else if (msg?.type === 'invokeRemove') {
+          const res = (await server.handle({
+            protocol: PROTOCOL_VERSION,
+            kind: 'invoke',
+            actionId: A_REMOVE,
+            arguments: { [P_ID]: msg.id },
+          } as never)) as { ok?: boolean };
+          process.send?.({ type: 'result', ok: res.ok === true });
+        } else if (msg?.type === 'crashAfterStatus') {
+          // Commit a provider-record-only mutation, then die abruptly with no cleanup — the
+          // SQLite generation bump is inside the same BEGIN IMMEDIATE, so either both the
+          // rows and the generation are durable or neither is (spec13.1 §68, §116).
+          await server.handle({
+            protocol: PROTOCOL_VERSION,
+            kind: 'invoke',
+            actionId: A_SET_STATUS,
+            arguments: { [P_ID]: msg.id, [P_STATUS]: msg.status },
+          } as never);
+          process.kill(process.pid, 'SIGKILL');
+        } else if (msg?.type === 'revisions') {
+          process.send?.({ type: 'revisions', value: await server.revisionInspection() });
+        } else if (msg?.type === 'oracle') {
+          const q = (await server.handle({
+            protocol: PROTOCOL_VERSION,
+            kind: 'query',
+            queryId: Q_OPEN,
+          } as never)) as { page?: { items: Array<Record<string, unknown>> } };
+          process.send?.({ type: 'oracle', items: q.page?.items ?? [] });
         } else if (msg?.type === 'stop') {
           handle?.close();
           await server.stop().catch(() => {});

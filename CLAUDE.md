@@ -151,8 +151,38 @@ turn it into a working browser application whose generated JavaScript nobody rea
   commit — a lost write. Real-process test: `live-query-cross-process.test.ts`. Reports:
   `AXIOM_0_13_IMPLEMENTATION_REPORT.md` and `AXIOM_0_13_LIVE_QUERY_RESEARCH.md`. Full model:
   `docs/LIVE_QUERIES.md`.
+* `specs/spec13.1.md` — the **0.13.1 live query invalidation coherence hardening** release,
+  closing two Phase 21 blind-external regression findings (`D2 / E1 / S3`). **F1**
+  (release-blocking) — a `provider-record`-only Axiom commit was not observable
+  cross-authority: it never advanced `persistence.revision()`, so a remote authority's
+  live-query poll never fired (0.13.0 masked this in its own test with a `StateDef` "sync
+  pulse"). Fix: an **observable application revision** projected from two durable sources —
+  `stateRevision` (`persistence.revision()`) and `dataGeneration` (Σ of each
+  `DataProvider.observedMutationGeneration()`, a monotone counter the SQLite provider
+  advances **inside** the same `BEGIN IMMEDIATE` as `applyMutations`, so rows + evidence are
+  atomic — no crash gap; the memory provider does it in-process).
+  `ProviderCapabilities.mutationObservation` (`'durable'` / `'in-process'` / `'none'`);
+  `openLiveQuery` on a writable `'none'` provider → `LIVE_QUERY_PROVIDER_NOT_OBSERVABLE`. The
+  server's `applicationRevision` (local monotone, not cross-authority comparable) is what the
+  live engine + cursor use; `AxiomServer.revisionInspection()` exposes the three distinctly.
+  The idle poll re-observes both sources. **F2** — a `QueryDef` clause (or `ReadPolicy`
+  predicate) referencing a `StateDef` passed `validateGraph`, was advertised as a live
+  dependency, then silently evaluated wrong (the provider binds no authority state). Fix:
+  `queryStateReferences` + `QUERY_STATE_REF_NOT_ALLOWED` — `validateGraph` /
+  `compileToServerIR` reject it, `queryDependencies` routes it to `unsupportedStateRefs`
+  (never `stateIds`), `queryLiveCapability(query, idField, knownStateIds?)` /
+  `AgentAPI.analyzeLiveQuery` report `not-live-capable`, and a runtime guard catches a
+  hand-built IR. Bind runtime-varying values as query parameters. **No new graph/IR
+  vocabulary**; Server IR stays `axiom.server.v7`, `semanticFingerprint` / `schemaFingerprint`
+  unchanged for valid graphs; conformance stays `axiom.conformance.v7` (additive fixtures:
+  `provider-only-sequence`, `f2-state-ref-refused`). `createSqliteDataProvider` gains a
+  durable `_axiom_provider_meta` generation row + concurrent-startup-safe init. Real-process
+  tests in `live-query-cross-process.test.ts` (exact F1 repro, no-sync-pulse, crash-after-
+  provider-commit, 8-authority concurrent startup) + `live-query-invalidation.test.ts`.
+  Report: `AXIOM_0_13_1_IMPLEMENTATION_REPORT.md`, design note
+  `AXIOM_0_13_1_INVALIDATION_RESEARCH.md`.
 
-Together, spec2–spec13 are the authority on design decisions — **except where the
+Together, spec2–spec13.1 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 

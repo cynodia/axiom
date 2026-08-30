@@ -1,6 +1,6 @@
 # Realtime — live canonical queries
 
-Axiom 0.13.0-alpha.1. The operational contract for **observing a `QueryDef` result over
+Axiom 0.13.1-alpha.1. The operational contract for **observing a `QueryDef` result over
 time**: subscribe once, receive an initial coherent result, then receive canonical changes
 as authoritative committed state moves — through any compatible authority, across
 reconnects. `axiom.server.v7` (0.13 adds no IR vocabulary).
@@ -111,20 +111,70 @@ the incremental changes is still correct, just chattier.
 
 A committed change wakes a live subscription when it may have moved that query's result. The
 dependency set is **conservative and static** (`queryDependencies`): the source entity,
-every entity a used relationship reaches, every entity a read policy governs, and every
-`StateDef` a query clause or the effective `ReadPolicy` predicate reads. A `ref` that cannot
-be resolved to a state, parameter, principal or iteration scope sets `broad` — that
-subscription re-evaluates on **every** commit. False negatives are forbidden: a missed
-invalidation is a release blocker; a redundant one only costs a re-evaluation that produces
-no client message.
+every entity a used relationship reaches, and every entity a read policy governs. A `ref`
+that cannot be resolved to a parameter, principal, relationship bind or iteration scope sets
+`broad` — that subscription re-evaluates on **every** commit. False negatives are forbidden:
+a missed invalidation is a release blocker; a redundant one only costs a re-evaluation that
+produces no client message. (A `QueryDef` clause cannot reference a `StateDef` — see
+[QueryDef expression scope](#querydef-expression-scope) — so there is no `StateDef`
+dependency for a query.)
 
-Local commits wake the engine synchronously. A commit made on **another authority** is
-observed through the shared durable revision: an authority serving live queries re-reads
-`persistence.revision()` on an interval (`AxiomServerOptions.liveQueryPollMs`, default 250;
-`0` disables it) and, on an advance it has not already processed, re-evaluates every live
-subscription. There is no broadcast, no pub/sub and no sticky routing. A change written
-directly to a provider's store **outside** an Axiom transaction does not advance the durable
-revision and is not observed until the next Axiom commit — this is a documented limitation.
+### The observable application revision
+
+Every committed **Axiom** mutation that can change canonical query meaning becomes
+observable to every compatible authority, **regardless of which persistence surface it
+touched** — a `StateDef` write, a `provider-record` write, or both. This is projected from
+two durable sources:
+
+| Source | Advanced by | Read with |
+| --- | --- | --- |
+| `stateRevision` | a committed `StateDef` write (`PersistenceAdapter`) | `server.revisionInspection().stateRevision` |
+| `dataGeneration` | a committed `applyMutations` batch, advanced **atomically inside the provider's write transaction** | `server.revisionInspection().dataGeneration` |
+
+`server.revisionInspection().applicationRevision` is this authority's local monotone count of
+distinct observed application-meaning changes, projected from both. It is not comparable
+across authorities, and nothing compares it across authorities.
+
+Local commits wake the engine synchronously. A commit made on **another authority** — a
+`StateDef` *or* a `provider-record` commit — is observed by the idle-authority poll: an
+authority serving live queries re-reads *both* durable sources on an interval
+(`AxiomServerOptions.liveQueryPollMs`, default 250; `0` disables it) and, on an advance it
+has not already folded in, re-evaluates every live subscription. There is no broadcast, no
+pub/sub and no sticky routing.
+
+Because a provider commit and its `dataGeneration` advance are one atomic transaction, a
+writer that crashes the instant after the commit returns leaves the change **and** its
+observable evidence both durable — a newly started authority reads the current
+`dataGeneration` and serves the correct result.
+
+**In scope:** every `provider-record` mutation committed through a canonical Axiom
+`ActionDef` (create, update, delete). **Out of scope:** a write made directly to a
+provider's store *outside* an Axiom transaction — it does not advance `dataGeneration` and
+is not observed until the next Axiom commit, unless the provider explicitly advertises
+external-change observation.
+
+### Provider capability
+
+`DataProvider.capabilities.mutationObservation` is `'durable'` (the SQLite reference — a
+generation any authority sharing the store can read), `'in-process'` (the memory reference —
+single process only), or `'none'`. `openLiveQuery` for a query whose **writable** provider
+reports `'none'` is refused with `LIVE_QUERY_PROVIDER_NOT_OBSERVABLE` rather than served
+silently stale on a peer. A custom provider implements `observedMutationGeneration(): Promise<number>`
+— a monotone counter advanced atomically with `applyMutations` — to support distributed live
+queries.
+
+## QueryDef expression scope
+
+A `QueryDef` clause (`filter`, `sort`, `projection`, `groupBy`, `aggregate`) is evaluated
+**by the `DataProvider`**, whose scope is: `ref(rowScopeId)`, `ref(<parameter id>)`,
+`ref(<relationship bindAs>)`, `PRINCIPAL`, and any nested iteration-scope id introduced
+inside a clause. It is **not** a `StateDef`. A `ref` to a `StateDef` in any query clause —
+or in a `ReadPolicyDef` predicate, which shares this scope — is a validation error
+(`QUERY_STATE_REF_NOT_ALLOWED`): `validateGraph` / `compileToServerIR` reject it,
+`analyzeLiveQuery` reports `not-live-capable` with the offending ref in
+`dependencies.unsupportedStateRefs`, and the runtime guards against a hand-built IR that
+bypasses validation. Bind a runtime-varying value (a threshold, a cutoff) as a **query
+parameter** and pass it from the action or trigger that opens the query.
 
 ---
 
@@ -223,6 +273,8 @@ transport prefers.
 | Code | When |
 | --- | --- |
 | `LIVE_QUERY_NOT_CAPABLE` | `openLiveQuery` for a `QueryDef` that reads `now` / `uuid`. |
+| `QUERY_STATE_REF_NOT_ALLOWED` | A `QueryDef` clause or `ReadPolicy` predicate references a `StateDef` (rejected at compile; this is the runtime guard for a hand-built IR). |
+| `LIVE_QUERY_PROVIDER_NOT_OBSERVABLE` | `openLiveQuery` for a query whose writable provider cannot make committed mutations observable across authorities (`mutationObservation: 'none'`). |
 | `LIVE_QUERY_CURSOR_INVALID` | A resume cursor that is tampered, unsigned, or minted for a different query / principal / arguments / policy. |
 | `LIVE_QUERY_CURSOR_INCOMPATIBLE` | A resume cursor minted under an incompatible schema / semantic build. |
 | `LIVE_QUERY_EVALUATION_FAILED` | Re-evaluating against the `DataProvider` failed; delivered as an `{ kind: 'error' }` message, last result stands. |

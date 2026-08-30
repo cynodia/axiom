@@ -151,6 +151,13 @@ export const VALIDATION_CODES = {
   duplicateReadPolicy: 'DUPLICATE_READ_POLICY',
   /** A `QueryDef.filter` that is not a boolean expression, or reads outside `rowScopeId` / parameters / `PRINCIPAL`. */
   invalidQueryPredicate: 'INVALID_QUERY_PREDICATE',
+  /**
+   * A `QueryDef` clause or a `ReadPolicyDef` predicate references a `StateDef`. A query
+   * executes on the `DataProvider`, which binds no authority state; the reference would
+   * evaluate to nothing at run time (spec13.1 F2). Bind a runtime-varying value through a
+   * query parameter instead.
+   */
+  queryStateRefNotAllowed: 'QUERY_STATE_REF_NOT_ALLOWED',
   /** A `QuerySortKey` whose projected key is not an orderable type. */
   invalidQuerySort: 'INVALID_QUERY_SORT',
   /** A projected field that is not on the projection entity, or whose value type is incompatible. */

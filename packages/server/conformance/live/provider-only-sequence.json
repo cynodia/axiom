@@ -1,11 +1,13 @@
 {
   "conformance": "axiom.conformance.v7",
-  "name": "remove-on-filter-exit",
+  "name": "provider-only-sequence",
   "covers": [
+    "insert",
     "remove",
-    "filter-membership"
+    "invalidation",
+    "f1"
   ],
-  "description": "An open order flipped to closed leaves the result as a remove.",
+  "description": "Several provider-record-only mutations in a row (no StateDef write): every one moves the observable revision, and folding the delivered stream still equals a fresh one-shot QueryDef.",
   "serverIR": {
     "contract": "axiom.server.v6",
     "id": "live-query-conformance",
@@ -408,6 +410,46 @@
       "invoke": {
         "actionId": "action_set_status",
         "arguments": {
+          "param_id": "b",
+          "param_status": "open"
+        }
+      },
+      "expect": {
+        "kind": "update",
+        "changes": [
+          {
+            "kind": "insert",
+            "key": "b"
+          }
+        ]
+      }
+    },
+    {
+      "invoke": {
+        "actionId": "action_set_total",
+        "arguments": {
+          "param_id": "b",
+          "param_total": 40
+        }
+      },
+      "expect": {
+        "kind": "update",
+        "changes": [
+          {
+            "kind": "update",
+            "key": "b"
+          },
+          {
+            "kind": "move",
+            "key": "b"
+          }
+        ]
+      }
+    },
+    {
+      "invoke": {
+        "actionId": "action_set_status",
+        "arguments": {
           "param_id": "a",
           "param_status": "closed"
         }
@@ -418,6 +460,23 @@
           {
             "kind": "remove",
             "key": "a"
+          }
+        ]
+      }
+    },
+    {
+      "invoke": {
+        "actionId": "action_remove",
+        "arguments": {
+          "param_id": "c"
+        }
+      },
+      "expect": {
+        "kind": "update",
+        "changes": [
+          {
+            "kind": "remove",
+            "key": "c"
           }
         ]
       }

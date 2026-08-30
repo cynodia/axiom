@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.13.0-alpha.1. How an application crosses the trust boundary.
+Axiom 0.13.1-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -497,6 +497,8 @@ does for a local failure.
 | `QUERY_PROVIDER_FAILURE` | The provider reported a failure executing the query or applying a provider-record mutation. Carries no state value. |
 | `QUERY_RESULT_TYPE_MISMATCH` | The provider returned rows that do not conform to the query's declared result shape. |
 | `QUERY_PROVIDER_MISSING` | No `DataProvider` is registered for this query's source entity (`AxiomServerOptions.dataProvider` / `dataProviders`). |
+| `QUERY_STATE_REF_NOT_ALLOWED` | A `QueryDef` clause or a `ReadPolicyDef` predicate references a `StateDef`. A query executes on the `DataProvider`, which binds no authority state, so the reference would evaluate to nothing. `compileToServerIR` rejects such a graph; this is the runtime guard if a hand-built IR bypasses validation (spec13.1 F2, §81). Bind a runtime-varying value through a query parameter. |
+| `LIVE_QUERY_PROVIDER_NOT_OBSERVABLE` | `openLiveQuery` for a query whose writable `DataProvider` reports `capabilities.mutationObservation === 'none'` — its committed mutations cannot be made observable to another authority, so a distributed live query is refused rather than served silently stale on a peer (spec13.1 F1, §33, §123). |
 | `LIVE_QUERY_NOT_CAPABLE` | `openLiveQuery` was called for a `QueryDef` that cannot be observed live — its filter / sort / projection reads a nondeterministic builtin (`now`, `uuid`). An aggregate or grouped query is *not* refused here: it is served live as whole-result `reset`s (spec13 §145, §146, §148). |
 | `LIVE_QUERY_CURSOR_INVALID` | An `axiom.live-query-cursor.v1` was tampered with, unsigned, or minted for a different query / principal / arguments / read policy. Fail-closed: continuing from it is refused and nothing is disclosed (spec13 §33-§35). |
 | `LIVE_QUERY_CURSOR_INCOMPATIBLE` | A live-query cursor was minted by an authority whose schema fingerprint, semantic fingerprint or server contract differs from this one's — the same fail-closed compatibility check the distributed work store applies. A presentation-only graph change does *not* trigger this (spec13 §79-§82). |

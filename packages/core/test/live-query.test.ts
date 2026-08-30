@@ -149,23 +149,30 @@ function baseQuery(overrides: Partial<QueryDef> = {}): QueryDef {
   } as QueryDef;
 }
 
-test('queryDependencies: the source entity is always a dependency; a filtered StateDef ref is found', () => {
+test('queryDependencies: the source entity is always a dependency; a StateDef ref is unsupported, not a dependency (spec13.1 F2)', () => {
   const query = baseQuery({
     filter: binary('gte', field(ref(ROW), FID_TOTAL), ref(S_MIN)),
   });
   const deps = queryDependencies(query, undefined, [], new Set([String(S_MIN)]));
   assert.ok(deps.entityIds.has(String(E_ORDER)));
-  assert.ok(deps.stateIds.has(String(S_MIN)));
-  assert.equal(deps.broad, false);
+  assert.ok(deps.unsupportedStateRefs.has(String(S_MIN)), 'a query cannot bind a StateDef');
+  assert.ok(!deps.stateIds.has(String(S_MIN)), 'so it is never advertised as a real dependency');
+  assert.equal(deps.broad, false, 'a known StateDef is not an unresolved ref');
 });
 
 test('queryDependencies: an unresolved ref is conservative (broad = true)', () => {
   const query = baseQuery({
-    filter: binary('eq', field(ref(ROW), FID_TOTAL), ref(nodeId('state_unknown'))),
+    filter: binary('eq', field(ref(ROW), FID_TOTAL), ref(nodeId('scope_unknown'))),
   });
   const deps = queryDependencies(query, undefined, [], new Set());
   assert.equal(deps.broad, true);
-  assert.equal(commitAffectsQuery({ toRevision: 2, entityIds: new Set(['whatever']), stateIds: new Set() }, deps), true);
+  assert.equal(
+    commitAffectsQuery(
+      { toRevision: 2, entityIds: new Set(['whatever']), stateIds: new Set() },
+      deps,
+    ),
+    true,
+  );
 });
 
 test('queryDependencies: a used relationship pulls in both endpoint entities; policy scope is local', () => {
@@ -191,10 +198,23 @@ test('queryDependencies: a used relationship pulls in both endpoint entities; po
 });
 
 test('commitAffectsQuery: matches on entity or state, misses otherwise', () => {
-  const deps = { entityIds: new Set(['entity_order']), stateIds: new Set(['state_a']), broad: false };
+  const deps = {
+    entityIds: new Set(['entity_order']),
+    stateIds: new Set(['state_a']),
+    unsupportedStateRefs: new Set<string>(),
+    broad: false,
+  };
   assert.equal(commitAffectsQuery({ toRevision: 1, entityIds: new Set(['entity_order']), stateIds: new Set() }, deps), true);
   assert.equal(commitAffectsQuery({ toRevision: 1, entityIds: new Set(), stateIds: new Set(['state_a']) }, deps), true);
   assert.equal(commitAffectsQuery({ toRevision: 1, entityIds: new Set(['entity_other']), stateIds: new Set(['state_b']) }, deps), false);
+});
+
+test('queryLiveCapability: a StateDef reference makes a query not-live-capable when stateIds are known (spec13.1 F2)', () => {
+  const query = baseQuery({ filter: binary('gte', field(ref(ROW), FID_TOTAL), ref(S_MIN)) });
+  assert.equal(queryLiveCapability(query, F_ID).capability, 'live-capable', 'unknown without the state set');
+  const classified = queryLiveCapability(query, F_ID, new Set([String(S_MIN)]));
+  assert.equal(classified.capability, 'not-live-capable');
+  assert.match((classified as { reason: string }).reason, /StateDef/);
 });
 
 // --------------------------------------------------------------- capability analysis

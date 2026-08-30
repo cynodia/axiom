@@ -47,6 +47,9 @@ export function createMemoryDataProvider(options: MemoryDataProviderOptions): Da
   }
   const maxPageSize = options.maxPageSize ?? 100;
   const note = options.onProviderCall ?? (() => {});
+  // A monotone count of committed mutation batches (spec13.1 F1). In-process only — the
+  // memory provider is the single-process reference and says so via `mutationObservation`.
+  let mutationGeneration = 0;
 
   const table = (entityId: NodeId): Row[] => tables.get(entityId as unknown as string) ?? [];
 
@@ -186,6 +189,11 @@ export function createMemoryDataProvider(options: MemoryDataProviderOptions): Da
         'local-evaluation',
       ],
       maxPageSize,
+      mutationObservation: 'in-process',
+    },
+
+    async observedMutationGeneration(): Promise<number> {
+      return mutationGeneration;
     },
 
     async query(query: ProviderQuery): Promise<ProviderResult<ProviderPage>> {
@@ -296,6 +304,9 @@ export function createMemoryDataProvider(options: MemoryDataProviderOptions): Da
           rows[index] = { ...rows[index], ...(mutation.row ?? {}) };
         }
       }
+      // One committed batch → one generation advance (spec13.1 §134): a remote authority
+      // only needs to learn that meaning *may* have changed, not per-row.
+      mutationGeneration += 1;
       return { ok: true, value: null };
     },
 

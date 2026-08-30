@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.13.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.13.1-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -1069,12 +1069,27 @@ insert/remove above. `insert`/`move` carry a target index into the final result.
 conformance oracle.
 
 Invalidation: conservative static dependency set (`queryDependencies`) — source entity, used
-relationship endpoints, read-policy entity, `StateDef`s read by any clause or the policy
-predicate; an unresolved `ref` → `broad` (re-evaluate on every commit). Local commits wake
-the engine synchronously; a **remote** commit is seen via `persistence.revision()` re-observed
-on an interval (`liveQueryPollMs`, default 250). No broadcast, no sticky routing. A
-non-Axiom write to the provider store is not observed until the next Axiom commit
-(documented limit).
+relationship endpoints, read-policy entity; an unresolved `ref` → `broad` (re-evaluate on
+every commit). Local commits wake the engine synchronously; a **remote** commit — a
+`StateDef` *or* a `provider-record` mutation — is seen through the **observable application
+revision**, projected from two durable sources re-observed on an interval (`liveQueryPollMs`,
+default 250): `stateRevision` (`persistence.revision()`, StateDef commits) and
+`dataGeneration` (Σ of each provider's `observedMutationGeneration()`, advanced **atomically
+inside `applyMutations`**). `server.revisionInspection()` → `{ applicationRevision,
+stateRevision, dataGeneration }` (kept distinct). No broadcast, no sticky routing, no Redis.
+Every `provider-record` mutation committed through an Axiom `ActionDef` (insert / update /
+delete) participates — a `StateDef` "sync pulse" is **not** required. A non-Axiom write
+straight to the provider store is not observed until the next Axiom commit (documented
+limit). `DataProvider.capabilities.mutationObservation` = `'durable'` (SQLite) /
+`'in-process'` (memory) / `'none'`; `openLiveQuery` on a writable `'none'` provider is
+refused `LIVE_QUERY_PROVIDER_NOT_OBSERVABLE`.
+
+QueryDef scope: a query clause (and a `ReadPolicy` predicate) may reference `ref(rowScopeId)`
+/ parameters / relationship binds / `PRINCIPAL` / nested iteration scopes — **not** a
+`StateDef`. A `StateDef` ref is `QUERY_STATE_REF_NOT_ALLOWED` at `validateGraph` /
+`compileToServerIR`; `analyzeLiveQuery` → `not-live-capable` +
+`dependencies.unsupportedStateRefs`; runtime guards a hand-built IR. Bind a runtime-varying
+value as a query **parameter**.
 
 Authorization: `ReadPolicy` + principal bound into every re-evaluation; a row that becomes
 invisible leaves as `remove` / `reset`; unauthorized data never retained past one
@@ -1101,7 +1116,8 @@ Portable tier: `axiom.conformance.v7` (`conformance/live/`), `runLiveQueryConfor
 / `runLiveQueryConformanceSuite`. Server IR stays `axiom.server.v7`.
 
 Diagnostics: `LIVE_QUERY_NOT_CAPABLE` `LIVE_QUERY_CURSOR_INVALID`
-`LIVE_QUERY_CURSOR_INCOMPATIBLE` `LIVE_QUERY_EVALUATION_FAILED`.
+`LIVE_QUERY_CURSOR_INCOMPATIBLE` `LIVE_QUERY_EVALUATION_FAILED`
+`LIVE_QUERY_PROVIDER_NOT_OBSERVABLE` `QUERY_STATE_REF_NOT_ALLOWED`.
 
 ## Metadata classes
 

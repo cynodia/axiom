@@ -1,11 +1,12 @@
 {
   "conformance": "axiom.conformance.v7",
-  "name": "remove-on-filter-exit",
+  "name": "f2-state-ref-refused",
   "covers": [
-    "remove",
-    "filter-membership"
+    "f2",
+    "query-scope",
+    "validation"
   ],
-  "description": "An open order flipped to closed leaves the result as a remove.",
+  "description": "A hand-tampered Server IR whose query filter references a StateDef. Opening a live query on it is refused with QUERY_STATE_REF_NOT_ALLOWED — the runtime never serves a plausible-but-wrong result (spec13.1 F2, §81).",
   "serverIR": {
     "contract": "axiom.server.v6",
     "id": "live-query-conformance",
@@ -85,7 +86,18 @@
         }
       }
     },
-    "states": [],
+    "states": [
+      {
+        "id": "state_threshold",
+        "kind": "state",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "number"
+        },
+        "initialValue": 0
+      }
+    ],
     "actions": {
       "action_set_status": {
         "id": "action_set_status",
@@ -224,18 +236,38 @@
         "rowScopeId": "scope_row",
         "filter": {
           "kind": "binary",
-          "operator": "eq",
+          "operator": "and",
           "left": {
-            "kind": "field",
-            "source": {
-              "kind": "ref",
-              "targetId": "scope_row"
+            "kind": "binary",
+            "operator": "eq",
+            "left": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_order_status"
             },
-            "fieldId": "field_order_status"
+            "right": {
+              "kind": "literal",
+              "value": "open"
+            }
           },
           "right": {
-            "kind": "literal",
-            "value": "open"
+            "kind": "binary",
+            "operator": "gte",
+            "left": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_order_total"
+            },
+            "right": {
+              "kind": "ref",
+              "targetId": "state_threshold"
+            }
           }
         },
         "sort": [
@@ -391,36 +423,8 @@
   "open": {
     "queryId": "query_open_orders"
   },
-  "expectInitial": [
-    {
-      "field_order_id": "c",
-      "field_order_status": "open",
-      "field_order_total": 20
-    },
-    {
-      "field_order_id": "a",
-      "field_order_status": "open",
-      "field_order_total": 30
-    }
-  ],
-  "steps": [
-    {
-      "invoke": {
-        "actionId": "action_set_status",
-        "arguments": {
-          "param_id": "a",
-          "param_status": "closed"
-        }
-      },
-      "expect": {
-        "kind": "update",
-        "changes": [
-          {
-            "kind": "remove",
-            "key": "a"
-          }
-        ]
-      }
-    }
-  ]
+  "expectInitial": {
+    "errorCode": "QUERY_STATE_REF_NOT_ALLOWED"
+  },
+  "steps": []
 }

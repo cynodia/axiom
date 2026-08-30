@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.13.0-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.13.1-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -908,3 +908,60 @@ A `QueryDef` whose filter / sort / projection reads a nondeterministic builtin i
 changed" has no meaning, and `openLiveQuery` returns `LIVE_QUERY_NOT_CAPABLE`. Express the
 window as a bound parameter (`ref(P_SINCE)`), or observe a status field that an action or a
 scheduled trigger maintains, and let *that* commit drive the live query.
+
+## 69. Assuming a provider-record commit only needs to wake the *local* live-query engine
+
+```ts
+// WRONG (the shape of the defect the 0.13.1 hardening fixed) — mutate provider data and rely on the
+// authority that did the write to notice.
+{ kind: 'set', target: providerRecordFieldLocation(E_ORDER, F_ID, ref(P_ID), F_STATUS), value: literal('shipped') }
+// … a live query served from a *different* authority never re-evaluates.
+```
+
+Why wrong: a `provider-record` mutation touches the `DataProvider`, not the
+`PersistenceAdapter`, so `persistence.revision()` does not move and a remote authority's
+poll sees nothing. A committed change stays permanently invisible where it is not observed,
+and the live result then depends on *which* authority happens to serve the query — a
+topology-dependent meaning.
+
+The framework closes this: the SQLite provider advances a durable `mutationGeneration`
+**inside** the same `applyMutations` transaction, and every authority's live-query poll
+re-reads it alongside `persistence.revision()`. There is nothing for the application to do —
+no revision bump, no `StateDef` "sync pulse", no broadcast. If your own custom `DataProvider`
+supports writes, it MUST implement `observedMutationGeneration()` (advanced atomically with
+`applyMutations`) or declare `mutationObservation: 'none'` and accept that
+`openLiveQuery` is refused for it.
+
+## 70. Bumping a `StateDef` counter so a provider-record change "syncs"
+
+```ts
+// WRONG — the audit counter is load-bearing for correctness, which it must never be.
+operations: [
+  { kind: 'set', target: providerRecordFieldLocation(E_ORDER, F_ID, ref(P_ID), F_STATUS), value: ref(P_STATUS) },
+  { kind: 'set', target: stateLocation(S_OPS), value: binary('add', ref(S_OPS), literal(1)) }, // "so remote live queries wake"
+]
+```
+
+Why wrong: it works by accident — the `StateDef` write moves `persistence.revision()`, which
+the poll observes — and it fails the moment an action legitimately mutates only provider
+records. Live-query invalidation observes the *provider's* durable generation directly; a
+provider-record-only action is fully observable on its own. Write the `StateDef` only if the
+application actually needs it.
+
+## 71. Referencing a `StateDef` from a `QueryDef` filter
+
+```ts
+// WRONG — `QUERY_STATE_REF_NOT_ALLOWED` at validateGraph / compileToServerIR.
+{
+  id: Q_LARGE_ORDERS, kind: 'query', source: E_ORDER, rowScopeId: ROW,
+  filter: binary('gte', field(ref(ROW), F_TOTAL), ref(S_THRESHOLD)),   // S_THRESHOLD is a StateDef
+}
+```
+
+Why wrong: a `QueryDef` clause is evaluated **by the `DataProvider`**, whose scope has no
+authority state — `ref(S_THRESHOLD)` would resolve to nothing and the query would silently
+return an empty (or wrong) result. Before 0.13.1, `validateGraph` accepted this,
+`queryDependencies` advertised the "dependency", and only execution disagreed. Now every
+layer rejects it consistently. Bind the threshold as a **query parameter** and pass it from
+the action, trigger or client that runs the query. (A `ReadPolicyDef` predicate shares the
+same state-free scope and the same rule.)

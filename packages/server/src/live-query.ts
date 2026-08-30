@@ -33,6 +33,7 @@ import {
   diffResults,
   queryDependencies,
   queryLiveCapability,
+  queryStateReferences,
   rowKey,
   LIVE_QUERY_NONDETERMINISTIC_BUILTINS,
   type CommitChangeset,
@@ -49,6 +50,7 @@ export {
   diffResults,
   queryDependencies,
   queryLiveCapability,
+  queryStateReferences,
   rowKey,
   LIVE_QUERY_NONDETERMINISTIC_BUILTINS,
 };

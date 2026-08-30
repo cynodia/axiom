@@ -1,6 +1,6 @@
 # Semantic data access & the query layer
 
-Axiom 0.13.0-alpha.1. The operational contract for demand-driven reads over authoritative
+Axiom 0.13.1-alpha.1. The operational contract for demand-driven reads over authoritative
 data that is too large to materialize as a `StateDef` — 500,000 orders, 5,000,000 order
 lines, years of audit rows. `axiom.server.v6`.
 
@@ -57,6 +57,12 @@ Rules:
 Operators reuse `Expression` semantics: `binary('eq' | 'neq' | 'lt' | 'lte' | 'gt' | 'gte'
 | 'and' | 'or', …)`, `unary('not', …)`, and the `contains` built-in for substring/membership.
 There is one comparison language, not two.
+
+**Expression scope.** Every `QueryDef` clause (and a `ReadPolicyDef` predicate) is evaluated
+by the `DataProvider`. In scope: `ref(rowScopeId)`, `ref(<parameter id>)`, `ref(<relationship
+bindAs>)`, `PRINCIPAL`, and nested iteration scopes. **Not** a `StateDef` — the provider
+binds no authority state, so `ref(<state id>)` in a query clause is rejected
+(`QUERY_STATE_REF_NOT_ALLOWED`). Pass a runtime-varying value as a query parameter.
 
 ### Null semantics (frozen)
 

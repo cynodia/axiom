@@ -1,4 +1,4 @@
-import { AGGREGATE_FUNCTIONS, BUILTIN_FUNCTIONS, expressionDefsIn } from './expressions.js';
+import { AGGREGATE_FUNCTIONS, BUILTIN_FUNCTIONS, expressionDefsIn, walkExpression } from './expressions.js';
 import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
 import { VALIDATION_CODES } from './diagnostics.js';
@@ -30,6 +30,7 @@ import { BLOB_REF_FIELDS } from './storage.js';
 import type { StorageDef } from './storage.js';
 import type { QueryDef } from './query.js';
 import { queryPaginationStrategy, sortKeyDirection } from './query.js';
+import { queryStateReferences } from './live-query.js';
 import type { RelationshipDef } from './relationships.js';
 import { relationshipIsToOne } from './relationships.js';
 import type { ReadPolicyDef } from './read-policy.js';
@@ -1047,6 +1048,22 @@ function validateReadPolicy(policy: ReadPolicyDef, context: Context): void {
       nodeId: policy.id,
     });
   }
+  // A read policy predicate is AND-ed into a query filter and evaluated by the data
+  // provider, in the same state-free scope as the query itself (spec13.1 F2, §82).
+  for (const [id, node] of context.nodes) {
+    if (node.kind !== 'state') continue;
+    let referenced = false;
+    walkExpression(policy.predicate, (expr) => {
+      if (expr.kind === 'ref' && expr.targetId === id && expr.targetId !== policy.rowScopeId) referenced = true;
+    });
+    if (referenced) {
+      context.errors.push({
+        code: VALIDATION_CODES.queryStateRefNotAllowed,
+        message: `Read policy ${policy.id} references StateDef ${String(id)}; a policy predicate runs on the data provider and cannot bind authority state.`,
+        nodeId: policy.id,
+      });
+    }
+  }
 }
 
 /** Builds the single-row scope a read policy or a query filter is evaluated in. */
@@ -1210,6 +1227,21 @@ function validateQuery(query: QueryDef, context: Context): void {
       scope.ids.add(use.bindAs);
       scope.types.set(use.bindAs, relationshipIsToOne(relationship) ? target : collectionType(target));
     }
+  }
+
+  // A QueryDef executes on the DataProvider, which binds no authority state. A `ref` to a
+  // `StateDef` in any clause would evaluate to nothing at run time, so every layer — this
+  // validator, the compiler, dependency analysis, live-capability, AgentAPI and the runtime
+  // — must reject it rather than one accepting what the others cannot execute (spec13.1 F2).
+  const knownStateIds = new Set<string>(
+    [...context.nodes.values()].filter((node) => node.kind === 'state').map((node) => String(node.id)),
+  );
+  for (const stateId of queryStateReferences(query, knownStateIds)) {
+    context.errors.push({
+      code: VALIDATION_CODES.queryStateRefNotAllowed,
+      message: `Query ${query.id} references StateDef ${stateId}; a QueryDef clause runs on the data provider and cannot bind authority state. Pass a runtime-varying value as a query parameter instead.`,
+      nodeId: query.id,
+    });
   }
 
   if (query.filter) {
