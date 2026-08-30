@@ -99,8 +99,12 @@ class MessageReader {
     if (!this.pending) this.pending = this.it.next();
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<typeof SENTINEL>((resolve) => {
+      // Deliberately *not* unref'd. When the expected answer is `none` this timer is the only
+      // thing left in the event loop — the live-query engine is idle by definition and the
+      // authority's revision poll is itself unref'd — so an unref'd timeout lets the loop
+      // drain, and `await` on a promise nothing will ever settle. `clearTimeout` in the
+      // `finally` below is what stops it outliving the read.
       timer = setTimeout(() => resolve(SENTINEL), ms);
-      timer.unref?.();
     });
     try {
       const result = await Promise.race([this.pending, timeout]);

@@ -159,8 +159,10 @@ function invoke(actionId: string, args: Record<string, unknown>): ServerRequest 
 async function nextMessage(it: AsyncIterator<LiveQueryMessage>): Promise<LiveQueryMessage> {
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
+    // Not unref'd: this timer is the only thing holding the loop open while an idle engine
+    // is being waited on, and it is what turns a stalled stream into this error rather than
+    // an opaque "event loop has already resolved" cancellation.
     timer = setTimeout(() => reject(new Error('no live message within 1s')), 1000);
-    timer.unref?.();
   });
   try {
     const r = await Promise.race([it.next(), timeout]);

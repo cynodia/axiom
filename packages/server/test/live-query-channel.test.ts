@@ -99,8 +99,8 @@ const invoke = (actionId: string, args: Record<string, unknown>): ServerRequest 
 async function nextMessage(it: AsyncIterator<LiveQueryMessage>): Promise<LiveQueryMessage> {
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
+    // Not unref'd — see the note in live-query.test.ts.
     timer = setTimeout(() => reject(new Error('no channel message within 1s')), 1000);
-    timer.unref?.();
   });
   try {
     const r = await Promise.race([it.next(), timeout]);
