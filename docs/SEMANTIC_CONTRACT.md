@@ -1,6 +1,6 @@
 # Semantic contract
 
-Axiom 0.12.1-alpha.1. Runtime guarantees, stated formally. This file defines behavior; it
+Axiom 0.13.0-alpha.1. Runtime guarantees, stated formally. This file defines behavior; it
 does not teach. Where this file and any specification in `../specs/` disagree, this file
 describes the implementation and is authoritative.
 

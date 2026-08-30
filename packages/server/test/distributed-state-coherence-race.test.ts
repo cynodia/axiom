@@ -36,14 +36,15 @@ function spawnAuthority(stateDb: string, id: string): Promise<Authority> {
     let stderr = '';
     child.stderr?.on('data', (c) => (stderr += String(c)));
     child.on('error', reject);
-    const pending: Array<(m: Record<string, unknown>) => void> = [];
+    const pending: Array<{ resolve: (m: Record<string, unknown>) => void; want: string }> = [];
     child.on('message', (m: Record<string, unknown>) => {
       if (m?.type === 'ready') {
         resolve({
           child,
           send: (msg) =>
             new Promise((res) => {
-              pending.push(res);
+              const want = msg.type === 'snapshot' ? 'snapshot' : 'result';
+              pending.push({ resolve: res, want });
               child.send(msg);
             }),
           stop: () => child.send({ type: 'stop' }),
@@ -51,7 +52,11 @@ function spawnAuthority(stateDb: string, id: string): Promise<Authority> {
         return;
       }
       const next = pending.shift();
-      if (next) next(m);
+      if (!next) throw new Error(`authority ${id} sent an unsolicited message: ${JSON.stringify(m)}`);
+      if (m?.type !== 'error' && m?.type !== next.want) {
+        throw new Error(`authority ${id} reply desync: wanted ${next.want}, got ${JSON.stringify(m)}`);
+      }
+      next.resolve(m);
     });
     child.on('exit', (code, signal) => {
       if (stderr.includes('SQLITE') || stderr.includes('ERR_SQLITE_ERROR') || stderr.includes('database is locked')) {
@@ -151,17 +156,20 @@ test(
 
       // Every losing authority recovers: retrying (after its own automatic reconciliation)
       // succeeds, and its committed amount is then observed everywhere. No permanent wedge.
-      let expectedTotal = (await authorities[0]!.send({ type: 'snapshot' })).ledger as number;
+      // Each of the four deposits lands exactly once — a winner in the race above, a loser
+      // through its retry here — so the converged total is the deterministic sum of all four
+      // amounts, independent of who won. (Deriving it from a post-race snapshot instead is
+      // racy: that snapshot need not yet equal the sum of the race winners.)
       for (let i = 0; i < authorities.length; i += 1) {
         if (results[i]?.ok === true) continue; // this one already committed in the race
         let ok = false;
-        for (let attempt = 0; attempt < 5 && !ok; attempt += 1) {
+        for (let attempt = 0; attempt < 8 && !ok; attempt += 1) {
           const retry = await authorities[i]!.send({ type: 'deposit', amount: (i + 1) * 10 });
           ok = retry.ok === true;
         }
         assert.ok(ok, `authority ${i} recovered and committed its deposit after losing the race`);
-        expectedTotal += (i + 1) * 10;
       }
+      const expectedTotal = authorities.reduce((sum, _a, i) => sum + (i + 1) * 10, 0);
 
       // All authorities converge to the same total.
       for (const a of authorities) {

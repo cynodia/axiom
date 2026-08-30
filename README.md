@@ -12,7 +12,7 @@ mutations and persists them. Neither is written by hand: there is no route, cont
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
 **Status: experimental / alpha.** The API may change between alpha releases. This
-documentation describes 0.12.1-alpha.1.
+documentation describes 0.13.0-alpha.1.
 
 ## AI agents: read this first
 
@@ -164,6 +164,7 @@ full in the linked contract.
 38. **Authoritative data too large to materialize is a `QueryDef`, not a `StateDef`.** The graph names the source, filter, sort, projection, relationships, aggregation, pagination and read policy; a `DataProvider` decides SQL, indexes and execution plan. The client invokes a query by id and never a query language. Full model: [`docs/QUERIES.md`](docs/QUERIES.md).
 39. **A read policy is declared once and enforced on the authority.** Its predicate is AND-ed into every query's effective filter before the provider runs, so it scopes rows, aggregates and relationship traversals uniformly — and a client argument can never remove it.
 40. **A deployed schema evolves through `MigrationDef`, never a SQL migration or a callback.** `graph.schemaVersion` and `schemaFingerprint(graph)` are what the startup gate checks against the provider's durable record — a mismatch refuses startup with a specific diagnostic, never a hopeful start. A transform is an `Expression` tree over the old record; row migration is keyset-batched, checkpointed and crash-resumable; a destructive change needs explicit approval or performs zero writes. Full model: [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md).
+41. **A `QueryDef` result can be observed live — subscribe, get an initial result, then canonical `insert`/`remove`/`update`/`move`/`reset` deltas as authoritative state moves.** No application transport, polling, broadcast, fan-out, sticky routing or diffing. Reconnect works through any compatible authority (first message is a `reset`); the resume cursor is HMAC-sealed and fail-closed; a nondeterministic query is refused, an aggregate is served as resets. Full model: [`docs/LIVE_QUERIES.md`](docs/LIVE_QUERIES.md).
 
 ## Installation
 
@@ -177,7 +178,7 @@ Every release of this project is a pre-release and npm's `latest` tag points at 
 plain commands above install the current version. **There is no `alpha` dist-tag** — it was
 removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` fails with a
 404. Pin the exact version instead when one is needed:
-`npm install @cynodia/axiom@0.12.1-alpha.1`.
+`npm install @cynodia/axiom@0.13.0-alpha.1`.
 
 The server package is separate rather than re-exported, because it imports `node:http` and
 `node:sqlite` and a browser bundle must not.
@@ -526,6 +527,7 @@ the published package — no repository access is needed to obtain the contract.
 | **Large authoritative datasets: `QueryDef`, relationships, read policy, providers, cursors** | [`docs/QUERIES.md`](docs/QUERIES.md) |
 | **Evolving a deployed schema: `MigrationDef`, fingerprint, the startup gate, `executeMigration`, providers** | [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md) |
 | **Running N authority processes at once: ownership, leases, fencing, delivery guarantees, version skew** | [`docs/DISTRIBUTED_AUTHORITY.md`](docs/DISTRIBUTED_AUTHORITY.md) |
+| **Observing a `QueryDef` result over time: deltas, reconnect, cursor, backpressure, transport** | [`docs/LIVE_QUERIES.md`](docs/LIVE_QUERIES.md) |
 | Runtime API, startup lifecycle and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
 | Machine queries and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 | Validation codes and what rejects a graph | [`docs/VALIDATION.md`](docs/VALIDATION.md) |

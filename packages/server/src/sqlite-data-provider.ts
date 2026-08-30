@@ -88,6 +88,23 @@ export async function createSqliteDataProvider(
   const db = new module.DatabaseSync(options.location);
   const maxPageSize = options.maxPageSize ?? 100;
 
+  // A file-backed provider may be shared by several OS-process authorities (spec13 §159).
+  // WAL lets a reader run while a writer holds the file, and a bounded busy wait absorbs the
+  // brief exclusive lock at commit — a physical `SQLITE_BUSY` must not surface as a query
+  // failure. Harmless for `:memory:`.
+  if (options.location !== ':memory:') {
+    try {
+      db.exec('PRAGMA journal_mode = WAL;');
+    } catch {
+      /* a read-only medium or an unsupported build — fall back to the default journal */
+    }
+  }
+  try {
+    db.exec('PRAGMA busy_timeout = 4000;');
+  } catch {
+    /* older node:sqlite without pragma support */
+  }
+
   const entitiesById = new Map(options.entities.map((entity) => [entity.id, entity]));
   const columnsOf = (entityId: NodeId): FieldId[] =>
     (entitiesById.get(entityId)?.fields ?? []).map((field) => field.id);

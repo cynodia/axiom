@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.12.1-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.13.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -1045,6 +1045,63 @@ Server IR stays `axiom.server.v7`.
 
 Diagnostics: `WORK_IN_PROGRESS` `WORK_FENCED` `WORK_NOT_CLAIMABLE` `INCOMPATIBLE_AUTHORITY`
 `EVENT_ID_CONFLICT`.
+
+## LIVE QUERIES
+
+Full model: [`LIVE_QUERIES.md`](LIVE_QUERIES.md).
+
+A **`QueryDef` result observed over time**. `server.openLiveQuery({ queryId, arguments?,
+credential? })` → `AsyncIterable<LiveQueryMessage> & { subscriptionId, cursor(), close() }`.
+Messages: `initial` (coherent result + revision) → `update` (a `LiveQueryDelta`) / `reset`
+(whole result) / `error` (last result stands) / `closed`. The application writes **no**
+transport, polling, broadcast, fan-out, sticky routing or diffing.
+
+Capability (`queryLiveCapability`, `AgentAPI.analyzeLiveQuery`): `live-capable` (incremental
+`insert`/`remove`/`update`/`move`, keyed by the source entity's identity field);
+`live-capable-reset-only` (aggregate / grouped / no identity field → whole `reset`s);
+`not-live-capable` (reads `now` / `uuid` → `openLiveQuery` returns `LIVE_QUERY_NOT_CAPABLE`).
+
+Delta model (`@cynodia/axiom-core`: `diffResults` / `applyDelta` / `rowKey`): recompute-and-
+compare, correctness before minimal diff. `key` = stringified identity value. `move` only for
+a real relative-order change (LCS of surviving keys), never an index shift from an
+insert/remove above. `insert`/`move` carry a target index into the final result. Applying
+`initial` + the stream reproduces a fresh one-shot `QueryDef` execution exactly — the
+conformance oracle.
+
+Invalidation: conservative static dependency set (`queryDependencies`) — source entity, used
+relationship endpoints, read-policy entity, `StateDef`s read by any clause or the policy
+predicate; an unresolved `ref` → `broad` (re-evaluate on every commit). Local commits wake
+the engine synchronously; a **remote** commit is seen via `persistence.revision()` re-observed
+on an interval (`liveQueryPollMs`, default 250). No broadcast, no sticky routing. A
+non-Axiom write to the provider store is not observed until the next Axiom commit
+(documented limit).
+
+Authorization: `ReadPolicy` + principal bound into every re-evaluation; a row that becomes
+invisible leaves as `remove` / `reset`; unauthorized data never retained past one
+re-evaluation. Reconnect re-establishes it from scratch.
+
+Reconnect: `server.resumeLiveQuery(cursor, { queryId, ... })` through **any** compatible
+authority; first message is a `reset` at the current revision — a replay gap always resolves
+as a `reset`. Cursor = `axiom.live-query-cursor.v1`, server-sent, **no ACK**, HMAC-sealed,
+fail-closed on query / principal / arguments / policy (`LIVE_QUERY_CURSOR_INVALID`) or
+schema / semantic / contract (`LIVE_QUERY_CURSOR_INCOMPATIBLE`); a presentation-only change
+still resumes.
+
+Delivery: at-least-once logical, update identity `(subscriptionId, toRevision)`;
+per-subscription monotonic-by-revision order, nothing across subscriptions; intermediate
+revisions may be coalesced; slow consumer bounded (`maxPendingChanges`, default 256 →
+collapse to one `reset`). Physical network delivery is the transport adapter's to describe.
+
+Transport: `serveLiveQueryChannel(server, channel)` + `createLiveQueryChannelClient(channel)`
+pump the handle over any duplex frame channel (`open`/`resume`/`close` ⇄
+`message`/`error`/`closed`); `createInMemoryChannelPair()` for tests / worker transport. Not
+application code, not normative.
+
+Portable tier: `axiom.conformance.v7` (`conformance/live/`), `runLiveQueryConformanceFixture`
+/ `runLiveQueryConformanceSuite`. Server IR stays `axiom.server.v7`.
+
+Diagnostics: `LIVE_QUERY_NOT_CAPABLE` `LIVE_QUERY_CURSOR_INVALID`
+`LIVE_QUERY_CURSOR_INCOMPATIBLE` `LIVE_QUERY_EVALUATION_FAILED`.
 
 ## Metadata classes
 

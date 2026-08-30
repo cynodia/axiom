@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.12.1-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.13.0-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -853,3 +853,58 @@ A lost optimistic race returns `CONCURRENCY_CONFLICT` to the losing invocation a
 authority refreshes itself for subsequent requests. The framework does **not** silently
 replay the action — replay is only safe when an existing contract proves it. A caller that
 wants to retry must decide, per action, that re-running it is semantically safe.
+
+## 65. A polling loop, a WebSocket handler, or a broadcast to keep a query fresh
+
+```ts
+// WRONG — the application is reimplementing what a live query already is.
+setInterval(async () => {
+  const page = await server.handle({ kind: 'query', queryId: Q_OPEN_ORDERS, /* … */ });
+  io.emit('orders', page);            // manual fan-out
+}, 1000);
+socket.on('orders', (rows) => diff(current, rows));   // manual diffing
+```
+
+`server.openLiveQuery({ queryId })` returns an `AsyncIterable<LiveQueryMessage>`: an
+`initial` result, then canonical `insert` / `remove` / `update` / `move` / `reset` deltas as
+authoritative state moves. Invalidation, re-evaluation, coalescing, backpressure and the
+delta computation are the runtime's. `serveLiveQueryChannel` pumps the handle over a socket
+as framework glue. No `setInterval`, no `io.emit`, no `redis.publish`, no manual diff.
+
+## 66. Sticky-session routing so a live consumer stays on "its" authority
+
+```ts
+// WRONG — pinning the consumer to the authority that opened the subscription.
+route(`/live/${subscriptionId}`, toAuthority(ownerOf(subscriptionId)));
+```
+
+`server.resumeLiveQuery(cursor, { queryId })` works through **any** compatible authority. The
+resuming authority holds no materialized result, re-evaluates fresh, and the first message
+is a `reset` at the current revision. A lost or overloaded owner never blocks a consumer,
+and no load balancer needs to know which authority owns which subscription.
+
+## 67. Storing the resume cursor server-side and ACKing every delivery
+
+```ts
+// WRONG — inventing an ACK protocol and a server-side cursor table.
+await cursorTable.put(subscriptionId, lastDeliveredRevision);
+client.send({ ack: message.revision });
+```
+
+The `axiom.live-query-cursor.v1` token is **server-sent and not acknowledged**. The server
+advances it as it delivers; the client keeps only the most recent one and presents it to
+`resumeLiveQuery`. It is HMAC-sealed and fail-closed — a tampered or cross-principal /
+cross-query / cross-build cursor is refused, not decoded.
+
+## 68. Making a live query out of `now()` and expecting incremental deltas
+
+```ts
+// WRONG — "orders created in the last hour" as a live query.
+filter: binary('gte', field(ref(ROW), F_CREATED), binary('subtract', call('now'), literal(3600_000)))
+```
+
+A `QueryDef` whose filter / sort / projection reads a nondeterministic builtin is
+`not-live-capable`: its result is not a pure function of committed state, so "the result
+changed" has no meaning, and `openLiveQuery` returns `LIVE_QUERY_NOT_CAPABLE`. Express the
+window as a bound parameter (`ref(P_SINCE)`), or observe a status field that an action or a
+scheduled trigger maintains, and let *that* commit drive the live query.

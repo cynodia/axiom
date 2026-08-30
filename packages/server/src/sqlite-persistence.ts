@@ -149,21 +149,29 @@ export async function createSqlitePersistence(
       // busy handling. A physical lock we wait out then re-checks conflicts against the
       // now-current revisions, so a concurrent writer's commit becomes a legitimate
       // CONCURRENCY_CONFLICT rather than a leaked SQLITE_BUSY (spec12.1 §32).
+      //
+      // The conflict check and the revision it is checked against MUST be read inside the
+      // `BEGIN IMMEDIATE` transaction. Read outside it and two OS processes can both pass the
+      // check against revision r, both compute r+1, and both COMMIT — the second silently
+      // clobbers the first while both report `committed: true` and a lost write survives
+      // forever (spec12.1 §31, F1). `BEGIN IMMEDIATE` takes the RESERVED lock up front, so a
+      // racing writer blocks here, then re-reads the now-advanced revision and conflicts.
       try {
         return await guard('sqlitePersistence.commit', () => {
-          const conflicts = commit.writes
-            .map((write) => write.stateId)
-            .filter(
-              (stateId) =>
-                Number(readOne.get(stateId)?.revision ?? 0) !== (commit.expected[stateId] ?? 0),
-            );
-          if (conflicts.length > 0) {
-            return { committed: false, revision: currentRevision(), conflicts };
-          }
-
-          const revision = currentRevision() + 1;
           database.exec('BEGIN IMMEDIATE');
           try {
+            const conflicts = commit.writes
+              .map((write) => write.stateId)
+              .filter(
+                (stateId) =>
+                  Number(readOne.get(stateId)?.revision ?? 0) !== (commit.expected[stateId] ?? 0),
+              );
+            if (conflicts.length > 0) {
+              database.exec('ROLLBACK');
+              return { committed: false, revision: currentRevision(), conflicts };
+            }
+
+            const revision = currentRevision() + 1;
             for (const write of commit.writes) {
               upsert.run(write.stateId, revision, JSON.stringify(write.value ?? null));
             }
@@ -172,6 +180,7 @@ export async function createSqlitePersistence(
               insertEffect.run(effect.id, JSON.stringify(effect), effect.status);
             }
             database.exec('COMMIT');
+            return { committed: true, revision, conflicts: [] };
           } catch (error) {
             try {
               database.exec('ROLLBACK');
@@ -180,7 +189,6 @@ export async function createSqlitePersistence(
             }
             throw error;
           }
-          return { committed: true, revision, conflicts: [] };
         });
       } catch (error) {
         if (error instanceof SqliteContentionError) {

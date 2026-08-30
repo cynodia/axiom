@@ -7,6 +7,8 @@ import { inspectSchema, migrationImpact } from './migration.js';
 import type { MigrationImpact, SchemaInspection } from './migration.js';
 import { inspectDistributedSemantics } from './distributed.js';
 import type { DistributedSemanticsInspection } from './distributed.js';
+import { analyzeLiveQuery } from './live-query.js';
+import type { LiveQueryAnalysis } from './live-query.js';
 
 /**
  * The machine-facing interface to an application. Agents query semantics and apply
@@ -77,5 +79,16 @@ export class AgentAPI extends PresentationQueries {
    */
   inspectDistributedSemantics(serverContract?: string): DistributedSemanticsInspection {
     return inspectDistributedSemantics(this.graph, serverContract);
+  }
+
+  /**
+   * The live-query semantics of one `QueryDef` (spec13 §38, §148, §149): whether it can be
+   * observed live and how (incremental deltas, whole resets, or not at all), the conservative
+   * set of committed changes that invalidate it, its row identity field, and what a resume
+   * cursor is bound to. Static over the graph; live runtime state is
+   * `AxiomServer.inspectLiveQueries()`.
+   */
+  analyzeLiveQuery(queryId: string): LiveQueryAnalysis {
+    return analyzeLiveQuery(this.graph, queryId);
   }
 }

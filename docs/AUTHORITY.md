@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.12.1-alpha.1. How an application crosses the trust boundary.
+Axiom 0.13.0-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -497,6 +497,10 @@ does for a local failure.
 | `QUERY_PROVIDER_FAILURE` | The provider reported a failure executing the query or applying a provider-record mutation. Carries no state value. |
 | `QUERY_RESULT_TYPE_MISMATCH` | The provider returned rows that do not conform to the query's declared result shape. |
 | `QUERY_PROVIDER_MISSING` | No `DataProvider` is registered for this query's source entity (`AxiomServerOptions.dataProvider` / `dataProviders`). |
+| `LIVE_QUERY_NOT_CAPABLE` | `openLiveQuery` was called for a `QueryDef` that cannot be observed live — its filter / sort / projection reads a nondeterministic builtin (`now`, `uuid`). An aggregate or grouped query is *not* refused here: it is served live as whole-result `reset`s (spec13 §145, §146, §148). |
+| `LIVE_QUERY_CURSOR_INVALID` | An `axiom.live-query-cursor.v1` was tampered with, unsigned, or minted for a different query / principal / arguments / read policy. Fail-closed: continuing from it is refused and nothing is disclosed (spec13 §33-§35). |
+| `LIVE_QUERY_CURSOR_INCOMPATIBLE` | A live-query cursor was minted by an authority whose schema fingerprint, semantic fingerprint or server contract differs from this one's — the same fail-closed compatibility check the distributed work store applies. A presentation-only graph change does *not* trigger this (spec13 §79-§82). |
+| `LIVE_QUERY_EVALUATION_FAILED` | Re-evaluating the live query against the `DataProvider` after a committed change failed. Delivered as a `{ kind: 'error' }` message on the live stream; the last delivered result stands and the consumer may reconnect (spec13 §132). |
 | `SCHEMA_MIGRATION_REQUIRED` | Persisted canonical data is at an older semantic schema than the graph requires; a migration must run before the authority will serve traffic (spec11 §12). |
 | `SCHEMA_INCOMPATIBLE` | Persisted data cannot be reconciled with the graph — a stored schema version ahead of the graph's, or no migration path to it. |
 | `MIGRATION_IN_PROGRESS` | A migration is already running: a migration lock is held with a valid lease, by this instance or another (spec11 §66). |

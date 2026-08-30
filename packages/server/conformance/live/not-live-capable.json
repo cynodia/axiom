@@ -1,0 +1,398 @@
+{
+  "conformance": "axiom.conformance.v7",
+  "name": "not-live-capable",
+  "covers": [
+    "capability",
+    "nondeterministic"
+  ],
+  "description": "A QueryDef whose filter reads `now` is refused for live observation.",
+  "serverIR": {
+    "contract": "axiom.server.v6",
+    "id": "live-query-conformance",
+    "name": "Live Query Conformance",
+    "version": "0.13.0-alpha.1",
+    "entities": [
+      {
+        "id": "entity_order",
+        "kind": "entity",
+        "identityFieldId": "field_order_id",
+        "fields": [
+          {
+            "id": "field_order_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_order_status",
+            "valueType": {
+              "kind": "enum",
+              "values": [
+                "open",
+                "closed"
+              ]
+            },
+            "required": true
+          },
+          {
+            "id": "field_order_total",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ]
+      }
+    ],
+    "fields": {
+      "field_order_id": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_order_status": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_status",
+          "valueType": {
+            "kind": "enum",
+            "values": [
+              "open",
+              "closed"
+            ]
+          },
+          "required": true
+        }
+      },
+      "field_order_total": {
+        "entityId": "entity_order",
+        "field": {
+          "id": "field_order_total",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "number"
+          },
+          "required": true
+        }
+      }
+    },
+    "states": [],
+    "actions": {
+      "action_set_status": {
+        "id": "action_set_status",
+        "kind": "action",
+        "parameters": [
+          {
+            "id": "param_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "param_status",
+            "valueType": {
+              "kind": "enum",
+              "values": [
+                "open",
+                "closed"
+              ]
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "field",
+              "target": {
+                "kind": "provider-record",
+                "sourceEntityId": "entity_order",
+                "identityFieldId": "field_order_id",
+                "identityValue": {
+                  "kind": "ref",
+                  "targetId": "param_id"
+                }
+              },
+              "fieldId": "field_order_status"
+            },
+            "value": {
+              "kind": "ref",
+              "targetId": "param_status"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_set_total": {
+        "id": "action_set_total",
+        "kind": "action",
+        "parameters": [
+          {
+            "id": "param_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "param_total",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "field",
+              "target": {
+                "kind": "provider-record",
+                "sourceEntityId": "entity_order",
+                "identityFieldId": "field_order_id",
+                "identityValue": {
+                  "kind": "ref",
+                  "targetId": "param_id"
+                }
+              },
+              "fieldId": "field_order_total"
+            },
+            "value": {
+              "kind": "ref",
+              "targetId": "param_total"
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_remove": {
+        "id": "action_remove",
+        "kind": "action",
+        "parameters": [
+          {
+            "id": "param_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "remove",
+            "target": {
+              "kind": "provider-record",
+              "sourceEntityId": "entity_order",
+              "identityFieldId": "field_order_id",
+              "identityValue": {
+                "kind": "ref",
+                "targetId": "param_id"
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      }
+    },
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [],
+    "queries": [
+      {
+        "id": "query_open_orders",
+        "kind": "query",
+        "source": "entity_order",
+        "rowScopeId": "scope_row",
+        "filter": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "scope_row"
+            },
+            "fieldId": "field_order_status"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "open"
+          }
+        },
+        "sort": [
+          {
+            "key": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_order_total"
+            },
+            "direction": "asc"
+          }
+        ],
+        "pagination": {
+          "strategy": "offset",
+          "maxPageSize": 100
+        }
+      },
+      {
+        "id": "query_open_top2",
+        "kind": "query",
+        "source": "entity_order",
+        "rowScopeId": "scope_row",
+        "filter": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "scope_row"
+            },
+            "fieldId": "field_order_status"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "open"
+          }
+        },
+        "sort": [
+          {
+            "key": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_order_total"
+            },
+            "direction": "asc"
+          }
+        ],
+        "pagination": {
+          "strategy": "offset",
+          "maxPageSize": 2
+        }
+      },
+      {
+        "id": "query_open_total",
+        "kind": "query",
+        "source": "entity_order",
+        "rowScopeId": "scope_row",
+        "filter": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "scope_row"
+            },
+            "fieldId": "field_order_status"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "open"
+          }
+        },
+        "aggregate": [
+          {
+            "function": "sum",
+            "key": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_order_total"
+            },
+            "as": "field_total"
+          }
+        ],
+        "pagination": {
+          "strategy": "offset",
+          "maxPageSize": 100
+        }
+      },
+      {
+        "id": "query_recent",
+        "kind": "query",
+        "source": "entity_order",
+        "rowScopeId": "scope_row",
+        "filter": {
+          "kind": "binary",
+          "operator": "gte",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "scope_row"
+            },
+            "fieldId": "field_order_total"
+          },
+          "right": {
+            "kind": "call",
+            "function": "now",
+            "arguments": []
+          }
+        },
+        "pagination": {
+          "strategy": "offset",
+          "maxPageSize": 100
+        }
+      }
+    ]
+  },
+  "dataset": {
+    "entity_order": [
+      {
+        "field_order_id": "a",
+        "field_order_status": "open",
+        "field_order_total": 30
+      },
+      {
+        "field_order_id": "b",
+        "field_order_status": "closed",
+        "field_order_total": 10
+      },
+      {
+        "field_order_id": "c",
+        "field_order_status": "open",
+        "field_order_total": 20
+      },
+      {
+        "field_order_id": "d",
+        "field_order_status": "closed",
+        "field_order_total": 99
+      }
+    ]
+  },
+  "open": {
+    "queryId": "query_recent"
+  },
+  "expectInitial": {
+    "errorCode": "LIVE_QUERY_NOT_CAPABLE"
+  },
+  "steps": []
+}

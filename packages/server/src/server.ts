@@ -96,6 +96,19 @@ import type { DataProvider, DataProviderRegistry, ProviderMutation } from './dat
 import { requiredCapabilities } from './data-provider.js';
 import { buildProviderQuery, policyForQuery } from './query-runtime.js';
 import {
+  createLiveQueryEngine,
+  liveQueryIdentity,
+  newSubscriptionId,
+  openLiveCursor,
+  liveCursorMatch,
+  queryDependencies,
+  queryLiveCapability,
+  type LiveEvaluation,
+  type LiveQueryEngine,
+  type LiveQueryHandle,
+  type LiveSubscriptionSpec,
+} from './live-query.js';
+import {
   diffRows,
   identityValuesToLoad,
   providerEntitiesWritten,
@@ -197,6 +210,14 @@ export const SERVER_DIAGNOSTIC_CODES = {
   QUERY_RESULT_TYPE_MISMATCH: 'QUERY_RESULT_TYPE_MISMATCH',
   /** No `DataProvider` is registered for this query's source entity. */
   QUERY_PROVIDER_MISSING: 'QUERY_PROVIDER_MISSING',
+  /** Live mode requested for a QueryDef that cannot be observed live (e.g. nondeterministic). */
+  LIVE_QUERY_NOT_CAPABLE: 'LIVE_QUERY_NOT_CAPABLE',
+  /** A live-query cursor was tampered with, unsigned, or minted for another query / principal / parameters / policy. */
+  LIVE_QUERY_CURSOR_INVALID: 'LIVE_QUERY_CURSOR_INVALID',
+  /** A live-query cursor was minted under an incompatible schema / semantic build (spec13 §79-§81). */
+  LIVE_QUERY_CURSOR_INCOMPATIBLE: 'LIVE_QUERY_CURSOR_INCOMPATIBLE',
+  /** Re-evaluating a live query against the provider failed (spec13 §132). */
+  LIVE_QUERY_EVALUATION_FAILED: 'LIVE_QUERY_EVALUATION_FAILED',
 
   // Schema evolution & semantic migrations (spec11 §76). Defined in `migration.ts` and
   // spread in here so a migration failure crossing the boundary is one of this vocabulary.
@@ -240,6 +261,13 @@ export interface AxiomServerOptions {
    * so a cursor issued by one instance verifies on another.
    */
   cursorSecret?: string;
+  /**
+   * How often (ms) an authority serving live queries re-observes the durable persistence
+   * revision so a live query sees a commit made on *another* authority (spec13 §31, §32,
+   * §68). A local commit wakes live subscriptions synchronously and does not depend on this.
+   * Default 250; `0` disables the poll (single-authority deployments lose nothing).
+   */
+  liveQueryPollMs?: number;
   /**
    * The query result cache. `true` (the default) or `{ maxEntries }` enables it; `false`
    * disables it. Cache identity always includes a principal and read-policy fingerprint, so
@@ -316,6 +344,29 @@ export interface AxiomServer {
    * reconciliation for the protocol path.
    */
   coherentSnapshot(): Promise<StateSnapshot>;
+  /**
+   * Open a **live query** (spec13): a persistent semantic observation of a `QueryDef`
+   * result. The returned handle is an `AsyncIterable<LiveQueryMessage>` — an initial
+   * coherent result, then canonical deltas / resets as authoritative state changes, then
+   * `closed`. Transport-independent: a WebSocket / SSE / worker adapter maps this to frames.
+   */
+  openLiveQuery(request: {
+    queryId: string;
+    arguments?: Record<string, unknown>;
+    credential?: unknown;
+  }): Promise<LiveQueryHandle | { error: { code: string; message: string } }>;
+  /**
+   * Reconnect an existing live subscription through this authority using its opaque
+   * `axiom.live-query-cursor.v1` (spec13 §36-§38). This authority holds no materialized
+   * result, so the first message is a `reset` at the current coherent revision.
+   */
+  resumeLiveQuery(
+    cursor: string,
+    request: { queryId: string; arguments?: Record<string, unknown>; credential?: unknown },
+  ): Promise<LiveQueryHandle | { error: { code: string; message: string } }>;
+  closeLiveQuery(subscriptionId: string): void;
+  /** Bounded observability listing of the live subscriptions this authority serves (spec13 §96). */
+  inspectLiveQueries(): Array<{ subscriptionId: string; revision: number; pending: number; queryId: string }>;
   /** Every mutation this authority has applied, with its outcome. */
   mutationLog(): MutationLogEntry[];
   /**
@@ -517,6 +568,13 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   const dataProviders: DataProviderRegistry = options.dataProviders ?? {};
   const defaultDataProvider = options.dataProvider;
   const cursorSecret = options.cursorSecret ?? randomCursorSecret();
+  const liveEngine: LiveQueryEngine = createLiveQueryEngine({ cursorSecret });
+  // How often an idle authority re-observes the durable revision so a live query it serves
+  // sees a commit made on *another* authority (spec13 §31, §32, §68). A local commit already
+  // wakes the engine synchronously; this only covers the remote case. 0 disables it.
+  const liveQueryPollMs = Math.max(0, options.liveQueryPollMs ?? 250);
+  let liveRevisionObserved = 0;
+  let liveQueryPollTimer: ReturnType<typeof setInterval> | undefined;
 
   // ---- Distributed authority (spec12) ------------------------------------------------
   // A coordination provider activates multi-authority execution automatically (spec12 §88).
@@ -888,6 +946,36 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   }
 
   /**
+   * Re-observe the durable revision on behalf of idle live subscriptions. If it has advanced
+   * past what this authority has already processed — i.e. another authority committed — pull
+   * the winning state in and wake every live subscription with a `broad` changeset (spec13
+   * §31, §32, §68). A local commit already advanced `liveRevisionObserved` and woke the
+   * engine precisely, so this never double-fires for local work.
+   */
+  let liveRevisionPollRunning = false;
+  async function pollRemoteRevisionForLiveQueries(): Promise<void> {
+    if (liveRevisionPollRunning || liveEngine.list().length === 0) return;
+    liveRevisionPollRunning = true;
+    try {
+      const durable = await persistence.revision();
+      if (durable <= liveRevisionObserved) return;
+      liveRevisionObserved = durable;
+      await ensureStateCoherent();
+      await liveEngine.onCommit({
+        toRevision: durable,
+        entityIds: new Set<string>(),
+        stateIds: new Set<string>(),
+        broad: true,
+      });
+    } catch {
+      // A transient persistence read failure is retried on the next tick; a live query is
+      // never wedged by one missed poll (the durable revision is still authoritative).
+    } finally {
+      liveRevisionPollRunning = false;
+    }
+  }
+
+  /**
    * The key an idempotency record is filed under.
    *
    * Scoped by principal as well as request id. A replay is a caller retrying *their own*
@@ -1183,6 +1271,108 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     });
   }
 
+  interface LiveQueryContext {
+    identity: ReturnType<typeof liveQueryIdentity>;
+    spec: LiveSubscriptionSpec;
+    capability: ReturnType<typeof queryLiveCapability>;
+  }
+
+  /**
+   * Resolve a live query's logical identity and its recompute-and-diff evaluator (spec13
+   * §7, §26-§31, §56). The evaluator reconciles to the coherent durable revision (0.12.1)
+   * and returns one bounded authoritative result, so every re-evaluation is single-revision.
+   */
+  async function liveQueryContext(
+    queryId: string,
+    args: Record<string, unknown>,
+    credential: unknown,
+  ): Promise<
+    | { ok: false; code: ServerDiagnosticCode; message: string }
+    | { ok: true; value: LiveQueryContext }
+  > {
+    const query = queriesById.get(queryId as never);
+    if (!query) {
+      return { ok: false, code: SERVER_DIAGNOSTIC_CODES.QUERY_NOT_FOUND, message: `No query ${String(queryId)}` };
+    }
+    const provider = providerFor(query.source);
+    if (!provider) {
+      return {
+        ok: false,
+        code: SERVER_DIAGNOSTIC_CODES.QUERY_PROVIDER_MISSING,
+        message: `No data provider is registered for ${String(query.source)}`,
+      };
+    }
+    const declared = new Map((query.parameters ?? []).map((p) => [String(p.id), p]));
+    const resolvedArgs: Record<string, LiteralValue> = {};
+    for (const [key, value] of Object.entries(args ?? {})) {
+      if (!declared.has(key)) {
+        return { ok: false, code: SERVER_DIAGNOSTIC_CODES.QUERY_ARGUMENT_TYPE_MISMATCH, message: `${query.id} has no parameter ${key}` };
+      }
+      resolvedArgs[key] = value as LiteralValue;
+    }
+    for (const parameter of query.parameters ?? []) {
+      const key = String(parameter.id);
+      if (resolvedArgs[key] === undefined && parameter.required !== false) {
+        return { ok: false, code: SERVER_DIAGNOSTIC_CODES.QUERY_ARGUMENT_TYPE_MISMATCH, message: `${query.id} requires ${parameter.name ?? parameter.id}` };
+      }
+    }
+
+    const principal = ((host.authenticate ? await host.authenticate(credential as never) : null) ??
+      null) as Record<string, LiteralValue> | null;
+    const policy = policyForQuery(query, readPolicies);
+    const sourceIdentityFieldId = entities.get(query.source)?.identityFieldId;
+    const identityFieldId = sourceIdentityFieldId ? String(sourceIdentityFieldId) : undefined;
+    const capability = queryLiveCapability(query, identityFieldId);
+    const ordered = (query.sort?.length ?? 0) > 0;
+    const resultCap = Math.min(queryMaxPageSize(query), provider.capabilities.maxPageSize);
+
+    const identity = liveQueryIdentity({
+      queryId: String(query.id),
+      argumentsFingerprint: await fingerprint(resolvedArgs),
+      principalFingerprint: await fingerprint(principal ?? 'anon'),
+      policyFingerprint: await fingerprint(policy ? policy.predicate : 'none'),
+      compatibilityFingerprint: compatibilityKeyStr,
+    });
+
+    const reevaluate = async (): Promise<LiveEvaluation> => {
+      await ensureStateCoherent();
+      const providerQuery = buildProviderQuery({
+        query,
+        policy,
+        relationships,
+        ...(sourceIdentityFieldId ? { sourceIdentityFieldId } : {}),
+        arguments: resolvedArgs,
+        principal,
+        pageSize: resultCap,
+        strategy: queryPaginationStrategy(query),
+      });
+      if (queryIsAggregate(query)) {
+        const result = await provider.aggregate(providerQuery);
+        return {
+          revision: storeRevision,
+          rows: result.ok ? result.value.rows.map((r) => r.values) : [],
+          resetOnly: true,
+        };
+      }
+      const result = await provider.query(providerQuery);
+      return {
+        revision: storeRevision,
+        rows: result.ok ? result.value.items : [],
+        resetOnly: capability.capability !== 'live-capable',
+      };
+    };
+
+    const spec: LiveSubscriptionSpec = {
+      identity,
+      dependencies: queryDependencies(query, policy ?? undefined, relationships, new Set([...statesById.keys()].map(String))),
+      identityFieldId,
+      ordered,
+      resultCap,
+      reevaluate,
+    };
+    return { ok: true, value: { identity, spec, capability } };
+  }
+
   /**
    * Runs a registered query for a `query` **operation** inside an action (spec 0.10 §40).
    * Same authority as the protocol path — the read policy is injected and the principal is
@@ -1470,6 +1660,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         if (!providerFailure) {
           storeRevision += 1;
           invalidateQueryCache();
+          // spec13 §63, §64: a provider-record commit writes no durable `StateDef`, so the
+          // action returns before the durable-commit path below. Wake live queries here
+          // instead — the source entities this action mutated are its dependency signal.
+          liveRevisionObserved = Math.max(liveRevisionObserved, storeRevision);
+          void liveEngine.onCommit({
+            toRevision: storeRevision,
+            stateIds: new Set<string>(),
+            entityIds: new Set(providerEntitiesWritten(action).map((id) => String(id))),
+          });
         }
       }
       clearProviderRecordStaging(stagedEntities);
@@ -1557,6 +1756,16 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     for (const stateId of writes) {
       revisions.set(stateId, outcome.revision);
     }
+    // Live queries (spec13 §63, §64, §74): wake every subscription whose dependency set
+    // this commit may have touched — the durable state ids it wrote and the provider-backed
+    // entity ids the action mutates. Conservative: a `broad` subscription re-evaluates
+    // regardless. Fire-and-forget — the transaction has already committed.
+    liveRevisionObserved = Math.max(liveRevisionObserved, outcome.revision);
+    void liveEngine.onCommit({
+      toRevision: outcome.revision,
+      stateIds: new Set(writes.map((id) => String(id))),
+      entityIds: new Set(providerEntitiesWritten(action).map((id) => String(id))),
+    });
     for (const effect of effectsToCommit) {
       effectRecords.set(effect.id, effect);
       report({ kind: 'effect-requested', actionId: action.id, effectId: effect.id, operationId: effect.operationId });
@@ -2045,6 +2254,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       // the application running with that subscription observably `reconnecting`/`failed` —
       // unless it declared `lifecycle.required`, which is the one case that rejects here.
       await subscriptionRuntime.start();
+
+      // spec13 §31, §32, §68: the idle-authority revision poll for live queries served here
+      // while another authority commits. Harmless for a single authority (it never observes
+      // an advance it did not already process).
+      if (liveQueryPollMs > 0 && !liveQueryPollTimer) {
+        liveRevisionObserved = Math.max(liveRevisionObserved, storeRevision);
+        liveQueryPollTimer = setInterval(() => void pollRemoteRevisionForLiveQueries(), liveQueryPollMs);
+        liveQueryPollTimer.unref?.();
+      }
     },
 
     handle(request: ServerRequest): Promise<ServerResponse> {
@@ -2216,6 +2434,51 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     },
     clearQueryCache: invalidateQueryCache,
     queryCacheStats: () => ({ entries: queryCache.size, hits: queryCacheHits, enabled: cacheEnabled }),
+
+    async openLiveQuery(request) {
+      return serialize(async () => {
+        const ctx = await liveQueryContext(request.queryId, request.arguments ?? {}, request.credential);
+        if (!ctx.ok) return { error: { code: ctx.code, message: ctx.message } };
+        if (ctx.value.capability.capability === 'not-live-capable') {
+          return {
+            error: {
+              code: SERVER_DIAGNOSTIC_CODES.LIVE_QUERY_NOT_CAPABLE,
+              message: ctx.value.capability.reason,
+            },
+          };
+        }
+        // spec13 §10, §11 (model A): reconcile, capture R, evaluate at R, register from R —
+        // all inside this serialized turn, so no local commit interleaves.
+        const initial = await ctx.value.spec.reevaluate();
+        return liveEngine.register(newSubscriptionId(), ctx.value.spec, initial);
+      });
+    },
+
+    async resumeLiveQuery(cursor, request) {
+      return serialize(async () => {
+        const payload = openLiveCursor(cursor, cursorSecret);
+        if (!payload) {
+          return { error: { code: SERVER_DIAGNOSTIC_CODES.LIVE_QUERY_CURSOR_INVALID, message: 'malformed or unsigned live-query cursor' } };
+        }
+        const ctx = await liveQueryContext(request.queryId, request.arguments ?? {}, request.credential);
+        if (!ctx.ok) return { error: { code: ctx.code, message: ctx.message } };
+        const mismatch = liveCursorMatch(payload, ctx.value.identity);
+        if (mismatch !== 'ok') {
+          const code =
+            mismatch === 'compatibility'
+              ? SERVER_DIAGNOSTIC_CODES.LIVE_QUERY_CURSOR_INCOMPATIBLE
+              : SERVER_DIAGNOSTIC_CODES.LIVE_QUERY_CURSOR_INVALID;
+          return { error: { code, message: `live-query cursor does not match this request (${mismatch})` } };
+        }
+        // This authority has no materialized result for `payload.sub` — re-evaluate fresh at
+        // the current coherent revision and hand the client a `reset` (spec13 §37, §38, §108).
+        const current = await ctx.value.spec.reevaluate();
+        return liveEngine.resume(payload.sub, ctx.value.spec, current);
+      });
+    },
+
+    closeLiveQuery: (subscriptionId) => liveEngine.close(subscriptionId),
+    inspectLiveQueries: () => liveEngine.list(),
     authority: (): AuthorityInfo => ({
       instanceId,
       distributed,
@@ -2364,6 +2627,10 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
     async stop(): Promise<void> {
       triggerRuntime.stop();
+      if (liveQueryPollTimer) {
+        clearInterval(liveQueryPollTimer);
+        liveQueryPollTimer = undefined;
+      }
       await distributedEffectRunner?.stop();
       // Subscriptions stop before the queue is drained: after this resolves, no further
       // delivery can enter the runtime at all, which is what makes shutdown deterministic

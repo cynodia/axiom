@@ -125,8 +125,34 @@ turn it into a working browser application whose generated JavaScript nobody rea
   `schemaFingerprint`/`semanticFingerprint` unchanged. Named regressions:
   `distributed-state-coherence*.test.ts`, `sqlite-persistence-contention.test.ts` (real OS
   processes). Report: `AXIOM_0_12_1_IMPLEMENTATION_REPORT.md`.
+* `specs/spec13.md` — the **0.13 realtime / live canonical queries release**: a `QueryDef`
+  result observed over time. `AxiomServer.openLiveQuery` / `resumeLiveQuery` / `closeLiveQuery`
+  / `inspectLiveQueries` return an `AsyncIterable<LiveQueryMessage>` (`initial` → `update`
+  (`LiveQueryDelta`) / `reset` / `error` / `closed`) — no application transport, polling,
+  broadcast, fan-out, sticky routing or diffing. Pure graph analysis in **core**
+  (`live-query.ts`): the canonical delta model `insert`/`remove`/`update`/`move`/`reset`
+  (`diffResults` / `applyDelta`, recompute-and-compare, `move` only for a real relative-order
+  change via LCS), conservative static `queryDependencies` / `commitAffectsQuery` (`broad` on
+  an unresolved `ref`), and `queryLiveCapability` (`live-capable` / `live-capable-reset-only`
+  for aggregate|grouped|no-identity / `not-live-capable` for `now`|`uuid`). **server**
+  (`live-query.ts`, `live-query-channel.ts`, `live-query-conformance.ts`): `LiveQueryIdentity`,
+  the HMAC-sealed fail-closed `axiom.live-query-cursor.v1` (server-sent, no ACK; bound to
+  query / principal / arguments / policy / `{ serverContract, schemaFingerprint,
+  semanticFingerprint }`), `createLiveQueryEngine` (revision-driven re-evaluation, coalescing,
+  bounded slow-consumer → `reset`), a bounded `LiveSubscriptionStore`, the idle-authority
+  `liveQueryPollMs` revision poll for remote commits, `serveLiveQueryChannel` /
+  `createLiveQueryChannelClient` / `createInMemoryChannelPair` (transport glue, not
+  normative). `AgentAPI.analyzeLiveQuery`. New `axiom.conformance.v7` tier
+  (`conformance/live/`, `runLiveQueryConformanceFixture` / `Suite` — folds the stream and
+  asserts equality with a fresh one-shot execution). **No new graph vocabulary; Server IR
+  stays `axiom.server.v7`** (`semanticFingerprint` is computed *from* the IR). Also fixed a
+  spec12.1 F1-class defect in passing: `createSqlitePersistence.commit` read its optimistic
+  conflict check *outside* `BEGIN IMMEDIATE`, so two OS processes could both pass it and both
+  commit — a lost write. Real-process test: `live-query-cross-process.test.ts`. Reports:
+  `AXIOM_0_13_IMPLEMENTATION_REPORT.md` and `AXIOM_0_13_LIVE_QUERY_RESEARCH.md`. Full model:
+  `docs/LIVE_QUERIES.md`.
 
-Together, spec2–spec12.1 are the authority on design decisions — **except where the
+Together, spec2–spec13 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 
