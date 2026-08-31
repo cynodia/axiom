@@ -164,6 +164,20 @@ export interface WorkflowEventWait {
   timeoutAt?: number;
 }
 
+/**
+ * One accepted canonical event, recorded in the durable workflow event journal
+ * (spec14pt2 F2). `seq` is a store-global monotone integer allocated when the event is
+ * appended — the same sequence every compatible authority observes, so `sinceEventSeq` is a
+ * durable observation boundary that survives the death of the authority that routed the
+ * event. Bytes never re-enter the graph; the payload is the already-validated event payload
+ * the inbound pipeline produced.
+ */
+export interface WorkflowJournalEntry {
+  seq: number;
+  eventId: string;
+  payload: unknown;
+}
+
 export type WorkflowTransitionResult =
   | { ok: true; record: WorkflowInstanceRecord }
   | { ok: false; reason: 'revision' | 'fenced' | 'terminal' | 'not-found'; record?: WorkflowInstanceRecord };
@@ -194,6 +208,22 @@ export interface WorkflowStore {
   recoverRunnable(now: number, limit: number): Promise<WorkflowInstanceRecord[]>;
   /** Waits for a given event type, for the event router (spec14 §54-§60). */
   findEventWaits(eventId: string, limit: number): Promise<WorkflowEventWait[]>;
+  /**
+   * Every instance currently `waiting` on an event, for startup / failover replay
+   * (spec14pt2 F2). The router uses `findEventWaits(eventId)` in the hot path; this is the
+   * unfiltered scan a recovering authority runs once against the durable journal.
+   */
+  pendingEventWaits(limit: number): Promise<WorkflowEventWait[]>;
+  /**
+   * Append an accepted canonical event to the durable journal and return its store-global
+   * monotone `seq` (spec14pt2 F2). The allocation is atomic with the insert, so two
+   * authorities appending concurrently get distinct, ordered sequence numbers.
+   */
+  appendAcceptedEvent(eventId: string, payload: unknown): Promise<number>;
+  /** Journalled events of this type with `seq > sinceSeq`, oldest first, at most `limit`. */
+  readAcceptedEventsSince(eventId: string, sinceSeq: number, limit: number): Promise<WorkflowJournalEntry[]>;
+  /** The highest `seq` ever allocated — the boundary a fresh `wait-event` registration captures. */
+  latestAcceptedEventSeq(): Promise<number>;
   history(instanceId: string): Promise<WorkflowHistoryEntry[]>;
   /** Every non-terminal instance id — bounded observability. */
   list(limit: number): Promise<WorkflowInstanceRecord[]>;
@@ -211,6 +241,9 @@ export function createMemoryWorkflowStore(): WorkflowStore {
   const byStart = new Map<string, string>(); // startKey -> instanceId
   const historyByInstance = new Map<string, WorkflowHistoryEntry[]>();
   const actionOutcomes = new Map<string, unknown>(); // `${instanceId}/${activationId}` -> outcome
+  const journal: WorkflowJournalEntry[] = [];
+  let journalSeq = 0;
+  const JOURNAL_CAP = 8192;
 
   const clone = <T>(v: T): T => (v === undefined ? v : (structuredClone(v) as T));
   const terminal = (s: WorkflowStatus): boolean => s === 'completed' || s === 'failed' || s === 'cancelled';
@@ -341,6 +374,46 @@ export function createMemoryWorkflowStore(): WorkflowStore {
         if (out.length >= limit) break;
       }
       return out;
+    },
+
+    async pendingEventWaits(limit) {
+      const out: WorkflowEventWait[] = [];
+      for (const record of instances.values()) {
+        if (record.status !== 'waiting' || record.wait?.kind !== 'event') continue;
+        out.push({
+          instanceId: record.instanceId,
+          instanceRevision: record.instanceRevision,
+          stepId: record.wait.stepId,
+          activationId: record.activationId,
+          eventId: record.wait.eventId,
+          correlation: clone(record.wait.correlation),
+          sinceEventSeq: record.wait.sinceEventSeq,
+          ...(record.wait.timeoutAt !== undefined ? { timeoutAt: record.wait.timeoutAt } : {}),
+        });
+        if (out.length >= limit) break;
+      }
+      return out;
+    },
+
+    async appendAcceptedEvent(eventId, payload) {
+      journalSeq += 1;
+      journal.push({ seq: journalSeq, eventId, payload: clone(payload) });
+      if (journal.length > JOURNAL_CAP) journal.splice(0, journal.length - JOURNAL_CAP);
+      return journalSeq;
+    },
+
+    async readAcceptedEventsSince(eventId, sinceSeq, limit) {
+      const out: WorkflowJournalEntry[] = [];
+      for (const entry of journal) {
+        if (entry.eventId !== eventId || entry.seq <= sinceSeq) continue;
+        out.push({ seq: entry.seq, eventId: entry.eventId, payload: clone(entry.payload) });
+        if (out.length >= limit) break;
+      }
+      return out;
+    },
+
+    async latestAcceptedEventSeq() {
+      return journalSeq;
     },
 
     async history(instanceId) {

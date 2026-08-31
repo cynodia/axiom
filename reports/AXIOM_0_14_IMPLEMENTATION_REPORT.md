@@ -2,6 +2,8 @@
 
 Release: `0.14.0-alpha.1`. Branch: `spec14-durable-workflows`. Baseline: `0.13.1-alpha.1`.
 Design note: `AXIOM_0_14_WORKFLOW_RESEARCH.md`. Full model: `docs/WORKFLOWS.md`.
+Pre-publish corrective pass: `specs/spec14pt2.md` (F1 / F2 crash-safety closure) — **CLOSED**,
+see §"spec14pt2 closure" below.
 
 **Classification target: Durable Workflows.** A `WorkflowDef` is a first-class graph node —
 a long-running semantic computation with a durable control position. The graph owns
@@ -9,12 +11,19 @@ orchestration meaning; the runtime owns scheduling, persistence, retries, per-in
 leases, fencing, crash recovery and physical execution. No application script body, no
 mutable workflow blob, no application-owned state machine.
 
-Test totals: **1412** across the repo, all green at `0.14.0-alpha.1` (server 575 incl.
-`workflow-engine` (9), `workflow-store` (memory + SQLite parity + concurrent-transition
-race, 3), `workflows-server` (5), `workflow-conformance` (13 fixtures + suite + 2 negative
-controls); agent-api 93 incl. `analyzeWorkflow` + workflow validation (6); core 275 incl.
-the `WORKFLOW_*` validation codes). `npm run build`, `npm test`, `release:pack` / `verify` /
-`consumer-test` / `probe` and the documentation tests pass.
+Test totals: **1421** across the repo, all green at `0.14.0-alpha.1` (server 584 incl.
+`workflow-engine` (9), `workflow-store` (memory + SQLite parity incl. the F2 durable-journal
+contract + concurrent-transition race, 3), `workflows-server` (5), `workflow-conformance`
+(13 fixtures + suite + 2 negative controls), **`workflow-crash-matrix` (7 real-OS-process
+scenarios — spec14pt2)**, `persistence` (+2 F1 idempotency-record cases); agent-api 93 incl.
+`analyzeWorkflow` + workflow validation (6); core 275 incl. the `WORKFLOW_*` validation
+codes). `npm run build`, `npm test`, `release:pack` / `verify` / `consumer-test` / `probe`
+and the documentation tests pass.
+
+The `workflow-crash-matrix` suite spawns real independent OS processes over shared SQLite
+files and SIGKILL/SIGSTOPs them at the narrowest crash boundaries; `AXIOM_WF_TRIALS` sets
+the trial count (default 50 — the spec14pt2 release-gate figure; the F1 and F2-Case-A runs
+each take ~65 s at 50).
 
 ## What shipped (spec14 §249 phases)
 
@@ -26,15 +35,15 @@ the `WORKFLOW_*` validation codes). `npm run build`, `npm test`, `release:pack` 
 | 4 memory WorkflowStore | ✅ | `createMemoryWorkflowStore` — full logical semantics. |
 | 5 SQLite WorkflowStore | ✅ | `createSqliteWorkflowStore` — `BEGIN IMMEDIATE`, revision + fence check **inside** the transaction, `busy_timeout`, `INSERT OR IGNORE` init. Parity + conflicting-transition race tested. |
 | 6 ownership / recovery | ✅ | reused 0.12 `CoordinationProvider` lease+fence; `recoverRunnable` poll loop; incompatible-build refusal. |
-| 7 ActionDef step | ◑ | stable logical invocation identity `<instanceId>/<activationId>`; `pendingAction` marker + durable `recordActionOutcome` reconciliation; the in-window idempotency collapses a fast reclaim. A fully durable server-side idempotency store (closing the full-restart window) is the follow-up. |
+| 7 ActionDef step | ✅ | stable logical invocation identity `<instanceId>/<activationId>`; `pendingAction` marker + durable `recordActionOutcome` reconciliation; **spec14pt2 F1** — the authority now commits a durable idempotency record atomically with the ActionDef's state, so a full process restart is reconciled without a second logical invocation. |
 | 8 timer step | ✅ | target captured once; the waiting row *is* the timer; recovery from the store. |
-| 9 wait-event | ✅ | Model B — registration committed with the transition; `sinceEventSeq` boundary; startup replay from a bounded journal; dedup unchanged; fanout. |
+| 9 wait-event | ✅ | Model B — registration committed with the transition; `sinceEventSeq` boundary; **spec14pt2 F2** — replay now from a **durable cross-authority** `WorkflowStore` journal (not a process-local one), so a match survives the routing authority's death; dedup unchanged; fanout. |
 | 10 branch / complete / fail | ✅ | pure deterministic transitions. |
 | 11 retry | ✅ | durable `attempt` + `nextEligibleAt` backoff; not-due guard on `advance`. |
 | 12 cancellation | ✅ | fenced durable transition to `cancelled`; not rollback; terminal instances never resurrected; cancel-vs-transition linearized on `instanceRevision`. |
 | 13 AgentAPI / inspection | ✅ | `AgentAPI.analyzeWorkflow`; `server.getWorkflow` / `inspectWorkflows` / `workflowHistory`. |
 | 14 conformance v8 | ✅ | `axiom.conformance.v8` — `workflow-conformance.ts`, `scripts/workflow-conformance.mjs` (13 fixtures + manifest), public runner, 2 negative controls. |
-| 15 topology / crash suite | ⏳ | in-process fencing/CAS + concurrent-transition race are covered; the real-OS-process 1/2/8 chaos matrix at §258 trial counts is deferred and named. |
+| 15 topology / crash suite | ✅ | in-process fencing/CAS + concurrent-transition race, **plus** the spec14pt2 real-OS-process `workflow-crash-matrix`: F1 SIGKILL ×50, F2 Case A SIGKILL ×50, Case B wait-vs-event race ×50 (deterministic before/after classification, no lost event), Case C duplicate + across-restart replay, 2- & 8-authority claim races (exactly one logical transition), SIGSTOP stale-owner (fenced write refused, zero stale commits). |
 | 16 historical regression | ✅ | 0.12 / 0.12.1 / 0.13.1 suites (575 server, incl. live-query and distributed-authority cross-process) re-run green. |
 | 17 docs / release prep | ✅ | `docs/WORKFLOWS.md`, `AGENT_REFERENCE` §DURABLE WORKFLOWS, `AUTHORITY.md` v8 row, `VALIDATION.md`, anti-patterns #72–#77, README + facade doc-map rows, `CLAUDE.md` entry. Version bump across every manifest / doc line / `llms.txt` / `graph.ts` / `package-lock.json`. |
 | 18 publish alpha | ⏳ | post this session. |
@@ -119,16 +128,62 @@ authorization or silently escalate. Error data exposed to workflow logic is stru
 host stack frames, no provider raw exception objects). Inspection exposes no HMAC secrets,
 database paths, raw SQL or credentials.
 
-## Deferred, honestly (spec14 §10, §258, §153-§155)
+## Deferred, honestly (spec14 §10, §153-§155)
 
-- The real-OS-process 1/2/8 chaos matrix at the §258 trial counts (25–50 each) — the
-  in-process fencing/CAS/race coverage + the SQLite conflicting-transition race stand in for
-  now; the OS-process matrix is the deep end.
 - A narrative reference-application harness (`order_fulfillment` / `trial_expiry` /
-  `provision_service`) beyond the conformance fixtures.
-- A fully durable server-side idempotency store closing the action-double-execution window
-  across a full process restart before the per-activation outcome is recorded.
+  `provision_service`) beyond the conformance fixtures and the crash matrix.
 - Every §10 deferred step kind and `wait-query`.
+- The durable event journal and idempotency table are **bounded** buffers (default 8192 /
+  authority idempotency-window). They cover crash and failover windows, not unbounded
+  history; retention past that is implementation-owned.
+
+## spec14pt2 closure
+
+The `specs/spec14pt2.md` corrective pass is **CLOSED**. Both gaps are shipped, not deferred.
+
+### §4 preserved model
+
+No change to `WorkflowDef`, the six step kinds, single-assignment bindings, the closed
+expression scope, acyclicity, `instanceRevision` + fence CAS, leaderless ownership, or
+"cancellation is not rollback". **Server IR stays `axiom.server.v8`; conformance stays
+`axiom.conformance.v8`** (no new vocabulary; the conformance runner simply drops the unused
+explicit event `seq` it used to pass — the memory `WorkflowStore` now allocates it). No
+loops / parallel / race / child workflows / compensation / sagas / `wait-query` were added.
+
+### F1 — durable ActionDef invocation reconciliation
+
+| Question (spec14pt2 §6) | Answer |
+| --- | --- |
+| Where is the ActionDef logical invocation outcome stored durably? | In the persistence adapter, in the **same transaction** as the ActionDef's `StateDef` writes. `PersistenceCommit.idempotency = { key, response, window }`; `createMemoryPersistence` and `createSqlitePersistence` (`axiom_state_idempotency` table: `seq AUTOINCREMENT`, `key UNIQUE`, `response`, `at`) both implement `loadIdempotentResponse` / `recordIdempotentResponse`. |
+| What key identifies it? | The authority's principal-scoped request identity `recordKey(principal, "<instanceId>/<activationId>")` — the workflow engine passes the stable logical invocation id as the request id, so it is identical on every authority and every retry/reclaim. |
+| Is it visible after full process restart? | Yes — it is a committed SQLite row. `invokeCore` consults `loadIdempotentResponse(replayKey)` after `ensureStateCoherent()` and before any execution; a fresh process with an empty in-memory `replies` map returns the canonical response and does not run the action body. |
+| Is it shared across authorities? | Yes — one shared database file; any compatible authority reads the same row. |
+| What exact crash boundary was tested? | `workflow-crash-matrix.test.ts` wraps the `WorkflowStore` in the worker so the authority SIGKILLs itself the instant the engine calls `recordActionOutcome` — i.e. **after** `invokeAction` returned (ActionDef state + idempotency record committed atomically) and **before** the `step-succeeded` transition. A *fresh* authority then recovers. Also covered: the recovery authority is spawned only after the first is confirmed dead (complete restart, no process-local state). |
+| How many real-process trials? | 50 by default (`AXIOM_WF_TRIALS`), run and green; smaller counts run in CI. |
+| Can a second logical ActionDef invocation occur after a committed first invocation? | **No.** Across all 50 trials `S_COUNT` (a `StateDef` the action increments by exactly 1) is `1`, and the durable history carries exactly one `step-succeeded` and one `completed`. Physical effect *attempts* remain governed by the existing at-least-once effect system; the logical ActionDef invocation and each step transition are exactly-once. |
+
+### F2 — durable event no-gap recovery across authority death
+
+| Question (spec14pt2 §6) | Answer |
+| --- | --- |
+| Where is accepted-event replay evidence stored? | In a durable `WorkflowStore` journal: `axiom_workflow_event_journal (seq INTEGER PRIMARY KEY AUTOINCREMENT, event_id, payload, at)` (memory reference mirrors it). `appendAcceptedEvent(eventId, payload)` inserts and returns the store-global `seq`; the engine journals every accepted event **before** routing it. |
+| Does it survive process death? | Yes — a committed row. The append is `BEGIN IMMEDIATE` + insert + bounded trim + `COMMIT`. |
+| Can a different authority retrieve it? | Yes — `readAcceptedEventsSince(eventId, sinceSeq, limit)` and `pendingEventWaits(limit)` are read by every authority's poll loop and startup path. |
+| How is `sinceEventSeq` used? | Captured at `wait-event` registration from `latestAcceptedEventSeq()` (the `sqlite_sequence` high-water mark — monotone even after trimming) and stored in the durable wait. Replay reads strictly `> sinceEventSeq`. |
+| How is event-before-wait distinguished from event-after-wait? | By `seq` vs `sinceEventSeq`. An event whose `seq <= sinceEventSeq` committed before the wait was live and is deterministically **not** matched (it is in the past). An event with `seq > sinceEventSeq` — whether it landed during the registration gap or after — is matched exactly once, by the live router or by the rescan the registration itself triggers, linearized on `instanceRevision`. |
+| How is event dedup preserved during replay? | External-event dedup is unchanged and runs upstream of `onEventAccepted`, so each logical event is journalled once. Replaying a journalled event any number of times transitions a still-`waiting` instance once (the fenced CAS on `expectedRevision`) and is a no-op against a terminal/moved instance. |
+| What exact SIGKILL boundary was tested? | `workflow-crash-matrix.test.ts` Case A wraps `WorkflowStore.transition` so the routing authority SIGKILLs itself the instant it goes to commit the `event-matched` transition — i.e. **after** the event is durably journalled, **before** the workflow moves. A fresh authority recovers it from the shared journal with no client resend, no manual replay, no polling, no sticky routing, no `StateDef` sync pulse. |
+| How many no-gap race trials? | Case B (wait-activation vs matching-event commit) runs 50 real-process trials; every trial is classified deterministically as before- or after-activation with `before + after == trials` and no lost event. Case C proves duplicate + across-restart replay yields one logical transition. |
+
+### §3 targeted real-process distribution
+
+`workflow-crash-matrix.test.ts` also runs: **2** and **8** authorities racing to claim and
+advance one runnable workflow → exactly one logical `step-succeeded` / `completed` and
+`S_COUNT == 1`; and a **SIGSTOP** stale-owner race — authority A takes the per-instance
+coordination lease, is frozen, its lease lapses, authority B advances the instance under a
+fresh generation, A thaws and its scheduled fenced transition is **refused** (`fenced` /
+`terminal` / `revision`) — zero stale successful commits. The workflow engine now also
+honours the configured coordination `leaseDurationMs` (previously a fixed 15 s).
 
 ## Blind Phase 22
 

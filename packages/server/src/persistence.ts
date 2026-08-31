@@ -53,6 +53,16 @@ export interface PersistenceCommit {
    * finds it again.
    */
   effects?: EffectRecord[];
+  /**
+   * A durable idempotency record written **in the same transaction** as the state writes
+   * above (spec14pt2 F1). `key` is the principal-scoped invocation identity; `response` is
+   * the canonical serialized answer to return verbatim on a replay. Because it commits
+   * atomically with the state, a full process restart between "state committed" and
+   * "caller informed" cannot lead a recovery authority to execute the same logical
+   * invocation twice: `loadIdempotentResponse(key)` proves it already committed and hands
+   * back the canonical outcome. `window` bounds how many records the adapter retains.
+   */
+  idempotency?: { key: string; response: unknown; window: number };
 }
 
 export interface CommitOutcome {
@@ -83,6 +93,22 @@ export interface PersistenceAdapter {
   /** Records an attempted (or terminal) status for a previously committed effect intent. */
   recordEffectAttempt?(id: string, update: Partial<EffectRecord>): Promise<void>;
   /**
+   * The canonical response previously committed under this idempotency key, or `undefined`
+   * if this key has never committed (spec14pt2 F1). A recovery authority — a fresh process
+   * with no in-memory request cache — calls this before executing a workflow's ActionDef
+   * step so a logical invocation that already committed is never run a second time. An
+   * adapter that does not implement this pair offers no cross-restart idempotency and the
+   * runtime's window is memory-only, which is documented rather than assumed away.
+   */
+  loadIdempotentResponse?(key: string): Promise<{ response: unknown } | undefined>;
+  /**
+   * Records an idempotency response **outside** a state commit — for an invocation that
+   * reached a terminal answer without writing durable state (a no-op success, say). The
+   * commit-path record in {@link PersistenceCommit.idempotency} is the atomic one; this is
+   * best-effort fidelity for the non-committing paths. Keeps at most `window` records.
+   */
+  recordIdempotentResponse?(key: string, response: unknown, window: number): Promise<void>;
+  /**
    * Whether this external delivery identity has already been accepted for this
    * subscription.
    *
@@ -110,6 +136,17 @@ export function createMemoryPersistence(seed: PersistedState[] = []): Persistenc
   }
   let revision = seed.reduce((highest, entry) => Math.max(highest, entry.revision), 0);
   const effects = new Map<string, EffectRecord>();
+  // Idempotency records, insertion-ordered (a Map preserves it), bounded per write.
+  const idempotent = new Map<string, unknown>();
+  const rememberIdempotent = (key: string, response: unknown, window: number): void => {
+    if (idempotent.has(key)) return;
+    idempotent.set(key, structuredClone(response ?? null));
+    while (idempotent.size > Math.max(1, window)) {
+      const oldest = idempotent.keys().next().value;
+      if (oldest === undefined) break;
+      idempotent.delete(oldest);
+    }
+  };
   // Keyed by subscription; the value is a bounded most-recent-last window of delivery ids.
   // It lives in the persistence adapter rather than the subscription runtime precisely so
   // that a restarted authority reading the same adapter still recognizes a redelivery.
@@ -140,6 +177,9 @@ export function createMemoryPersistence(seed: PersistedState[] = []): Persistenc
       for (const effect of commit.effects ?? []) {
         effects.set(effect.id, { ...effect, arguments: structuredClone(effect.arguments) });
       }
+      if (commit.idempotency) {
+        rememberIdempotent(commit.idempotency.key, commit.idempotency.response, commit.idempotency.window);
+      }
       return { committed: true, revision, conflicts: [] };
     },
     async revision(): Promise<number> {
@@ -155,6 +195,13 @@ export function createMemoryPersistence(seed: PersistedState[] = []): Persistenc
       if (existing) {
         effects.set(id, { ...existing, ...update });
       }
+    },
+    async loadIdempotentResponse(key: string): Promise<{ response: unknown } | undefined> {
+      if (!idempotent.has(key)) return undefined;
+      return { response: structuredClone(idempotent.get(key) ?? null) };
+    },
+    async recordIdempotentResponse(key: string, response: unknown, window: number): Promise<void> {
+      rememberIdempotent(key, response, window);
     },
     async hasDelivery(subscriptionId: NodeId, deliveryKey: string): Promise<boolean> {
       return (seenDeliveries.get(String(subscriptionId)) ?? []).includes(deliveryKey);

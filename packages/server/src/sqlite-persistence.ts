@@ -86,6 +86,7 @@ export async function createSqlitePersistence(
     });
 
   const effectsTable = `${table}_effects`;
+  const idempotencyTable = `${table}_idempotency`;
 
   // Schema creation is itself a write and can hit a concurrent initializer's lock (spec12.1
   // §33) — run it behind the same bounded handling as everything else.
@@ -105,6 +106,12 @@ export async function createSqlitePersistence(
         effect_id TEXT PRIMARY KEY,
         record TEXT NOT NULL,
         status TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS ${idempotencyTable} (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL UNIQUE,
+        response TEXT NOT NULL,
+        at INTEGER NOT NULL
       );
     `);
   });
@@ -130,6 +137,17 @@ export async function createSqlitePersistence(
   const updateEffect = database.prepare(
     `UPDATE ${effectsTable} SET record = ?, status = ? WHERE effect_id = ?`,
   );
+  const insertIdempotent = database.prepare(
+    `INSERT OR IGNORE INTO ${idempotencyTable} (key, response, at) VALUES (?, ?, ?)`,
+  );
+  const readIdempotent = database.prepare(`SELECT response FROM ${idempotencyTable} WHERE key = ?`);
+  const trimIdempotent = database.prepare(
+    `DELETE FROM ${idempotencyTable} WHERE seq <= (SELECT COALESCE(MAX(seq), 0) FROM ${idempotencyTable}) - ?`,
+  );
+  const rememberIdempotent = (key: string, response: unknown, window: number): void => {
+    insertIdempotent.run(key, JSON.stringify(response ?? null), Date.now());
+    trimIdempotent.run(Math.max(1, Math.floor(window)));
+  };
 
   const currentRevision = (): number => Number(readRevision.get()?.value ?? 0);
 
@@ -179,6 +197,12 @@ export async function createSqlitePersistence(
             for (const effect of commit.effects ?? []) {
               insertEffect.run(effect.id, JSON.stringify(effect), effect.status);
             }
+            // The idempotency record commits in this same transaction as the state writes
+            // (spec14pt2 F1) — either both are durable or neither is, so a restarted
+            // authority never finds committed state without the matching proof.
+            if (commit.idempotency) {
+              rememberIdempotent(commit.idempotency.key, commit.idempotency.response, commit.idempotency.window);
+            }
             database.exec('COMMIT');
             return { committed: true, revision, conflicts: [] };
           } catch (error) {
@@ -224,6 +248,31 @@ export async function createSqlitePersistence(
         const existing = JSON.parse(String(row.record)) as EffectRecord;
         const updated: EffectRecord = { ...existing, ...update };
         updateEffect.run(JSON.stringify(updated), updated.status, id);
+      });
+    },
+
+    async loadIdempotentResponse(key: string): Promise<{ response: unknown } | undefined> {
+      return guard('sqlitePersistence.loadIdempotentResponse', () => {
+        const row = readIdempotent.get(key);
+        if (!row || row.response === null || row.response === undefined) return undefined;
+        return { response: JSON.parse(String(row.response)) as unknown };
+      });
+    },
+
+    async recordIdempotentResponse(key: string, response: unknown, window: number): Promise<void> {
+      await guard('sqlitePersistence.recordIdempotentResponse', () => {
+        database.exec('BEGIN IMMEDIATE');
+        try {
+          rememberIdempotent(key, response, window);
+          database.exec('COMMIT');
+        } catch (error) {
+          try {
+            database.exec('ROLLBACK');
+          } catch {
+            /* nothing open */
+          }
+          throw error;
+        }
       });
     },
 

@@ -298,6 +298,7 @@ interface PersistenceAdapter {
 - A semantic transaction that writes several states MUST persist as **one unit**. An adapter must never apply a subset.
 - `commit` carries the revision each written state had when the transaction began. A mismatch MUST refuse the commit rather than overwrite.
 - Derived state is recomputed, never stored.
+- `commit` may also carry an optional `idempotency: { key, response, window }` written in the **same** transaction as the state (spec14pt2 F1); an adapter that also implements the optional `loadIdempotentResponse` / `recordIdempotentResponse` pair gives cross-restart, cross-authority exactly-once for a workflow's ActionDef step. `createMemoryPersistence` and `createSqlitePersistence` both do; an adapter that does not leaves that reconciliation to the (memory-only) request window, which is documented rather than assumed away.
 
 | Adapter | For |
 | --- | --- |

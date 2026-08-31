@@ -100,6 +100,59 @@ async function contractBody(store: WorkflowStore): Promise<void> {
   assert.deepEqual(history.map((h) => h.seq), [0, 1, 2, 3]);
   assert.equal(history[0].kind, 'started');
   assert.equal(history.at(-1)!.kind, 'completed');
+
+  // spec14pt2 F2 — the durable accepted-event journal: a store-global monotone seq, a
+  // per-event `> sinceSeq` read, and a high-water mark that survives trimming.
+  assert.equal(await store.latestAcceptedEventSeq(), 0);
+  const s1 = await store.appendAcceptedEvent('event_go', { k: 'a' });
+  const s2 = await store.appendAcceptedEvent('event_other', { k: 'b' });
+  const s3 = await store.appendAcceptedEvent('event_go', { k: 'c' });
+  assert.ok(s1 < s2 && s2 < s3, 'monotone across event types');
+  assert.equal(await store.latestAcceptedEventSeq(), s3);
+
+  const fromZero = await store.readAcceptedEventsSince('event_go', 0, 10);
+  assert.deepEqual(
+    fromZero.map((e) => e.seq),
+    [s1, s3],
+    'only this event type, oldest first',
+  );
+  const afterS1 = await store.readAcceptedEventsSince('event_go', s1, 10);
+  assert.deepEqual(afterS1.map((e) => e.payload), [{ k: 'c' }], 'strictly greater than sinceSeq');
+  assert.deepEqual(await store.readAcceptedEventsSince('event_go', s3, 10), [], 'nothing past the head');
+
+  // A fresh instance parked on an event is discoverable by the unfiltered scan.
+  await store.createIdempotent(
+    { ...START, workflowId: 'wf_y', idempotencyKey: 'w2' },
+    () => ({
+      instanceId: 'wf_wait_1',
+      workflowId: 'wf_y',
+      compatibilityFingerprint: 'build-1',
+      principal: null,
+      principalFingerprint: 'p1',
+      inputs: {},
+      entryStepId: 'w',
+    }),
+  );
+  await store.transition({
+    instanceId: 'wf_wait_1',
+    expectedRevision: 0,
+    fence: 0,
+    next: {
+      status: 'waiting',
+      currentStepId: 'w',
+      activationId: 'w#0',
+      attempt: 0,
+      pendingAction: null,
+      nextEligibleAt: null,
+      wait: { kind: 'event', stepId: 'w', eventId: 'event_go', correlation: {}, sinceEventSeq: s1 },
+      history: { kind: 'step-activated', stepId: 'w' },
+    },
+  });
+  const pending = await store.pendingEventWaits(10);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].instanceId, 'wf_wait_1');
+  assert.equal(pending[0].eventId, 'event_go');
+  assert.equal(pending[0].sinceEventSeq, s1);
 }
 
 test('memory WorkflowStore satisfies the contract', async () => {

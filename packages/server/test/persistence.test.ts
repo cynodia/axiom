@@ -272,3 +272,68 @@ sqlite('the durable adapter preserves identity and refuses a stale commit', asyn
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+/**
+ * spec14pt2 F1 — the durable idempotency record. It commits atomically with the state
+ * writes, so a fresh authority (no in-memory request cache) can prove a logical invocation
+ * already committed and recover its canonical outcome without executing it again.
+ */
+test('memory persistence commits an idempotency record atomically with the state', async () => {
+  const persistence = createMemoryPersistence();
+  assert.equal(await persistence.loadIdempotentResponse?.('k1'), undefined);
+
+  const outcome = await persistence.commit({
+    writes: [{ stateId: STATE_PARTS, value: [{ n: 1 }] }],
+    expected: {},
+    idempotency: { key: 'k1', response: { ok: true, revision: 1 }, window: 8 },
+  });
+  assert.equal(outcome.committed, true);
+  assert.deepEqual(await persistence.loadIdempotentResponse?.('k1'), { response: { ok: true, revision: 1 } });
+
+  // A refused (stale) commit writes neither the state nor the idempotency record.
+  const stale = await persistence.commit({
+    writes: [{ stateId: STATE_PARTS, value: [{ n: 2 }] }],
+    expected: { [STATE_PARTS]: 0 },
+    idempotency: { key: 'k2', response: { ok: true }, window: 8 },
+  });
+  assert.equal(stale.committed, false);
+  assert.equal(await persistence.loadIdempotentResponse?.('k2'), undefined);
+
+  // The non-atomic path, for a terminal answer that wrote no state.
+  await persistence.recordIdempotentResponse?.('k3', { ok: true, noWrites: true }, 8);
+  assert.deepEqual(await persistence.loadIdempotentResponse?.('k3'), { response: { ok: true, noWrites: true } });
+
+  // The window is bounded, oldest-first.
+  for (let i = 0; i < 12; i += 1) await persistence.recordIdempotentResponse?.(`w${i}`, i, 4);
+  assert.equal(await persistence.loadIdempotentResponse?.('w0'), undefined);
+  assert.deepEqual(await persistence.loadIdempotentResponse?.('w11'), { response: 11 });
+});
+
+sqlite('sqlite persistence: the idempotency record survives reopening and is bounded', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'axiom-sqlite-idem-'));
+  try {
+    const persistence = await createSqlitePersistence({ location: path.join(directory, 'state.db') });
+    await persistence.commit({
+      writes: [{ stateId: STATE_PARTS, value: [{ n: 1 }] }],
+      expected: {},
+      idempotency: { key: 'inv-1', response: { ok: true, changes: { x: 1 } }, window: 5 },
+    });
+    await persistence.close?.();
+
+    // A completely fresh connection — the "full process restart" case.
+    const reopened = await createSqlitePersistence({ location: path.join(directory, 'state.db') });
+    assert.deepEqual(await reopened.loadIdempotentResponse?.('inv-1'), {
+      response: { ok: true, changes: { x: 1 } },
+    });
+    assert.equal(await reopened.loadIdempotentResponse?.('never'), undefined);
+
+    for (let i = 0; i < 9; i += 1) {
+      await reopened.recordIdempotentResponse?.(`k${i}`, i, 5);
+    }
+    assert.equal(await reopened.loadIdempotentResponse?.('k0'), undefined, 'trimmed to the window');
+    assert.deepEqual(await reopened.loadIdempotentResponse?.('k8'), { response: 8 });
+    await reopened.close?.();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

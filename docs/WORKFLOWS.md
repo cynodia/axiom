@@ -103,8 +103,13 @@ declared, else the workflow fails).
   (acyclic) it is `"<stepId>#0"`.
 - **Action invocation identity** = `"<instanceId>/<activationId>"`. The workflow action step
   invokes the `ActionDef` through the ordinary authority path with this as the idempotency
-  key; a crash between "action committed" and "workflow transition recorded" reconciles to
-  the recorded outcome rather than executing the action twice.
+  key. The authority commits a **durable idempotency record** in the *same* persistence
+  transaction as the ActionDef's state writes, so a crash between "action committed" and
+  "workflow transition recorded" — including a **full process restart** with no in-memory
+  state — is reconciled: a recovery authority proves the invocation already committed and
+  recovers its canonical outcome (`PersistenceAdapter.loadIdempotentResponse`) rather than
+  executing the action a second time. The record can never be present without the matching
+  durable state, and vice versa.
 - **Exactly-once logical transition** for each activated step is guaranteed.
   **Exactly-once physical execution of an external effect is not** — that remains governed
   by the effect system. The distinction is deliberate and load-bearing: an effect an action
@@ -119,11 +124,19 @@ durable wait registration (`eventId`, correlation, `sinceEventSeq`, `activationI
 committed in the **same** transaction — there is no "state = waiting, then subscribe"
 window. Matching is driven by Axiom's single inbound event pipeline (the same one webhooks
 and effect outcomes use): every accepted event is offered to matching waits whose `where`
-predicate the payload satisfies. On startup / failover every event-waiting instance is
-rediscovered and a matching event that landed during a crash window is replayed from
-`sinceEventSeq`. Existing external-event dedup is unchanged, so a redelivered physical event
-transitions a wait **at most once**. A matching event unblocks *every* independently-matching
-waiting instance (fanout); a wait never globally consumes an event.
+predicate the payload satisfies. Every accepted event is first appended to a **durable
+`WorkflowStore` journal** with a store-global monotone `seq`; `sinceEventSeq` is captured
+from that journal's high-water mark. On startup / failover — and on every poll tick — every
+event-waiting instance is rediscovered and the journal is replayed against it from
+`sinceEventSeq`, so a matching event **survives the death of the authority that routed it**:
+another compatible authority replays it from the shared journal with no client resend, no
+manual replay, no sticky routing and no application polling. Existing external-event dedup
+is unchanged and runs upstream, so a redelivered physical event transitions a wait **at most
+once**; replaying the same journalled event any number of times yields **one** logical
+transition. A matching event unblocks *every* independently-matching waiting instance
+(fanout); a wait never globally consumes an event. An event that committed strictly before a
+wait became live is deterministically **not** matched (it is in the past); an event
+concurrent with wait activation is matched exactly once — no event is lost in the handoff.
 
 `bind: { <bindingId>: Expression }` assigns declared bindings from `ref('EVENT')` when the
 event matches and the transition commits. A `wait-event` step may declare a `timeout` and an
@@ -259,8 +272,11 @@ the fixtures from the contract alone.
 - 0.14 has no `wait-query` (a workflow does not wait on a `QueryDef` result).
 - Cancellation cannot interrupt an already-dispatched physical external effect; the
   framework stays honest about uncertain physical execution.
-- Action double-execution across a **full process restart** (in-memory idempotency lost)
-  before the durable per-activation outcome is recorded is a narrow window handled by
-  reconciliation; a fully durable server-side idempotency store is the follow-up.
+- **Physical** effect execution remains at-least-once (the effect system's contract); only
+  the *logical* ActionDef invocation and each workflow step transition are exactly-once.
+- The durable event journal and the durable idempotency table are **bounded** buffers
+  (default 8192 journal entries / an idempotency window per authority config). They cover
+  crash and failover windows, not indefinite history; a wait parked longer than the journal
+  is retained past its `sinceEventSeq` is an implementation-owned retention concern.
 - `WorkflowStore` bounded retention of terminal instances and history is
   implementation-owned; an active workflow never expires.

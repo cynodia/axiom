@@ -55,8 +55,6 @@ export async function runWorkflowConformanceFixture(
   fixture: WorkflowConformanceFixture,
 ): Promise<WorkflowConformanceResult> {
   const failures: string[] = [];
-  let seq = 0;
-  const nextSeq = (): number => (seq += 1);
   const store = createMemoryWorkflowStore();
   const clock = { t: 1_000_000 };
   const invocations = new Map<string, number>();
@@ -98,7 +96,7 @@ export async function runWorkflowConformanceFixture(
       clock.t += step.seconds * 1000;
       await engine.advance(id);
     } else if (step.do === 'deliver-event') {
-      await engine.onEventAccepted(step.eventId, step.payload, nextSeq());
+      await engine.onEventAccepted(step.eventId, step.payload);
     } else if (step.do === 'cancel') {
       await engine.cancelWorkflow(id);
     } else if (step.do === 'action-outcome') {

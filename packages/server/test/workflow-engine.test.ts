@@ -133,11 +133,11 @@ test('order fulfillment: action → wait-event (matched) → action → complete
   assert.deepEqual(invoked, [`${A_RESERVE}:{"orderId":"order-42"}`]);
 
   // A non-matching event does nothing.
-  await engine.onEventAccepted(String(EV_PAID), { orderId: 'other', txn: 'tx-x' }, 1);
+  await engine.onEventAccepted(String(EV_PAID), { orderId: 'other', txn: 'tx-x' });
   assert.equal((await store.load(id))?.status, 'waiting');
 
   // The matching event unblocks it, binds `txn`, and drives it to completion.
-  await engine.onEventAccepted(String(EV_PAID), { orderId: 'order-42', txn: 'tx-99' }, 2);
+  await engine.onEventAccepted(String(EV_PAID), { orderId: 'order-42', txn: 'tx-99' });
   record = await store.load(id);
   assert.equal(record?.status, 'completed');
   assert.equal(record?.bindings[String(B_TXN)], 'tx-99');
@@ -231,8 +231,8 @@ test('a duplicate event delivery transitions the wait only once (spec14 §59)', 
   const started = await engine.startWorkflow({ workflowId: String(nodeId('wf_order_fulfillment')), arguments: { [String(P_ORDER)]: 'o' } });
   const id = (started as { instanceId: string }).instanceId;
 
-  await engine.onEventAccepted(String(EV_PAID), { orderId: 'o', txn: 't1' }, 5);
-  await engine.onEventAccepted(String(EV_PAID), { orderId: 'o', txn: 't2' }, 5); // same seq — redelivery
+  await engine.onEventAccepted(String(EV_PAID), { orderId: 'o', txn: 't1' });
+  await engine.onEventAccepted(String(EV_PAID), { orderId: 'o', txn: 't2' }); // redelivery after the wait already matched
   const record = await store.load(id);
   assert.equal(record?.status, 'completed');
   assert.equal(record?.bindings[String(B_TXN)], 't1', 'the first match won; the redelivery did not re-transition');
@@ -248,7 +248,7 @@ test('cancellation is durable and a later event does not resume a cancelled work
   assert.deepEqual(cancelled, { ok: true, status: 'cancelled' });
   assert.deepEqual(await engine.cancelWorkflow(id), { ok: true, status: 'cancelled' }, 'idempotent');
 
-  await engine.onEventAccepted(String(EV_PAID), { orderId: 'o', txn: 't' }, 9);
+  await engine.onEventAccepted(String(EV_PAID), { orderId: 'o', txn: 't' });
   assert.equal((await store.load(id))?.status, 'cancelled');
 });
 
@@ -288,7 +288,7 @@ test('an incompatible-build authority refuses to advance an existing instance (s
   });
   const before = await store.load(id);
   await buildB.advance(id);
-  await buildB.onEventAccepted(String(EV_PAID), { orderId: 'o', txn: 't' }, 3);
+  await buildB.onEventAccepted(String(EV_PAID), { orderId: 'o', txn: 't' });
   const after = await store.load(id);
   assert.equal(after?.instanceRevision, before?.instanceRevision, 'build B moved nothing');
   assert.equal(after?.status, 'waiting');

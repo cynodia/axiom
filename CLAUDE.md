@@ -209,10 +209,28 @@ turn it into a working browser application whose generated JavaScript nobody rea
   controls, `runWorkflowConformanceFixture` / `Suite` — deterministic driver script, folds
   to the required logical transition history). Reports:
   `AXIOM_0_14_IMPLEMENTATION_REPORT.md`, design note `AXIOM_0_14_WORKFLOW_RESEARCH.md`. Full
-  model: `docs/WORKFLOWS.md`. **Deferred (documented):** real-OS-process 1/2/8 chaos matrix
-  (§258 counts), reference-application harness, and a fully durable server-side idempotency
-  store (the action-double-execution window across a full process restart is currently
-  handled by reconciliation, not eliminated).
+  model: `docs/WORKFLOWS.md`.
+* `specs/spec14pt2.md` — the **0.14 pre-publish corrective pass** closing the two remaining
+  crash-safety gaps before publish. **F1** — the workflow action step's ActionDef invocation
+  is now durably exactly-once across a **full process restart**: `invokeCore` commits a
+  `PersistenceCommit.idempotency` record `{ key, response }` in the *same* transaction as the
+  state writes (`loadIdempotentResponse` / `recordIdempotentResponse` on both the memory and
+  SQLite `PersistenceAdapter`s; `axiom_state_idempotency` table, bounded). A recovery
+  authority with no in-memory request cache proves the invocation already committed and
+  recovers its canonical outcome instead of re-executing. **F2** — accepted events are held
+  in a **durable cross-authority journal** on the `WorkflowStore` (`appendAcceptedEvent` /
+  `readAcceptedEventsSince` / `latestAcceptedEventSeq` / `pendingEventWaits`;
+  `axiom_workflow_event_journal` with an `AUTOINCREMENT` store-global `seq`, bounded), so a
+  match survives the death of the authority that routed the event — the engine's
+  `onEventAccepted(eventId, payload)` (no caller-supplied seq) journals then routes, and the
+  poll loop / startup replays the journal against every `pendingEventWaits` instance from its
+  durable `sinceEventSeq`. The workflow engine honours the configured coordination
+  `leaseDurationMs`. New real-OS-process suite `workflow-crash-matrix.test.ts` (F1 SIGKILL
+  ×50, F2 Case A SIGKILL ×50, Case B wait-vs-event race ×50 deterministic classification,
+  Case C duplicate/restart replay, 2- & 8-authority claim races, SIGSTOP stale-owner fence
+  refusal; `AXIOM_WF_TRIALS` tunes the count). **No new graph/IR vocabulary**; Server IR
+  stays `axiom.server.v8`, conformance stays `axiom.conformance.v8` (the conformance runner
+  drops its unused explicit event seq).
 
 Together, spec2–spec14 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is

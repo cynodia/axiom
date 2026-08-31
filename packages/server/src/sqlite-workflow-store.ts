@@ -20,11 +20,15 @@ import {
   type WorkflowEventWait,
   type WorkflowHistoryEntry,
   type WorkflowInstanceRecord,
+  type WorkflowJournalEntry,
   type WorkflowStartIdentity,
   type WorkflowStore,
   type WorkflowTransition,
   type WorkflowTransitionResult,
 } from './workflow-store.js';
+
+/** How many journalled accepted events to retain per store — a bounded crash-window buffer. */
+const JOURNAL_CAP = 8192;
 
 interface SqliteStatement {
   run(...parameters: unknown[]): { changes?: number };
@@ -77,6 +81,21 @@ function rowToRecord(row: Record<string, unknown>): WorkflowInstanceRecord {
     updatedAt: Number(row.updated_at),
     failure: P(row.failure),
     output: P(row.output),
+  };
+}
+
+function eventWaitOf(row: Record<string, unknown>): WorkflowEventWait {
+  const record = rowToRecord(row);
+  const wait = record.wait as Extract<WorkflowInstanceRecord['wait'], { kind: 'event' }>;
+  return {
+    instanceId: record.instanceId,
+    instanceRevision: record.instanceRevision,
+    stepId: wait.stepId,
+    activationId: record.activationId,
+    eventId: wait.eventId,
+    correlation: wait.correlation,
+    sinceEventSeq: wait.sinceEventSeq,
+    ...(wait.timeoutAt !== undefined ? { timeoutAt: wait.timeoutAt } : {}),
   };
 }
 
@@ -143,6 +162,13 @@ export async function createSqliteWorkflowStore(options: SqliteWorkflowStoreOpti
         outcome TEXT,
         PRIMARY KEY (instance_id, activation_id)
       );
+      CREATE TABLE IF NOT EXISTS axiom_workflow_event_journal (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL,
+        payload TEXT,
+        at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS ix_workflow_journal_event ON axiom_workflow_event_journal (event_id, seq);
     `);
   });
 
@@ -160,6 +186,24 @@ export async function createSqliteWorkflowStore(options: SqliteWorkflowStoreOpti
   const upsertOutcome = db.prepare(
     `INSERT INTO axiom_workflow_action_outcomes (instance_id, activation_id, outcome) VALUES (?, ?, ?)
      ON CONFLICT(instance_id, activation_id) DO UPDATE SET outcome = excluded.outcome`,
+  );
+  const insertJournal = db.prepare(
+    `INSERT INTO axiom_workflow_event_journal (event_id, payload, at) VALUES (?, ?, ?)`,
+  );
+  const lastRowId = db.prepare(`SELECT last_insert_rowid() AS seq`);
+  const trimJournal = db.prepare(
+    `DELETE FROM axiom_workflow_event_journal
+     WHERE seq <= (SELECT COALESCE(MAX(seq), 0) FROM axiom_workflow_event_journal) - ?`,
+  );
+  const readJournalSince = db.prepare(
+    `SELECT seq, event_id, payload FROM axiom_workflow_event_journal
+     WHERE event_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?`,
+  );
+  // `sqlite_sequence` holds the highest AUTOINCREMENT value ever allocated for the table —
+  // monotone even after the journal is trimmed, which is exactly the `sinceEventSeq`
+  // boundary a fresh wait must capture (spec14pt2 F2).
+  const readJournalHighWater = db.prepare(
+    `SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'axiom_workflow_event_journal'), 0) AS seq`,
   );
 
   const terminal = (s: string): boolean => s === 'completed' || s === 'failed' || s === 'cancelled';
@@ -394,21 +438,55 @@ export async function createSqliteWorkflowStore(options: SqliteWorkflowStoreOpti
             `SELECT * FROM axiom_workflow_instances WHERE wait_event_id = ? AND status = 'waiting' LIMIT ?`,
           )
           .all(eventId, limit)
-          .map((row) => {
-            const record = rowToRecord(row);
-            const wait = record.wait as Extract<WorkflowInstanceRecord['wait'], { kind: 'event' }>;
-            return {
-              instanceId: record.instanceId,
-              instanceRevision: record.instanceRevision,
-              stepId: wait.stepId,
-              activationId: record.activationId,
-              eventId: wait.eventId,
-              correlation: wait.correlation,
-              sinceEventSeq: wait.sinceEventSeq,
-              ...(wait.timeoutAt !== undefined ? { timeoutAt: wait.timeoutAt } : {}),
-            };
-          }),
+          .map(eventWaitOf),
       );
+    },
+
+    async pendingEventWaits(limit): Promise<WorkflowEventWait[]> {
+      return guard('sqliteWorkflowStore.pendingEventWaits', () =>
+        db
+          .prepare(
+            `SELECT * FROM axiom_workflow_instances
+             WHERE wait_event_id IS NOT NULL AND status = 'waiting'
+             ORDER BY updated_at ASC LIMIT ?`,
+          )
+          .all(limit)
+          .map(eventWaitOf),
+      );
+    },
+
+    async appendAcceptedEvent(eventId, payload): Promise<number> {
+      return guard('sqliteWorkflowStore.appendAcceptedEvent', () => {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          insertJournal.run(eventId, payload === undefined ? null : J(payload), Date.now());
+          const seq = Number(lastRowId.get()?.seq ?? 0);
+          trimJournal.run(JOURNAL_CAP);
+          db.exec('COMMIT');
+          return seq;
+        } catch (error) {
+          try {
+            db.exec('ROLLBACK');
+          } catch {
+            /* nothing open */
+          }
+          throw error;
+        }
+      });
+    },
+
+    async readAcceptedEventsSince(eventId, sinceSeq, limit): Promise<WorkflowJournalEntry[]> {
+      return guard('sqliteWorkflowStore.readAcceptedEventsSince', () =>
+        readJournalSince.all(eventId, sinceSeq, limit).map((row) => ({
+          seq: Number(row.seq),
+          eventId: String(row.event_id),
+          payload: P(row.payload),
+        })),
+      );
+    },
+
+    async latestAcceptedEventSeq(): Promise<number> {
+      return guard('sqliteWorkflowStore.latestAcceptedEventSeq', () => Number(readJournalHighWater.get()?.seq ?? 0));
     },
 
     async history(instanceId) {

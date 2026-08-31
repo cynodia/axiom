@@ -208,8 +208,12 @@ export interface WorkflowEngine {
   getWorkflow(instanceId: string): Promise<WorkflowInspection | undefined>;
   listWorkflows(limit?: number): Promise<WorkflowInspection[]>;
   workflowHistory(instanceId: string): Promise<Awaited<ReturnType<WorkflowStore['history']>>>;
-  /** The event pipeline calls this for every accepted event (spec14 §54-§60). */
-  onEventAccepted(eventId: string, payload: unknown, eventSeq: number): Promise<void>;
+  /**
+   * The event pipeline calls this for every accepted event (spec14 §54-§60). The engine
+   * appends it to the durable `WorkflowStore` journal and allocates its store-global `seq`
+   * itself (spec14pt2 F2), so an event survives the death of the authority that routed it.
+   */
+  onEventAccepted(eventId: string, payload: unknown): Promise<void>;
   /** Advance one instance now (used by the poll loop and directly after a local start). */
   advance(instanceId: string): Promise<void>;
 }
@@ -439,13 +443,16 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
           return false;
         }
         // First activation: register the wait durably, in the same transition (spec14 §54-§57).
+        // `sinceEventSeq` is captured from the durable journal high-water mark, so the
+        // observation boundary is the same integer every authority sees (spec14pt2 F2).
         const correlation = step.where ? { present: true } : {};
+        const sinceEventSeq = await store.latestAcceptedEventSeq();
         const wait: WorkflowWait = {
           kind: 'event',
           stepId: String(step.id),
           eventId: String(step.event),
           correlation,
-          sinceEventSeq: latestEventSeq,
+          sinceEventSeq,
           ...(step.timeout ? { timeoutAt: now() + step.timeout.seconds * 1000 } : {}),
         };
         await cas({
@@ -596,15 +603,16 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
 
   // ---- event routing ------------------------------------------------------------
 
-  let latestEventSeq = 0;
-  const eventJournal: Array<{ seq: number; eventId: string; payload: unknown }> = [];
-  const EVENT_JOURNAL_MAX = 2048;
+  const JOURNAL_SCAN = 512;
 
-  async function onEventAccepted(eventId: string, payload: unknown, eventSeq: number): Promise<void> {
-    latestEventSeq = Math.max(latestEventSeq, eventSeq);
-    eventJournal.push({ seq: eventSeq, eventId, payload });
-    if (eventJournal.length > EVENT_JOURNAL_MAX) eventJournal.splice(0, eventJournal.length - EVENT_JOURNAL_MAX);
-    await deliverEventToWaits(eventId, payload, eventSeq);
+  async function onEventAccepted(eventId: string, payload: unknown): Promise<void> {
+    // Durable first: the accepted event is journalled (with a store-global `seq`) before it
+    // is routed, so if this authority dies before any waiting instance transitions, another
+    // authority replays it from the shared journal on startup (spec14pt2 F2). Dedup has
+    // already collapsed a redelivered physical event upstream, so this runs once per logical
+    // event.
+    const seq = await store.appendAcceptedEvent(eventId, payload);
+    await deliverEventToWaits(eventId, payload, seq);
   }
 
   async function deliverEventToWaits(eventId: string, payload: unknown, eventSeq: number): Promise<void> {
@@ -652,16 +660,32 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
     }
   }
 
-  /** On (re)activation of a wait, replay any journalled event that landed since `sinceEventSeq`. */
+  /**
+   * On (re)activation of a wait — and on startup / failover for every pending event wait —
+   * replay any durably-journalled event that landed after `sinceEventSeq` (spec14pt2 F2).
+   * This is what lets an authority that never saw the live `onEventAccepted` still match an
+   * event the now-dead routing authority accepted.
+   */
   async function rescanEventBacklog(instanceId: string): Promise<void> {
     const record = await store.load(instanceId);
     if (!record || record.status !== 'waiting' || record.wait?.kind !== 'event') return;
-    for (const entry of [...eventJournal]) {
-      if (entry.eventId === record.wait.eventId && entry.seq > record.wait.sinceEventSeq) {
-        await deliverEventToWaits(entry.eventId, entry.payload, entry.seq);
-        const after = await store.load(instanceId);
-        if (!after || after.status !== 'waiting') return;
-      }
+    const backlog = await store.readAcceptedEventsSince(
+      record.wait.eventId,
+      record.wait.sinceEventSeq,
+      JOURNAL_SCAN,
+    );
+    for (const entry of backlog) {
+      await deliverEventToWaits(entry.eventId, entry.payload, entry.seq);
+      const after = await store.load(instanceId);
+      if (!after || after.status !== 'waiting') return;
+    }
+  }
+
+  /** Startup / failover: replay the durable journal against every instance still waiting on an event. */
+  async function replayEventJournal(): Promise<void> {
+    const waits = await store.pendingEventWaits(recoverBatch);
+    for (const wait of waits) {
+      await rescanEventBacklog(wait.instanceId).catch(() => {});
     }
   }
 
@@ -772,6 +796,10 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
       for (const record of due) {
         await advance(record.instanceId).catch(() => {});
       }
+      // spec14pt2 F2: also replay the durable event journal against every instance still
+      // waiting on an event, so a match the (now dead) routing authority accepted is picked
+      // up here even though this authority never saw the live `onEventAccepted`.
+      await replayEventJournal();
     } catch {
       /* a transient store failure is retried on the next tick */
     } finally {

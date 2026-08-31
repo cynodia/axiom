@@ -1665,7 +1665,6 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
   // ---- Durable workflows (spec14) --------------------------------------------------
 
-  let workflowEventSeq = 0;
   const workflowStore: WorkflowStore | undefined =
     (ir.workflows?.length ?? 0) > 0 ? options.workflowStore ?? createMemoryWorkflowStore() : undefined;
 
@@ -1675,15 +1674,17 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         store: workflowStore,
         compatibilityFingerprint: compatibilityKeyStr,
         instanceId,
-        ...(coordination ? { coordination } : {}),
+        ...(coordination ? { coordination, leaseMs: coordinationConfig.leaseDurationMs } : {}),
         resolvePrincipal: async (credential) => {
           const principal = (host.authenticate ? await host.authenticate(credential as never) : null) ?? null;
           return { principal, fingerprint: await fingerprint(principal ?? 'anon') };
         },
         // A workflow ActionDef step runs as a system invocation under the workflow's bound
-        // principal, with the stable logical invocation identity as its request id — so a
-        // crash between "action committed" and "workflow transition recorded" is reconciled
-        // by the idempotency window rather than executing the action twice (spec14 §31, §32).
+        // principal, with the stable logical invocation identity as its request id. A crash
+        // between "action committed" and "workflow transition recorded" is reconciled by the
+        // **durable** idempotency record `invokeCore` commits atomically with the state
+        // (spec14pt2 F1) — a recovery authority with an empty in-memory cache still returns
+        // the canonical outcome instead of executing the action twice (spec14 §31, §32).
         invokeAction: async ({ actionId, arguments: args, principal, invocationId }) => {
           const context: ExecutionContext = { principal: principal as PrincipalRecord | null, source: 'system' };
           const replayKey = recordKey(context.principal, invocationId);
@@ -1720,6 +1721,22 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     // effect-outcome action alike. Reconcile to the durable revision before any
     // state-dependent semantics (guards, authorization, constraints, operations) run.
     await ensureStateCoherent();
+
+    // spec14pt2 F1: a durable idempotency record proves this exact invocation already
+    // logically committed. A recovery authority — a fresh process with no in-memory request
+    // cache, resuming a workflow's action step after the original authority died between
+    // "state committed" and "workflow transition recorded" — returns the canonical answer
+    // here instead of executing the action a second time. The record is written atomically
+    // with the state commit below (`PersistenceCommit.idempotency`), so it can never be
+    // present without the matching durable state.
+    if (replayKey && persistence.loadIdempotentResponse) {
+      const durable = await persistence.loadIdempotentResponse(replayKey);
+      if (durable) {
+        remember(replayKey, durable.response as InvokeResponse);
+        report({ kind: 'replay', actionId, ...(requestId ? { requestId } : {}) });
+        return { ...(durable.response as InvokeResponse), replayed: true };
+      }
+    }
 
     // The caller is bound for the whole invocation, not only for the authorization check.
     // An operation that records who acted — `field(ref(PRINCIPAL), F_USER_ID)` — must resolve
@@ -1857,6 +1874,14 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       });
       if (replayKey) {
         remember(replayKey, response as InvokeResponse);
+        // A successful invocation that wrote no durable state and dispatched no effect is
+        // idempotent by vacuity, but record it durably anyway so a recovery authority skips
+        // even the re-evaluation (spec14pt2 F1). Non-atomic is fine here: there is no state
+        // it could disagree with. A failed invocation is deliberately not recorded — a
+        // retryable workflow action must be free to run again.
+        if (ok && persistence.recordIdempotentResponse) {
+          await persistence.recordIdempotentResponse(replayKey, response, window).catch(() => {});
+        }
       }
       return response;
     }
@@ -1871,10 +1896,23 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       attempts: 0,
       dispatchDepth: depth,
     }));
+    // The canonical answer, computed before the commit so it can ride *inside* the commit
+    // transaction as a durable idempotency record (spec14pt2 F1). `changedObservables` is
+    // pure and the mutations are already applied to the runtime, so this is the same value
+    // the post-commit `respond` produces — only the revision is anticipated, and corrected
+    // below if another authority advanced the store in between.
+    const changes = changedObservables(observedBefore);
+    const anticipatedRevision = storeRevision + 1;
+    const committedResponse = replayKey
+      ? respond(true, result.diagnostics, changes, requestId, anticipatedRevision)
+      : undefined;
     const outcome = await persistence.commit({
       writes: writes.map((stateId) => ({ stateId, value: runtime.getState(stateId) })),
       expected,
       ...(effectsToCommit.length > 0 ? { effects: effectsToCommit } : {}),
+      ...(replayKey && committedResponse
+        ? { idempotency: { key: replayKey, response: committedResponse, window } }
+        : {}),
     });
 
     if (!outcome.committed) {
@@ -1943,8 +1981,6 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       }
     }
 
-    const changes: Record<NodeId, unknown> = changedObservables(observedBefore);
-
     const response = respond(true, result.diagnostics, changes, requestId);
     report({
       kind: 'invoke',
@@ -1958,6 +1994,17 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     });
     if (replayKey) {
       remember(replayKey, response as InvokeResponse);
+      // The atomic idempotency record already committed with the state and guarantees no
+      // re-execution. If the store advanced past our anticipation (another authority
+      // committed unrelated state in the same window), upgrade the durable copy to carry
+      // the exact revision — best-effort, correctness does not depend on it.
+      if (
+        committedResponse &&
+        outcome.revision !== anticipatedRevision &&
+        persistence.recordIdempotentResponse
+      ) {
+        await persistence.recordIdempotentResponse(replayKey, response, window).catch(() => {});
+      }
     }
     return response;
   }
@@ -1987,6 +2034,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     diagnostics: RuntimeDiagnostic[],
     changes: Record<NodeId, unknown>,
     requestId?: string,
+    revisionOverride?: number,
   ): InvokeResponse {
     return {
       kind: 'result',
@@ -1994,7 +2042,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       ok,
       diagnostics: diagnostics.map(disclosable),
       changes,
-      revision: storeRevision,
+      revision: revisionOverride ?? storeRevision,
       ...(requestId ? { requestId } : {}),
     };
   }
@@ -2047,11 +2095,11 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     const fired = await triggerRuntime.fireEvent(eventId, payload, depth);
     report({ kind: 'event-dispatched', eventId });
     // Durable workflows waiting on this event type are driven off the same accepted-event
-    // occurrence (spec14 §51, §54-§60). `eventSeq` is the monotone observation boundary a
-    // wait scans from; dedup has already collapsed a redelivered physical event upstream.
+    // occurrence (spec14 §51, §54-§60). The engine journals it durably and allocates the
+    // store-global observation `seq` itself (spec14pt2 F2); dedup has already collapsed a
+    // redelivered physical event upstream.
     if (workflowEngine) {
-      workflowEventSeq += 1;
-      void workflowEngine.onEventAccepted(String(eventId), payload, workflowEventSeq);
+      void workflowEngine.onEventAccepted(String(eventId), payload);
     }
     return { diagnostics: [], triggersOk: fired.ok };
   }

@@ -25,16 +25,16 @@ lease system.
 | 4 | `WorkflowStore` contract + `createMemoryWorkflowStore`. | ✅ |
 | 5 | `createSqliteWorkflowStore` — CAS inside `BEGIN IMMEDIATE`, indexed discovery, `INSERT OR IGNORE` init; parity + conflicting-transition race tested. | ✅ |
 | 6 | Ownership / recovery — reused 0.12 lease+fence; `recoverRunnable` poll loop; incompatible-build refusal. | ✅ |
-| 7 | ActionDef step — stable invocation id + `pendingAction` marker + durable `recordActionOutcome` reconciliation. Full-restart window before the outcome is recorded → follow-up durable idempotency store. | ◑ |
+| 7 | ActionDef step — stable invocation id + `pendingAction` marker + durable `recordActionOutcome` reconciliation. **spec14pt2 F1**: durable idempotency record committed atomically with the ActionDef state closes the full-restart window. | ✅ |
 | 8 | Timer step — target captured once; the waiting row is the timer. | ✅ |
-| 9 | wait-event — Model B registration with the transition; `sinceEventSeq` boundary; startup replay; dedup unchanged; fanout. | ✅ |
+| 9 | wait-event — Model B registration with the transition; `sinceEventSeq` boundary; startup replay; dedup unchanged; fanout. **spec14pt2 F2**: replay from a durable cross-authority `WorkflowStore` event journal. | ✅ |
 | 10 | branch / complete / fail — pure deterministic transitions. | ✅ |
 | 11 | Retry — durable `attempt` + `nextEligibleAt` backoff, not-due guard. | ✅ |
 | 12 | Cancellation — fenced durable transition, linearized on `instanceRevision`, not rollback. | ✅ |
 | 13 | `AgentAPI.analyzeWorkflow`; `server.getWorkflow` / `inspectWorkflows` / `workflowHistory`. | ✅ |
 | 14 | `axiom.conformance.v8` — 13 fixtures + manifest + public runner + 2 negative controls. | ✅ |
-| 15 | in-process fencing/CAS + SQLite conflicting-transition race covered; real-OS-process 1/2/8 matrix at §258 counts deferred + named. | ◑ |
-| 16 | 0.12 / 0.12.1 / 0.13.1 suites re-run green (575 server incl. cross-process). | ✅ |
+| 15 | in-process fencing/CAS + SQLite conflicting-transition race, **plus** the spec14pt2 real-OS-process `workflow-crash-matrix` (F1 SIGKILL ×50, F2 A ×50, F2 B race ×50, F2 C replay, 2-/8-authority claim races, SIGSTOP stale owner). | ✅ |
+| 16 | 0.12 / 0.12.1 / 0.13.1 suites re-run green (584 server incl. cross-process + the new crash matrix). | ✅ |
 | 17 | `docs/WORKFLOWS.md`, AGENT_REFERENCE §DURABLE WORKFLOWS, AUTHORITY v8 row, VALIDATION, anti-patterns #72–#77, doc-map rows, CLAUDE.md, version bump. `release:pack`/`verify`/`consumer`/`probe` green. | ✅ |
 | 18 | Publish alpha. | ⏳ |
 | 19 | Blind Phase 22 (`D1 / E1 / S1`). | ⏳ **post-publish** |
