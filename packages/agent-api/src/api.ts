@@ -9,6 +9,8 @@ import { inspectDistributedSemantics } from './distributed.js';
 import type { DistributedSemanticsInspection } from './distributed.js';
 import { analyzeLiveQuery } from './live-query.js';
 import type { LiveQueryAnalysis } from './live-query.js';
+import { analyzeWorkflow } from './workflow.js';
+import type { WorkflowAnalysis } from './workflow.js';
 
 /**
  * The machine-facing interface to an application. Agents query semantics and apply
@@ -90,5 +92,15 @@ export class AgentAPI extends PresentationQueries {
    */
   analyzeLiveQuery(queryId: string): LiveQueryAnalysis {
     return analyzeLiveQuery(this.graph, queryId);
+  }
+
+  /**
+   * The durable-workflow semantics of one `WorkflowDef` (spec14 §138, §139): its inputs,
+   * step shape and edges, action / event dependencies, reachable terminal outcomes,
+   * acyclicity, and the kinds of `waitingReason` an instance can produce. Static over the
+   * graph; live runtime state is `AxiomServer.getWorkflow(instanceId)`.
+   */
+  analyzeWorkflow(workflowId: string): WorkflowAnalysis {
+    return analyzeWorkflow(this.graph, workflowId);
   }
 }

@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.13.1-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.14.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -730,7 +730,8 @@ Portable artifacts, for a runtime written in another language:
 @cynodia/axiom-server/schema/server-ir.v4.schema.json JSON Schema for axiom.server.v4
 @cynodia/axiom-server/schema/server-ir.v5.schema.json JSON Schema for axiom.server.v5
 @cynodia/axiom-server/schema/server-ir.v6.schema.json JSON Schema for axiom.server.v6
-@cynodia/axiom-server/schema/server-ir.v7.schema.json JSON Schema for axiom.server.v7 (latest)
+@cynodia/axiom-server/schema/server-ir.v7.schema.json JSON Schema for axiom.server.v7
+@cynodia/axiom-server/schema/server-ir.v8.schema.json JSON Schema for axiom.server.v8 (latest)
 @cynodia/axiom-server/schema/protocol.v1.schema.json  JSON Schema for the protocol
 @cynodia/axiom-server/conformance/queries/<name>.json one query conformance fixture (axiom.conformance.v4)
 @cynodia/axiom-server/conformance/migrations/<name>.json one migration conformance fixture (axiom.conformance.v5)
@@ -1118,6 +1119,88 @@ Portable tier: `axiom.conformance.v7` (`conformance/live/`), `runLiveQueryConfor
 Diagnostics: `LIVE_QUERY_NOT_CAPABLE` `LIVE_QUERY_CURSOR_INVALID`
 `LIVE_QUERY_CURSOR_INCOMPATIBLE` `LIVE_QUERY_EVALUATION_FAILED`
 `LIVE_QUERY_PROVIDER_NOT_OBSERVABLE` `QUERY_STATE_REF_NOT_ALLOWED`.
+
+## DURABLE WORKFLOWS
+
+Full model: [`WORKFLOWS.md`](WORKFLOWS.md).
+
+A `WorkflowDef` (graph node kind `workflow`) is a long-running semantic computation with a
+**durable control position** — not a background promise, a persisted callback, a job-queue
+entry, a cron task, a mutable JSON blob or a process-local listener. No application script
+body. Server IR `axiom.server.v8`; a graph with no workflow compiles to the byte-identical
+v1–v7 it always did and its `semanticFingerprint` is unchanged.
+
+Steps (six, portable): `action` (invoke an `ActionDef` under the workflow principal;
+`onError` edge; `retry` policy), `wait-event` (wait for a matching canonical `EventDef`;
+`where` predicate, `bind` → single-assignment bindings, `timeout` + `onTimeout`), `timer`
+(`after: {seconds}` / `at: Expression`, target captured once), `branch` (deterministic
+`when` → `then`/`else`), `complete` (→ `completed`, `output`), `fail` (→ `failed`, `error`).
+Acyclic — `validateGraph` rejects a control-flow cycle.
+
+Expression scope (closed): `ref(<input id>)`, `ref(<binding id>)`, `ref('EVENT')` (only in a
+`wait-event` `where`/`bind`), `ref('PRINCIPAL')`. **Not** a `StateDef`
+(`WORKFLOW_EXPRESSION_SCOPE`), **not** a `QueryDef`, **not** `now`/`uuid`/`random`
+(`WORKFLOW_NONDETERMINISTIC`). Model dynamic state as an `ActionDef` before a branch.
+
+Start: `server.startWorkflow({ workflowId, arguments, credential, idempotencyKey })` →
+`{ instanceId, status }`. Idempotent on `(workflowId, principalFingerprint, idempotencyKey,
+compatibilityFingerprint)` — a retry after a lost response is one logical instance. The
+principal is bound; every action step runs as it and re-evaluates current authorization.
+
+Identity: `instanceRevision` (monotone durable) + a coordination `fence` — every transition
+is a CAS `R + fence → R+1`, atomic, check *inside* the write transaction. `activationId` =
+`"<stepId>#0"` (a future loop feature revisits without changing instance identity). Action
+invocation identity = `"<instanceId>/<activationId>"`, used as the `ActionDef` request id so
+a crash between "action committed" and "transition recorded" reconciles rather than
+double-executing. **Exactly-once logical transition** per activation; **not** exactly-once
+physical effect execution (effect system governs that; logical effect identity is stable
+across workflow retries).
+
+Event waits: the durable wait registration (`eventId`, correlation, `sinceEventSeq`) commits
+in the *same* transition — no "waiting then subscribe" gap. Driven by Axiom's single inbound
+event pipeline; startup/failover replays a match that landed in a crash window from
+`sinceEventSeq`; existing dedup means a wait transitions at most once; fanout (a match
+unblocks every independently-matching instance, never global consume). Event vs timeout:
+exactly one wins on `instanceRevision`.
+
+Timers: target instant computed once on activation and stored — a restart does not
+recompute `now + after`. Physically at-least-once firing, logically exactly-once transition.
+The waiting row *is* the timer.
+
+Retries: `retry: { maxAttempts, initialDelaySeconds, backoffMultiplier, maxDelaySeconds }`.
+Retryable vs terminal is structured, never message-string parsing. Attempt count +
+`nextEligibleAt` are durable (authority death does not reset). Lease/fencing → one current
+executor.
+
+Cancellation: `server.cancelWorkflow(instanceId, credential)` — idempotent, a fenced durable
+transition to `cancelled`. **Not** rollback (committed actions / dispatched effects stand;
+no auto-compensation). A later timer/event does not transition a terminal instance. Terminal
+states are durable and irreversible; a stale authority cannot resurrect one.
+
+Multi-authority: leaderless. Any compatible authority advances any eligible instance;
+per-instance lease+fence (reused 0.12 `CoordinationProvider`); stale owner refused. Startup
+discovers runnable / retry-due / timer-due / recoverably-waiting instances and advances them
+— the application does **not** scan stuck workflows, call `resumeWorkflow`, or re-register
+timers/waits. Same logical outcome at 1 or N authorities. Incompatible build refuses to
+advance an instance (fail-closed).
+
+Inspection: `server.getWorkflow(instanceId)` / `inspectWorkflows(limit)` — `status`,
+`currentStepId`, `activationId`, `attempt`, `waitingReason`, `nextEligibleAt`,
+`instanceRevision`, `failure`, `output` (no secrets). `server.workflowHistory(instanceId)`
+— the durable transition log. `AgentAPI.analyzeWorkflow(workflowId)` — static: inputs, steps
++ edges, action/event dependencies, terminal outcomes, acyclicity, possible wait reasons.
+
+`WorkflowStore`: `createMemoryWorkflowStore()` (single process), `createSqliteWorkflowStore({
+location })` (cross-process — `BEGIN IMMEDIATE`, check inside the transaction, `busy_timeout`,
+`CREATE TABLE IF NOT EXISTS` + `INSERT OR IGNORE` init). Portable tier
+`axiom.conformance.v8` (`conformance/workflow/`), `runWorkflowConformanceFixture` / `Suite`.
+
+Diagnostics (validation): `WORKFLOW_ENTRY_NOT_FOUND` `WORKFLOW_STEP_NOT_FOUND`
+`WORKFLOW_DUPLICATE_STEP_ID` `WORKFLOW_INVALID_STEP` `WORKFLOW_CYCLE_NOT_ALLOWED`
+`WORKFLOW_ACTION_NOT_FOUND` `WORKFLOW_EVENT_NOT_FOUND` `WORKFLOW_BINDING_NOT_FOUND`
+`WORKFLOW_DUPLICATE_BINDING` `WORKFLOW_INVALID_RETRY_POLICY` `WORKFLOW_INVALID_TIMER`
+`WORKFLOW_UNREACHABLE_STEP` `WORKFLOW_NO_TERMINAL` `WORKFLOW_EXPRESSION_SCOPE`
+`WORKFLOW_NONDETERMINISTIC`.
 
 ## Metadata classes
 

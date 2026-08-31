@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.13.1-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.14.0-alpha.1. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -36,7 +36,7 @@ non-numeric collections, and obviously incompatible assignments.
 
 ## Codes
 
-106 codes, exported as `VALIDATION_CODES`. Every one is reachable.
+121 codes, exported as `VALIDATION_CODES`. Every one is reachable.
 
 ### Ids and references
 
@@ -190,6 +190,30 @@ connect schema 1 to it. A migration transform reads the old record through the r
 | `INVALID_MIGRATION_OPERATION` | A structurally malformed operation — an empty `change-field.to`, a `transform-record.produce` that is not an `object` expression, or a relationship operation naming no relationship. |
 | `MIGRATION_TRANSFORM_IMPURE` | A migration transform expression that calls `now` or `uuid`, or reads a scope other than the old record (`MIGRATION_OLD_SCOPE`) and the operation's declared constants (spec11 §25, §26). |
 | `MIGRATION_TRANSFORM_TYPE_MISMATCH` | A `transform-field` whose declared `toType` does not match the field's type in the target schema (spec11 §77). |
+
+### Durable workflows (0.14)
+
+`validateGraph` rejects an internally inconsistent `WorkflowDef` before it can be compiled
+to `axiom.server.v8` or executed. Every failure is a structured diagnostic — never a thrown
+`TypeError` on a malformed step.
+
+| Code | Raised when |
+| --- | --- |
+| `WORKFLOW_ENTRY_NOT_FOUND` | `WorkflowDef.entry` does not name a step of that workflow. |
+| `WORKFLOW_STEP_NOT_FOUND` | A control-flow edge (`next` / `onError` / `then` / `else` / `onTimeout`) or a binding's `producedBy` names a step that does not exist. |
+| `WORKFLOW_DUPLICATE_STEP_ID` | Two steps in one workflow share an id, or a step id collides with a graph node id. |
+| `WORKFLOW_INVALID_STEP` | A step with no id, or a `type` outside the six (`action`, `wait-event`, `timer`, `branch`, `complete`, `fail`). |
+| `WORKFLOW_CYCLE_NOT_ALLOWED` | The workflow control-flow graph contains a cycle. Retries are runtime policy, not graph edges. |
+| `WORKFLOW_ACTION_NOT_FOUND` | An `action` step references an `action` node that does not exist. |
+| `WORKFLOW_EVENT_NOT_FOUND` | A `wait-event` step references an `event` node that does not exist. |
+| `WORKFLOW_BINDING_NOT_FOUND` | A `bind` entry, or a `ref`, names a `WorkflowBinding` the workflow does not declare. |
+| `WORKFLOW_DUPLICATE_BINDING` | A binding is assigned by more than one step, or a `bind` targets a binding whose declared `producedBy` is a different step. |
+| `WORKFLOW_INVALID_RETRY_POLICY` | A `WorkflowRetryPolicy` with a non-positive `maxAttempts` / `initialDelaySeconds`, a `backoffMultiplier` below 1, or a `maxDelaySeconds` below `initialDelaySeconds`. |
+| `WORKFLOW_INVALID_TIMER` | A `timer` step with neither `after` nor `at`, with both, with a non-positive `after.seconds`, or a `wait-event` timeout that is non-positive. |
+| `WORKFLOW_UNREACHABLE_STEP` | A step not reachable from `entry` by control flow (an authoring mistake, so an error, not a warning). |
+| `WORKFLOW_NO_TERMINAL` | A reachable step from which no control-flow path can reach `complete` or `fail` (and which is not an intentional unbounded `wait-event`). |
+| `WORKFLOW_EXPRESSION_SCOPE` | A workflow expression references an id outside the workflow expression scope: `ref(<input id>)`, `ref(<binding id>)`, `ref('EVENT')` (only inside a `wait-event` `where` / `bind`), `ref('PRINCIPAL')`. Not a `StateDef`, not a `QueryDef`. |
+| `WORKFLOW_NONDETERMINISTIC` | A workflow expression calls `now` / `uuid` / `random`. Workflow decisions must be deterministic and replayable. |
 
 ### UI and routing
 

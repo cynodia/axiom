@@ -1,0 +1,2899 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cynodia.github.io/axiom/schema/server-ir.v8.schema.json",
+  "title": "Axiom Server IR v8",
+  "description": "The normative structure of an `axiom.server.v8` document. Structure only: what a conforming runtime must *do* with it is the semantic contract, and the conformance fixtures are the executable statement of that.",
+  "contract": "axiom.server.v8",
+  "release": "0.14.0-alpha.1",
+  "type": "object",
+  "required": [
+    "contract",
+    "id",
+    "name",
+    "version",
+    "entities",
+    "fields",
+    "states",
+    "actions",
+    "constraints",
+    "transitionConstraints",
+    "observableStateIds"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "axiom.server.v8"
+    },
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EntityDef"
+      }
+    },
+    "fields": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/FieldIndexEntry"
+      }
+    },
+    "states": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StateDef"
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ActionDef"
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ConstraintDef"
+      }
+    },
+    "transitionConstraints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TransitionConstraintDef"
+      }
+    },
+    "principalEntityId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "observableStateIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "expressionDefs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ExpressionDef"
+      }
+    },
+    "integrations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/IntegrationDef"
+      }
+    },
+    "integrationOperations": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/IntegrationOperationDef"
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EventDef"
+      }
+    },
+    "triggers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TriggerDef"
+      }
+    },
+    "subscriptions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SubscriptionDef"
+      }
+    },
+    "storages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StorageDef"
+      }
+    },
+    "queries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/QueryDef"
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RelationshipDef"
+      }
+    },
+    "readPolicies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ReadPolicyDef"
+      }
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "schemaFingerprint": {
+      "type": "string"
+    },
+    "migrations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MigrationDef"
+      }
+    }
+  },
+  "$defs": {
+    "NodeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "FieldId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "LiteralValue": {
+      "description": "Portable data. No undefined, NaN, Infinity, date object or class instance.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LiteralValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/LiteralValue"
+          }
+        }
+      ]
+    },
+    "TypeRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "primitive"
+            },
+            "primitive": {
+              "enum": [
+                "string",
+                "number",
+                "boolean",
+                "date",
+                "datetime",
+                "binary"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "primitive"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "entity"
+            },
+            "entityId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "entityId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "collection"
+            },
+            "itemType": {
+              "$ref": "#/$defs/TypeRef"
+            }
+          },
+          "required": [
+            "kind",
+            "itemType"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "optional"
+            },
+            "valueType": {
+              "$ref": "#/$defs/TypeRef"
+            }
+          },
+          "required": [
+            "kind",
+            "valueType"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "enum"
+            },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "values"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "group"
+            },
+            "keyType": {
+              "$ref": "#/$defs/TypeRef"
+            },
+            "itemType": {
+              "$ref": "#/$defs/TypeRef"
+            }
+          },
+          "required": [
+            "kind",
+            "keyType",
+            "itemType"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Expression": {
+      "description": "Every expression kind: literal, ref, field, object, binary, unary, call, filter, find, map, sort, every, some, flatten, conditional, group, expression-ref.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "literal"
+            },
+            "value": {
+              "$ref": "#/$defs/LiteralValue"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "ref"
+            },
+            "targetId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "targetId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "field"
+            },
+            "source": {
+              "$ref": "#/$defs/Expression"
+            },
+            "fieldId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "fieldId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "object"
+            },
+            "entityId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ObjectEntry"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "entries"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "binary"
+            },
+            "operator": {
+              "enum": [
+                "eq",
+                "neq",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "and",
+                "or",
+                "add",
+                "subtract",
+                "multiply",
+                "divide"
+              ]
+            },
+            "left": {
+              "$ref": "#/$defs/Expression"
+            },
+            "right": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "operator",
+            "left",
+            "right"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "unary"
+            },
+            "operator": {
+              "enum": [
+                "not",
+                "negate"
+              ]
+            },
+            "operand": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "operator",
+            "operand"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "call"
+            },
+            "function": {
+              "enum": [
+                "required",
+                "is-empty",
+                "non-empty",
+                "length",
+                "contains",
+                "concat",
+                "coalesce",
+                "one-of",
+                "count",
+                "sum",
+                "lowercase",
+                "to-string",
+                "trim",
+                "substring-before",
+                "substring-after",
+                "now",
+                "uuid"
+              ]
+            },
+            "arguments": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Expression"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "function",
+            "arguments"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "filter"
+            },
+            "source": {
+              "$ref": "#/$defs/Expression"
+            },
+            "scopeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "predicate": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "scopeId",
+            "predicate"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "find"
+            },
+            "source": {
+              "$ref": "#/$defs/Expression"
+            },
+            "scopeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "predicate": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "scopeId",
+            "predicate"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "map"
+            },
+            "source": {
+              "$ref": "#/$defs/Expression"
+            },
+            "scopeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "projection": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "scopeId",
+            "projection"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "sort"
+            },
+            "source": {
+              "$ref": "#/$defs/Expression"
+            },
+            "scopeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "by": {
+              "$ref": "#/$defs/Expression"
+            },
+            "direction": {
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "scopeId",
+            "by"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "every"
+            },
+            "source": {
+              "$ref": "#/$defs/Expression"
+            },
+            "scopeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "predicate": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "scopeId",
+            "predicate"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "some"
+            },
+            "source": {
+              "$ref": "#/$defs/Expression"
+            },
+            "scopeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "predicate": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "scopeId",
+            "predicate"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "flatten"
+            },
+            "source": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "source"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "conditional"
+            },
+            "condition": {
+              "$ref": "#/$defs/Expression"
+            },
+            "whenTrue": {
+              "$ref": "#/$defs/Expression"
+            },
+            "whenFalse": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "condition",
+            "whenTrue",
+            "whenFalse"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "group"
+            },
+            "source": {
+              "$ref": "#/$defs/Expression"
+            },
+            "scopeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "by": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "scopeId",
+            "by"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "expression-ref"
+            },
+            "expressionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "arguments": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Expression"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "expressionId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ObjectEntry": {
+      "type": "object",
+      "properties": {
+        "fieldId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "$ref": "#/$defs/Expression"
+        }
+      },
+      "required": [
+        "fieldId",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "Location": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "state"
+            },
+            "stateId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "stateId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "field"
+            },
+            "target": {
+              "$ref": "#/$defs/Location"
+            },
+            "fieldId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "fieldId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "collection-item"
+            },
+            "collection": {
+              "$ref": "#/$defs/Location"
+            },
+            "selector": {
+              "$ref": "#/$defs/CollectionSelector"
+            }
+          },
+          "required": [
+            "kind",
+            "collection",
+            "selector"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/ProviderRecordLocation"
+        }
+      ]
+    },
+    "CollectionItemLocation": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "collection-item"
+        },
+        "collection": {
+          "$ref": "#/$defs/Location"
+        },
+        "selector": {
+          "$ref": "#/$defs/CollectionSelector"
+        }
+      },
+      "required": [
+        "kind",
+        "collection",
+        "selector"
+      ],
+      "additionalProperties": false
+    },
+    "ProviderRecordLocation": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "provider-record"
+        },
+        "sourceEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identityFieldId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identityValue": {
+          "$ref": "#/$defs/Expression"
+        }
+      },
+      "required": [
+        "kind",
+        "sourceEntityId",
+        "identityFieldId",
+        "identityValue"
+      ],
+      "additionalProperties": false
+    },
+    "CollectionSelector": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "identity"
+            },
+            "fieldId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "value": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "index"
+            },
+            "index": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "index"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "FieldDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/TypeRef"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "defaultValue": {
+          "$ref": "#/$defs/LiteralValue"
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "valueType"
+      ],
+      "additionalProperties": false
+    },
+    "FieldIndexEntry": {
+      "type": "object",
+      "properties": {
+        "entityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "field": {
+          "$ref": "#/$defs/FieldDef"
+        }
+      },
+      "required": [
+        "entityId",
+        "field"
+      ],
+      "additionalProperties": false
+    },
+    "EntityDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "entity"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldDef"
+          }
+        },
+        "identityFieldId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "fields"
+      ],
+      "additionalProperties": false
+    },
+    "StateDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "state"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "valueType": {
+          "$ref": "#/$defs/TypeRef"
+        },
+        "initialValue": {
+          "$ref": "#/$defs/LiteralValue"
+        },
+        "derivation": {
+          "$ref": "#/$defs/Expression"
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "ephemeral": {
+          "type": "boolean"
+        },
+        "authority": {
+          "enum": [
+            "client",
+            "server"
+          ]
+        },
+        "serverOnly": {
+          "type": "boolean"
+        },
+        "persistence": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "memory"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "local-storage"
+                },
+                "key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "remote"
+                },
+                "sourceId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "sourceId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "valueType"
+      ],
+      "additionalProperties": false
+    },
+    "FailureMode": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "additionalProperties": false
+    },
+    "ActionGuard": {
+      "type": "object",
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/Expression"
+        },
+        "failureMode": {
+          "$ref": "#/$defs/FailureMode"
+        }
+      },
+      "required": [
+        "condition"
+      ],
+      "additionalProperties": false
+    },
+    "ActionParameter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/TypeRef"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "Operation": {
+      "description": "Every operation kind: set, insert, remove, for-each, invoke, navigate, native, integration-query, integration-effect, blob-metadata, blob-commit, blob-delete, query.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/MutationOperation"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "for-each"
+            },
+            "collection": {
+              "$ref": "#/$defs/Expression"
+            },
+            "scopeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operations": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MutationOperation"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "collection",
+            "scopeId",
+            "operations"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "invoke"
+            },
+            "actionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "arguments": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Expression"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "actionId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "navigate"
+            },
+            "routeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            },
+            "parameters": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Expression"
+              }
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "native"
+            },
+            "implementationId": {
+              "type": "string"
+            },
+            "inputs": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Expression"
+              }
+            },
+            "resultTarget": {
+              "$ref": "#/$defs/Location"
+            },
+            "declaredEffects": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "implementationId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "blob-metadata"
+            },
+            "storageId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blobKey": {
+              "$ref": "#/$defs/Expression"
+            },
+            "bindAs": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "storageId",
+            "blobKey",
+            "bindAs"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "blob-commit"
+            },
+            "storageId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blobKey": {
+              "$ref": "#/$defs/Expression"
+            },
+            "succeededEventId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "failedEventId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "storageId",
+            "blobKey"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "blob-delete"
+            },
+            "storageId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blobKey": {
+              "$ref": "#/$defs/Expression"
+            },
+            "succeededEventId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "failedEventId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "storageId",
+            "blobKey"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "integration-query"
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "arguments": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Expression"
+              }
+            },
+            "bindAs": {
+              "type": "string",
+              "minLength": 1
+            },
+            "timeoutMs": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId",
+            "bindAs"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "integration-effect"
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "arguments": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Expression"
+              }
+            },
+            "idempotencyKey": {
+              "$ref": "#/$defs/Expression"
+            },
+            "succeededEventId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "failedEventId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "operationId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "query"
+            },
+            "queryId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "arguments": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Expression"
+              }
+            },
+            "bindAs": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "queryId",
+            "bindAs"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "MutationOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "set"
+            },
+            "target": {
+              "$ref": "#/$defs/Location"
+            },
+            "value": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "insert"
+            },
+            "target": {
+              "$ref": "#/$defs/Location"
+            },
+            "value": {
+              "$ref": "#/$defs/Expression"
+            },
+            "position": {
+              "enum": [
+                "start",
+                "end"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "remove"
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/CollectionItemLocation"
+                },
+                {
+                  "$ref": "#/$defs/ProviderRecordLocation"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ActionDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "action"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActionParameter"
+          }
+        },
+        "guards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActionGuard"
+          }
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Operation"
+          }
+        },
+        "postconditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "failureModes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FailureMode"
+          }
+        },
+        "destructive": {
+          "type": "boolean"
+        },
+        "requiresConfirmation": {
+          "type": "boolean"
+        },
+        "confirmationMessage": {
+          "type": "string"
+        },
+        "authorization": {
+          "$ref": "#/$defs/Expression"
+        },
+        "confirmation": {
+          "type": "object"
+        },
+        "invocation": {
+          "type": "object",
+          "properties": {
+            "allowedSources": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "client",
+                  "system"
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "operations"
+      ],
+      "additionalProperties": false
+    },
+    "ConstraintDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "constraint"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "expression": {
+          "$ref": "#/$defs/Expression"
+        },
+        "entityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "expression"
+      ],
+      "additionalProperties": false
+    },
+    "TransitionConstraintDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "transition-constraint"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "entityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "previousScopeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "proposedScopeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expression": {
+          "$ref": "#/$defs/Expression"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "entityId",
+        "previousScopeId",
+        "proposedScopeId",
+        "expression"
+      ],
+      "additionalProperties": false
+    },
+    "ExpressionParameter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/TypeRef"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "ExpressionDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "expression"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExpressionParameter"
+          }
+        },
+        "expression": {
+          "$ref": "#/$defs/Expression"
+        },
+        "valueType": {
+          "$ref": "#/$defs/TypeRef"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "expression"
+      ],
+      "additionalProperties": false
+    },
+    "IntegrationDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "integration"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "IntegrationOperationParameter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/TypeRef"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "valueType"
+      ],
+      "additionalProperties": false
+    },
+    "RetryPolicy": {
+      "type": "object",
+      "properties": {
+        "policy": {
+          "enum": [
+            "none",
+            "fixed",
+            "exponential"
+          ]
+        },
+        "maxAttempts": {
+          "type": "number"
+        },
+        "delayMs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "policy"
+      ],
+      "additionalProperties": false
+    },
+    "IntegrationOperationDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "integration-operation"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "integrationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "enum": [
+            "query",
+            "effect"
+          ]
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IntegrationOperationParameter"
+          }
+        },
+        "resultType": {
+          "$ref": "#/$defs/TypeRef"
+        },
+        "clientSafe": {
+          "type": "boolean"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryPolicy"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "integrationId",
+        "mode",
+        "resultType"
+      ],
+      "additionalProperties": false
+    },
+    "EventDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "event"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "payloadType": {
+          "$ref": "#/$defs/TypeRef"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "payloadType"
+      ],
+      "additionalProperties": false
+    },
+    "TriggerSpec": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "interval"
+            },
+            "everyMs": {
+              "type": "number"
+            },
+            "overlap": {
+              "enum": [
+                "skip",
+                "queue"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "everyMs"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "delay"
+            },
+            "afterMs": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "afterMs"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "lifecycle"
+            },
+            "event": {
+              "enum": [
+                "application-start",
+                "runtime-ready",
+                "route-enter",
+                "route-leave"
+              ]
+            },
+            "routeId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "event"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "event"
+            },
+            "eventId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "eventId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TriggerDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "trigger"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "actionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "when": {
+          "$ref": "#/$defs/TriggerSpec"
+        },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "enabledWhen": {
+          "$ref": "#/$defs/Expression"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "actionId",
+        "when"
+      ],
+      "additionalProperties": false
+    },
+    "SubscriptionDeliveryPolicy": {
+      "type": "object",
+      "properties": {
+        "maxQueued": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "backpressure": {
+          "enum": [
+            "block",
+            "reject",
+            "drop-oldest",
+            "drop-newest"
+          ]
+        },
+        "deduplicateBy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deduplicationWindow": {
+          "type": "number"
+        },
+        "maxAttempts": {
+          "type": "number"
+        },
+        "onFailure": {
+          "enum": [
+            "report",
+            "pause"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SubscriptionLifecyclePolicy": {
+      "type": "object",
+      "properties": {
+        "autoStart": {
+          "type": "boolean"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "reconnect": {
+          "$ref": "#/$defs/RetryPolicy"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SubscriptionDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "subscription"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "integrationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "description": "A semantic source name the adapter maps to a topic, URL, queue or device. Never a broker address, a socket or a path."
+        },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/SubscriptionLifecyclePolicy"
+        },
+        "delivery": {
+          "$ref": "#/$defs/SubscriptionDeliveryPolicy"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "integrationId",
+        "eventId"
+      ],
+      "additionalProperties": false
+    },
+    "StorageDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "storage"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "blobEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "readAuthorization": {
+          "$ref": "#/$defs/Expression"
+        },
+        "uploadAuthorization": {
+          "$ref": "#/$defs/Expression"
+        },
+        "acceptedMediaTypes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "maxSizeBytes": {
+          "type": "number"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryPolicy"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "blobEntityId"
+      ],
+      "additionalProperties": false
+    },
+    "RelationshipEndpoint": {
+      "type": "object",
+      "properties": {
+        "entityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fieldId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "entityId",
+        "fieldId"
+      ],
+      "additionalProperties": false
+    },
+    "RelationshipDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "relationship"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "from": {
+          "$ref": "#/$defs/RelationshipEndpoint"
+        },
+        "to": {
+          "$ref": "#/$defs/RelationshipEndpoint"
+        },
+        "cardinality": {
+          "enum": [
+            "to-one",
+            "to-many"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "from",
+        "to",
+        "cardinality"
+      ],
+      "additionalProperties": false
+    },
+    "ReadPolicyDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "read-policy"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "entityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rowScopeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "predicate": {
+          "$ref": "#/$defs/Expression"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "entityId",
+        "rowScopeId",
+        "predicate"
+      ],
+      "additionalProperties": false
+    },
+    "QueryParameter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/TypeRef"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "valueType"
+      ],
+      "additionalProperties": false
+    },
+    "QuerySortKey": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/Expression"
+        },
+        "direction": {
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        },
+        "nulls": {
+          "enum": [
+            "first",
+            "last"
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "QueryProjectionField": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "$ref": "#/$defs/Expression"
+        }
+      },
+      "required": [
+        "id",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "QueryProjection": {
+      "type": "object",
+      "properties": {
+        "entityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueryProjectionField"
+          }
+        }
+      },
+      "required": [
+        "entityId",
+        "fields"
+      ],
+      "additionalProperties": false
+    },
+    "QueryRelationshipUse": {
+      "type": "object",
+      "properties": {
+        "relationshipId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bindAs": {
+          "type": "string",
+          "minLength": 1
+        },
+        "maxPageSize": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "relationshipId",
+        "bindAs"
+      ],
+      "additionalProperties": false
+    },
+    "QueryAggregate": {
+      "type": "object",
+      "properties": {
+        "function": {
+          "enum": [
+            "count",
+            "sum",
+            "min",
+            "max",
+            "average"
+          ]
+        },
+        "key": {
+          "$ref": "#/$defs/Expression"
+        },
+        "as": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "function",
+        "as"
+      ],
+      "additionalProperties": false
+    },
+    "QueryPagination": {
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "enum": [
+            "cursor",
+            "offset"
+          ]
+        },
+        "maxPageSize": {
+          "type": "number"
+        },
+        "defaultPageSize": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "strategy"
+      ],
+      "additionalProperties": false
+    },
+    "QueryDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "query"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueryParameter"
+          }
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rowScopeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "filter": {
+          "$ref": "#/$defs/Expression"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QuerySortKey"
+          }
+        },
+        "relationships": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueryRelationshipUse"
+          }
+        },
+        "projection": {
+          "$ref": "#/$defs/QueryProjection"
+        },
+        "groupBy": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "aggregate": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueryAggregate"
+          }
+        },
+        "pagination": {
+          "$ref": "#/$defs/QueryPagination"
+        },
+        "readPolicyId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "source",
+        "rowScopeId"
+      ],
+      "additionalProperties": false
+    },
+    "MigrationConstant": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "$ref": "#/$defs/LiteralValue"
+        }
+      },
+      "required": [
+        "id",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "MigrationOperation": {
+      "description": "The closed migration operation vocabulary: add-entity, remove-entity, add-field, remove-field, change-field, populate-field, transform-field, transform-record, add-relationship, remove-relationship.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "add-entity"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destructive": {
+              "type": "boolean"
+            },
+            "entity": {
+              "$ref": "#/$defs/EntityDef"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "entity"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "remove-entity"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destructive": {
+              "type": "boolean"
+            },
+            "entityId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "entityId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "add-field"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destructive": {
+              "type": "boolean"
+            },
+            "entityId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "field": {
+              "$ref": "#/$defs/FieldDef"
+            },
+            "populate": {
+              "$ref": "#/$defs/Expression"
+            },
+            "constants": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MigrationConstant"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "entityId",
+            "field"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "remove-field"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destructive": {
+              "type": "boolean"
+            },
+            "entityId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fieldId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "entityId",
+            "fieldId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "change-field"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destructive": {
+              "type": "boolean"
+            },
+            "entityId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fieldId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "to": {
+              "type": "object",
+              "properties": {
+                "valueType": {
+                  "$ref": "#/$defs/TypeRef"
+                },
+                "required": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "entityId",
+            "fieldId",
+            "to"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "populate-field"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destructive": {
+              "type": "boolean"
+            },
+            "entityId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fieldId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "value": {
+              "$ref": "#/$defs/Expression"
+            },
+            "constants": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MigrationConstant"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "entityId",
+            "fieldId",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "transform-field"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destructive": {
+              "type": "boolean"
+            },
+            "entityId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fieldId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fromType": {
+              "$ref": "#/$defs/TypeRef"
+            },
+            "toType": {
+              "$ref": "#/$defs/TypeRef"
+            },
+            "expression": {
+              "$ref": "#/$defs/Expression"
+            },
+            "constants": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MigrationConstant"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "entityId",
+            "fieldId",
+            "fromType",
+            "toType",
+            "expression"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "transform-record"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destructive": {
+              "type": "boolean"
+            },
+            "entityId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "produce": {
+              "$ref": "#/$defs/Expression"
+            },
+            "removesFields": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "addsFields": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "constants": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MigrationConstant"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "entityId",
+            "produce"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "add-relationship"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destructive": {
+              "type": "boolean"
+            },
+            "relationship": {
+              "$ref": "#/$defs/RelationshipDef"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "relationship"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "remove-relationship"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destructive": {
+              "type": "boolean"
+            },
+            "relationshipId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "relationshipId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "MigrationDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "migration"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "fromSchema": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "toSchema": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MigrationOperation"
+          }
+        },
+        "reversibility": {
+          "enum": [
+            "reversible",
+            "irreversible",
+            "reverse-supplied"
+          ]
+        },
+        "reverseOperations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MigrationOperation"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "fromSchema",
+        "toSchema",
+        "operations"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

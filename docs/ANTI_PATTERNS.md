@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.13.1-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.14.0-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -965,3 +965,84 @@ return an empty (or wrong) result. Before 0.13.1, `validateGraph` accepted this,
 layer rejects it consistently. Bind the threshold as a **query parameter** and pass it from
 the action, trigger or client that runs the query. (A `ReadPolicyDef` predicate shares the
 same state-free scope and the same rule.)
+
+## 72. A hand-rolled workflow state machine on top of `StateDef` + triggers + counters
+
+```ts
+// WRONG — semantic escape: the application reimplements durable orchestration.
+{ id: S_ORDER_STAGE, kind: 'state', authority: 'server', valueType: enumType(['reserving','awaiting_payment','shipping','done']) }
+// + a scheduler job to time out payment
+// + an event handler that flips the stage
+// + a manual retry counter field
+// + a "leader" flag so only one process advances it
+```
+
+Why wrong: every one of those pieces — state field, scheduler, event handler, retry counter,
+idempotency key, crash recovery, leader election — is orchestration infrastructure the
+framework already owns. Model it as a `WorkflowDef`: an `action` step, a `wait-event` step
+with a `timeout`, a `branch`, `complete` / `fail`. Exactly-once logical transition, no
+registration gap, durable retries, fenced ownership and crash recovery come for free.
+
+## 73. Generating your own job / activation ids
+
+```ts
+// WRONG — a random id per attempt makes a crash-recovered retry look like new work.
+const jobId = crypto.randomUUID();
+await chargeCard({ idempotencyKey: jobId });
+```
+
+Why wrong: a workflow action step already executes with a stable logical invocation identity
+(`<instanceId>/<activationId>`), reused across retries and across authority failover, and an
+effect it dispatches keeps a stable logical effect identity. Rolling your own id breaks
+double-execution reconciliation — the reclaiming authority cannot tell the action already
+committed.
+
+## 74. A process timer (`setTimeout` / cron) for a workflow wait
+
+```ts
+// WRONG — the wait is not durable; a crash loses it.
+setTimeout(() => advanceWorkflow(id), 7 * 24 * 3600 * 1000);
+```
+
+Why wrong: a `timer` step's target instant is captured once and stored in the durable
+transition record; the waiting row *is* the timer, rediscovered on startup. A `setTimeout`
+evaporates on restart, and a `now + delay` recomputed after a crash silently extends the
+wait.
+
+## 75. Subscribing to an event emitter *after* marking the workflow "waiting"
+
+```ts
+// WRONG — a crash between these two lines loses a matching event forever.
+await store.setStatus(id, 'waiting');
+emitter.on('payment_confirmed', () => resumeWorkflow(id));
+```
+
+Why wrong: the durable event-wait registration commits in the **same** transaction as the
+transition into the `wait-event` step, and a match that lands during a crash window is
+replayed from the durable `sinceEventSeq`. There is no in-memory-only registration window.
+
+## 76. Treating `cancelWorkflow` as an undo
+
+```ts
+// WRONG — cancellation does not reverse anything.
+await server.cancelWorkflow(id);   // "and now the charge is refunded and inventory released"
+```
+
+Why wrong: cancellation means *do not execute future steps*. It does not undo committed
+actions or dispatched external effects, and 0.14 has no automatic compensation. If a
+workflow needs to release a reservation on a timeout, that is an explicit `onTimeout` edge to
+a `release_inventory` action step.
+
+## 77. Sticky routing / a workflow leader / polling the workflow table
+
+```ts
+// WRONG — none of this is needed and all of it is fragile.
+route(`/wf/${id}`, toAuthority(ownerOf(id)));            // sticky routing
+if (isLeader) { for (const w of loadAllWorkflows()) advance(w); }  // leader + full scan
+setInterval(() => sql`SELECT * FROM workflows WHERE stuck = 1`, 1000);  // app polling
+```
+
+Why wrong: workflow execution is leaderless — any compatible authority advances any eligible
+instance under a fenced per-instance lease. Recovery discovery is bounded and indexed and
+runs on startup automatically. Reading status is safe through any authority. The application
+writes none of this.

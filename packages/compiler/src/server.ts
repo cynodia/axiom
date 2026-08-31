@@ -16,6 +16,7 @@ import {
   usesInvocationVocabulary,
   usesMigrationVocabulary,
   usesQueryVocabulary,
+  usesWorkflowVocabulary,
   usesV4Semantics,
   validateGraph,
 } from '@cynodia/axiom-core';
@@ -41,6 +42,7 @@ import type {
   SubscriptionDef,
   TransitionConstraintDef,
   TriggerDef,
+  WorkflowDef,
 } from '@cynodia/axiom-core';
 import { GraphValidationError } from './normalize.js';
 import type { CompileOptions } from './normalize.js';
@@ -81,6 +83,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
   const relationships: RelationshipDef[] = [];
   const readPolicies: ReadPolicyDef[] = [];
   const migrations: MigrationDef[] = [];
+  const workflows: WorkflowDef[] = [];
   for (const node of nodes) {
     if (node.kind === 'entity') {
       entities.push(node);
@@ -111,6 +114,11 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
       relationships.push(node);
     } else if (node.kind === 'read-policy') {
       readPolicies.push(node);
+    } else if (node.kind === 'workflow') {
+      // A workflow is authority-side by construction: only the authoritative runtime owns
+      // durable orchestration state, leases and fencing (spec14 §87). It never reaches a
+      // client. Authoring markers are stripped like any other trust-boundary payload.
+      workflows.push(stripAuthoringMetadata(node));
     } else if (node.kind === 'migration') {
       // A migration is authority-side by construction: only the authoritative runtime
       // executes a schema evolution, and only against persisted canonical data (spec11
@@ -209,6 +217,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     ...(queries.length > 0 ? { queries } : {}),
     ...(relationships.length > 0 ? { relationships } : {}),
     ...(readPolicies.length > 0 ? { readPolicies } : {}),
+    ...(workflows.length > 0 ? { workflows } : {}),
   };
 
   // Only the definitions the authority's own rules reach. A calculation used by the client
@@ -242,6 +251,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     usesExternalIOVocabulary(document) ? 'axiom.server.v5' : 'axiom.server.v1',
     usesQueryVocabulary(document) ? 'axiom.server.v6' : 'axiom.server.v1',
     usesMigrationVocabulary(document) ? 'axiom.server.v7' : 'axiom.server.v1',
+    usesWorkflowVocabulary(document) ? 'axiom.server.v8' : 'axiom.server.v1',
   ];
   const contract = contractCandidates.reduce(maxContract);
 

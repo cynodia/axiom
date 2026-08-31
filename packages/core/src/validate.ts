@@ -31,6 +31,17 @@ import type { StorageDef } from './storage.js';
 import type { QueryDef } from './query.js';
 import { queryPaginationStrategy, sortKeyDirection } from './query.js';
 import { queryStateReferences } from './live-query.js';
+import {
+  WORKFLOW_EVENT_SCOPE,
+  WORKFLOW_PRINCIPAL_SCOPE,
+  WORKFLOW_STEP_TYPES,
+  workflowHasCycle,
+  workflowReachableSteps,
+  workflowStepById,
+  workflowStepExpressions,
+  workflowStepSuccessors,
+} from './workflows.js';
+import type { WorkflowBinding, WorkflowDef, WorkflowRetryPolicy, WorkflowStepType } from './workflows.js';
 import type { RelationshipDef } from './relationships.js';
 import { relationshipIsToOne } from './relationships.js';
 import type { ReadPolicyDef } from './read-policy.js';
@@ -261,6 +272,9 @@ function validateNode(node: AnyNode, context: Context): void {
       return;
     case 'read-policy':
       validateReadPolicy(node, context);
+      return;
+    case 'workflow':
+      validateWorkflow(node, context);
       return;
     case 'migration':
       // A `MigrationDef` is validated by the graph-level `validateMigrations` pass, which
@@ -1093,6 +1107,268 @@ function policyRowScope(
  * endpoints consistent with the declared cardinality. Axiom never *infers* a link, so this
  * is where an inconsistent explicit one is caught.
  */
+/**
+ * A `WorkflowDef`'s structural soundness (spec14 §121-§125). Every failure is a structured
+ * diagnostic — never a thrown `TypeError` on a malformed step.
+ */
+function validateWorkflow(workflow: WorkflowDef, context: Context): void {
+  const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
+  const stepIds = new Set<string>();
+  for (const step of steps) {
+    if (!step || typeof step !== 'object' || typeof (step as { id?: unknown }).id !== 'string') {
+      context.errors.push({
+        code: VALIDATION_CODES.workflowInvalidStep,
+        message: `Workflow ${workflow.id} has a step with no id`,
+        nodeId: workflow.id,
+      });
+      continue;
+    }
+    const id = String(step.id);
+    if (stepIds.has(id) || context.nodes.has(step.id)) {
+      context.errors.push({
+        code: VALIDATION_CODES.workflowDuplicateStepId,
+        message: `Workflow ${workflow.id} step id ${id} is declared twice, or collides with a graph node`,
+        nodeId: workflow.id,
+      });
+    }
+    stepIds.add(id);
+    if (!WORKFLOW_STEP_TYPES.includes((step as { type?: WorkflowStepType }).type as WorkflowStepType)) {
+      context.errors.push({
+        code: VALIDATION_CODES.workflowInvalidStep,
+        message: `Workflow ${workflow.id} step ${id} has an unknown type ${String((step as { type?: unknown }).type)}`,
+        nodeId: workflow.id,
+      });
+    }
+  }
+
+  if (!workflow.entry || !stepIds.has(String(workflow.entry))) {
+    context.errors.push({
+      code: VALIDATION_CODES.workflowEntryNotFound,
+      message: `Workflow ${workflow.id} entry ${String(workflow.entry)} is not one of its steps`,
+      nodeId: workflow.id,
+    });
+  }
+
+  const edge = (target: unknown, from: string): void => {
+    if (target !== undefined && !stepIds.has(String(target))) {
+      context.errors.push({
+        code: VALIDATION_CODES.workflowStepNotFound,
+        message: `Workflow ${workflow.id} step ${from} points at ${String(target)}, which is not a step`,
+        nodeId: workflow.id,
+      });
+    }
+  };
+
+  // Bindings: declared once, produced by exactly one declared step.
+  const declaredBindings = new Map<string, WorkflowBinding>();
+  for (const binding of workflow.bindings ?? []) {
+    const bid = String(binding.id);
+    if (declaredBindings.has(bid)) {
+      context.errors.push({
+        code: VALIDATION_CODES.workflowDuplicateBinding,
+        message: `Workflow ${workflow.id} declares binding ${bid} twice`,
+        nodeId: workflow.id,
+      });
+    }
+    declaredBindings.set(bid, binding);
+    if (!stepIds.has(String(binding.producedBy))) {
+      context.errors.push({
+        code: VALIDATION_CODES.workflowStepNotFound,
+        message: `Workflow ${workflow.id} binding ${bid} is producedBy ${String(binding.producedBy)}, which is not a step`,
+        nodeId: workflow.id,
+      });
+    }
+    validateTypeRef(binding.valueType, workflow.id, context);
+  }
+
+  const inputIds = new Set((workflow.inputs ?? []).map((input) => String(input.id)));
+  for (const input of workflow.inputs ?? []) validateTypeRef(input.valueType, workflow.id, context);
+
+  const boundBy = new Map<string, string>(); // bindingId -> step id that binds it
+  for (const step of steps) {
+    if (!step || typeof (step as { id?: unknown }).id !== 'string') continue;
+    const from = String(step.id);
+    const eventScopeOk = step.type === 'wait-event';
+
+    // Control-flow edges resolve.
+    if (step.type === 'action') {
+      edge(step.next, from);
+      edge(step.onError, from);
+      requireKind(step.action, 'action', workflow.id, context, VALIDATION_CODES.workflowActionNotFound);
+      if (step.retry) validateWorkflowRetry(step.retry, workflow.id, from, context);
+    } else if (step.type === 'wait-event') {
+      edge(step.next, from);
+      edge(step.onTimeout, from);
+      requireKind(step.event, 'event', workflow.id, context, VALIDATION_CODES.workflowEventNotFound);
+      if (step.timeout && !(step.timeout.seconds > 0)) {
+        context.errors.push({
+          code: VALIDATION_CODES.workflowInvalidTimer,
+          message: `Workflow ${workflow.id} step ${from} has a non-positive timeout`,
+          nodeId: workflow.id,
+        });
+      }
+      for (const bindingId of Object.keys(step.bind ?? {})) {
+        if (!declaredBindings.has(bindingId)) {
+          context.errors.push({
+            code: VALIDATION_CODES.workflowBindingNotFound,
+            message: `Workflow ${workflow.id} step ${from} binds ${bindingId}, which is not a declared WorkflowBinding`,
+            nodeId: workflow.id,
+          });
+        } else if (String(declaredBindings.get(bindingId)!.producedBy) !== from) {
+          context.errors.push({
+            code: VALIDATION_CODES.workflowDuplicateBinding,
+            message: `Workflow ${workflow.id} step ${from} binds ${bindingId}, but its declared producer is ${String(declaredBindings.get(bindingId)!.producedBy)}`,
+            nodeId: workflow.id,
+          });
+        }
+        if (boundBy.has(bindingId)) {
+          context.errors.push({
+            code: VALIDATION_CODES.workflowDuplicateBinding,
+            message: `Workflow ${workflow.id} binding ${bindingId} is assigned by more than one step`,
+            nodeId: workflow.id,
+          });
+        }
+        boundBy.set(bindingId, from);
+      }
+    } else if (step.type === 'timer') {
+      edge(step.next, from);
+      const hasAfter = step.after !== undefined;
+      const hasAt = step.at !== undefined;
+      if (hasAfter === hasAt) {
+        context.errors.push({
+          code: VALIDATION_CODES.workflowInvalidTimer,
+          message: `Workflow ${workflow.id} timer ${from} must declare exactly one of after / at`,
+          nodeId: workflow.id,
+        });
+      } else if (hasAfter && !(step.after!.seconds > 0)) {
+        context.errors.push({
+          code: VALIDATION_CODES.workflowInvalidTimer,
+          message: `Workflow ${workflow.id} timer ${from} has a non-positive after.seconds`,
+          nodeId: workflow.id,
+        });
+      }
+    } else if (step.type === 'branch') {
+      edge(step.then, from);
+      edge(step.else, from);
+    }
+
+    // Expression scope — inputs / bindings / (EVENT inside wait-event) / PRINCIPAL only.
+    for (const expression of workflowStepExpressions(step)) {
+      validateWorkflowExpression(expression, workflow.id, from, inputIds, declaredBindings, eventScopeOk, context);
+    }
+  }
+
+  // Reachability + acyclicity + terminal reachability.
+  const reachable = workflowReachableSteps(workflow);
+  for (const step of steps) {
+    if (typeof (step as { id?: unknown }).id === 'string' && !reachable.has(String(step.id))) {
+      context.errors.push({
+        code: VALIDATION_CODES.workflowUnreachableStep,
+        message: `Workflow ${workflow.id} step ${String(step.id)} is unreachable from entry`,
+        nodeId: workflow.id,
+      });
+    }
+  }
+  if (stepIds.has(String(workflow.entry)) && workflowHasCycle(workflow)) {
+    context.errors.push({
+      code: VALIDATION_CODES.workflowCycleNotAllowed,
+      message: `Workflow ${workflow.id} has a control-flow cycle; retries are runtime policy, not graph edges`,
+      nodeId: workflow.id,
+    });
+  }
+  // Every reachable non-terminal step must be able to reach a terminal step (or an
+  // intentional wait-event with no timeout is an acceptable "may never resolve" leaf).
+  if (stepIds.has(String(workflow.entry)) && !workflowHasCycle(workflow)) {
+    const canTerminate = new Map<string, boolean>();
+    const reaches = (id: string, seen: Set<string>): boolean => {
+      if (canTerminate.has(id)) return canTerminate.get(id)!;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      const step = workflowStepById(workflow, id);
+      if (!step) return false;
+      if (step.type === 'complete' || step.type === 'fail') {
+        canTerminate.set(id, true);
+        return true;
+      }
+      if (step.type === 'wait-event' && !step.timeout) {
+        // An unbounded wait is an intentional durable leaf (spec14 §123).
+        const ok = workflowStepSuccessors(step).some((n) => reaches(String(n), new Set(seen)));
+        canTerminate.set(id, ok || true);
+        return true;
+      }
+      const ok = workflowStepSuccessors(step).some((n) => reaches(String(n), new Set(seen)));
+      canTerminate.set(id, ok);
+      return ok;
+    };
+    for (const id of reachable) {
+      if (!reaches(id, new Set())) {
+        context.errors.push({
+          code: VALIDATION_CODES.workflowNoTerminal,
+          message: `Workflow ${workflow.id} step ${id} cannot reach complete or fail`,
+          nodeId: workflow.id,
+        });
+      }
+    }
+  }
+}
+
+function validateWorkflowRetry(
+  retry: WorkflowRetryPolicy,
+  workflowId: NodeId,
+  stepId: string,
+  context: Context,
+): void {
+  const bad =
+    !(retry.maxAttempts >= 1) ||
+    !(retry.initialDelaySeconds >= 0) ||
+    !(retry.backoffMultiplier >= 1) ||
+    !(retry.maxDelaySeconds >= retry.initialDelaySeconds);
+  if (bad) {
+    context.errors.push({
+      code: VALIDATION_CODES.workflowInvalidRetryPolicy,
+      message: `Workflow ${workflowId} step ${stepId} has an invalid retry policy`,
+      nodeId: workflowId,
+    });
+  }
+}
+
+const WORKFLOW_NONDETERMINISTIC_BUILTINS = new Set(['now', 'uuid', 'random']);
+
+function validateWorkflowExpression(
+  expression: Expression,
+  workflowId: NodeId,
+  stepId: string,
+  inputIds: ReadonlySet<string>,
+  bindings: ReadonlyMap<string, WorkflowBinding>,
+  eventScopeOk: boolean,
+  context: Context,
+): void {
+  walkExpression(expression, (node) => {
+    if (node.kind === 'ref') {
+      const id = String(node.targetId);
+      const inScope =
+        inputIds.has(id) ||
+        bindings.has(id) ||
+        id === WORKFLOW_PRINCIPAL_SCOPE ||
+        (eventScopeOk && id === WORKFLOW_EVENT_SCOPE);
+      if (!inScope) {
+        context.errors.push({
+          code: VALIDATION_CODES.workflowExpressionScope,
+          message: `Workflow ${workflowId} step ${stepId} references ${id}, which is outside workflow expression scope (inputs / bindings${eventScopeOk ? ' / EVENT' : ''} / PRINCIPAL)`,
+          nodeId: workflowId,
+        });
+      }
+    }
+    if (node.kind === 'call' && WORKFLOW_NONDETERMINISTIC_BUILTINS.has(node.function)) {
+      context.errors.push({
+        code: VALIDATION_CODES.workflowNondeterministic,
+        message: `Workflow ${workflowId} step ${stepId} calls ${node.function}; workflow expressions must be deterministic`,
+        nodeId: workflowId,
+      });
+    }
+  });
+}
+
 function validateRelationship(relationship: RelationshipDef, context: Context): void {
   const fromEntity = requireRelationshipEndpoint(relationship.from, relationship.id, context);
   const toEntity = requireRelationshipEndpoint(relationship.to, relationship.id, context);

@@ -15,6 +15,7 @@ export * from './subscriptions.js';
 export * from './storage.js';
 export * from './query.js';
 export * from './live-query.js';
+export * from './workflows.js';
 export * from './relationships.js';
 export * from './read-policy.js';
 export * from './migration.js';

@@ -21,6 +21,8 @@ import type { RelationshipDef } from './relationships.js';
 import type { ReadPolicyDef } from './read-policy.js';
 import type { MigrationDef } from './migration.js';
 import { migrationExpressions } from './migration.js';
+import type { WorkflowDef } from './workflows.js';
+import { workflowExpressions } from './workflows.js';
 
 /**
  * The contracts a Server IR may declare. A runtime that does not recognize the value MUST
@@ -45,6 +47,7 @@ export const SERVER_IR_CONTRACTS = [
   'axiom.server.v5',
   'axiom.server.v6',
   'axiom.server.v7',
+  'axiom.server.v8',
 ] as const;
 
 export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
@@ -53,7 +56,7 @@ export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
 export const SERVER_IR_CONTRACT: ServerIRContract = 'axiom.server.v1';
 
 /** The newest contract this implementation produces and executes. */
-export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v7';
+export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v8';
 
 /** Operation kinds no contract before `axiom.server.v5` contains. */
 export const SERVER_IR_V5_OPERATION_KINDS: readonly string[] = [
@@ -189,9 +192,20 @@ export function usesExternalIOVocabulary(ir: {
  */
 export function usesMigrationVocabulary(ir: {
   migrations?: readonly unknown[];
+  workflows?: readonly unknown[];
   schemaVersion?: number;
 }): boolean {
   return (ir.migrations?.length ?? 0) > 0 || (ir.schemaVersion ?? 1) > 1;
+}
+
+/**
+ * Whether a document carries 0.14 durable-workflow vocabulary. A pre-v8 runtime has no
+ * `WorkflowDef` execution model at all, so any `WorkflowDef` present requires
+ * `axiom.server.v8` — computed from the document, never asserted by hand, so a graph that
+ * declares no workflow compiles to the byte-identical v1–v7 document it always did.
+ */
+export function usesWorkflowVocabulary(ir: { workflows?: readonly unknown[] }): boolean {
+  return (ir.workflows?.length ?? 0) > 0;
 }
 
 /**
@@ -239,6 +253,7 @@ export function serverIRExpressions(ir: {
   queries?: readonly QueryDef[];
   readPolicies?: readonly ReadPolicyDef[];
   migrations?: readonly MigrationDef[];
+  workflows?: readonly WorkflowDef[];
 }): Expression[] {
   const found: Expression[] = [];
   for (const state of ir.states) {
@@ -283,6 +298,9 @@ export function serverIRExpressions(ir: {
   }
   for (const migration of ir.migrations ?? []) {
     found.push(...migrationExpressions(migration));
+  }
+  for (const workflow of ir.workflows ?? []) {
+    found.push(...workflowExpressions(workflow));
   }
   return found;
 }
@@ -434,4 +452,6 @@ export interface ServerIR {
    * `Expression` transform leaves, never SQL, a callback or a provider handle (spec11 §88).
    */
   migrations?: MigrationDef[];
+  /** Durable workflow definitions (spec14, `axiom.server.v8`). */
+  workflows?: WorkflowDef[];
 }

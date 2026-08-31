@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.13.1-alpha.1. How an application crosses the trust boundary.
+Axiom 0.14.0-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -689,8 +689,9 @@ page plus the conformance fixtures.
 | `axiom.server.v5` | `SubscriptionDef` and `StorageDef`, and the `blob-metadata`/`blob-commit`/`blob-delete` operation kinds — the inbound external-I/O direction and binary object storage | 0.9.0 |
 | `axiom.server.v6` | `QueryDef`, `RelationshipDef` and `ReadPolicyDef`, the `query` operation kind, and the `provider-record` location — the semantic data-access & query layer over large authoritative datasets | 0.10.0 |
 | `axiom.server.v7` | `MigrationDef` and the closed migration-operation vocabulary, plus the top-level `schemaVersion` and `schemaFingerprint` fields — semantic schema evolution over persisted canonical data | 0.11.0 |
+| `axiom.server.v8` | `WorkflowDef` and the closed workflow-step vocabulary (`action`, `wait-event`, `timer`, `branch`, `complete`, `fail`) — durable, portable long-running orchestration | 0.14.0 |
 
-`SERVER_IR_CONTRACTS` enumerates all seven, and is the single source of truth this table is
+`SERVER_IR_CONTRACTS` enumerates all eight, and is the single source of truth this table is
 tested against — `packages/demo/test/documentation.test.ts` fails if a contract in
 `SERVER_IR_CONTRACTS` has no row here, or a row here names a contract the code does not
 declare (spec 8.2 §7-8). The rules:

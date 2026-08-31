@@ -1,0 +1,94 @@
+{
+  "conformance": "axiom.conformance.v8",
+  "baseContract": "axiom.server.v8",
+  "protocol": "axiom.protocol.v1",
+  "release": "0.14.0-alpha.1",
+  "description": "Portable workflow conformance fixtures (spec14 §156-§159). Each file carries a compiled axiom.server.v8 Server IR, the start arguments, a deterministic driver script, and the required logical transition history + terminal state. Physical action attempts may be duplicated; the logical history must match exactly. Running one needs only the in-memory WorkflowStore and the semantics in docs/WORKFLOWS.md.",
+  "fixtures": [
+    {
+      "name": "workflow-start-complete",
+      "covers": [
+        "start",
+        "complete"
+      ]
+    },
+    {
+      "name": "workflow-action-success",
+      "covers": [
+        "action"
+      ]
+    },
+    {
+      "name": "workflow-action-terminal-failure",
+      "covers": [
+        "action",
+        "fail"
+      ]
+    },
+    {
+      "name": "workflow-action-on-error",
+      "covers": [
+        "action",
+        "onError"
+      ]
+    },
+    {
+      "name": "workflow-action-retry",
+      "covers": [
+        "action",
+        "retry"
+      ]
+    },
+    {
+      "name": "workflow-timer",
+      "covers": [
+        "timer"
+      ]
+    },
+    {
+      "name": "workflow-event-match",
+      "covers": [
+        "wait-event",
+        "correlation"
+      ]
+    },
+    {
+      "name": "workflow-event-nonmatch",
+      "covers": [
+        "wait-event",
+        "correlation"
+      ]
+    },
+    {
+      "name": "workflow-event-timeout",
+      "covers": [
+        "wait-event",
+        "timeout"
+      ]
+    },
+    {
+      "name": "workflow-branch-true",
+      "covers": [
+        "branch"
+      ]
+    },
+    {
+      "name": "workflow-branch-false",
+      "covers": [
+        "branch"
+      ]
+    },
+    {
+      "name": "workflow-cancel-waiting",
+      "covers": [
+        "cancel"
+      ]
+    },
+    {
+      "name": "workflow-start-idempotency",
+      "covers": [
+        "start-idempotency"
+      ]
+    }
+  ]
+}

@@ -22,6 +22,7 @@ import {
   usesInvocationVocabulary,
   usesV4Semantics,
   validateValueAgainstType,
+  nodeId,
 } from '@cynodia/axiom-core';
 import type {
   ActionDef,
@@ -59,6 +60,8 @@ import {
   type CoordinationConfig,
   type CoordinationProvider,
 } from './coordination.js';
+import { createWorkflowEngine, type WorkflowEngine, type WorkflowInspection } from './workflows.js';
+import { createMemoryWorkflowStore, type WorkflowStore } from './workflow-store.js';
 import {
   createDistributedEffectRunner,
   type DistributedEffectRunner,
@@ -288,6 +291,13 @@ export interface AxiomServerOptions {
    */
   migrationMetadata?: MigrationMetadataStore;
   /**
+   * Durable storage for workflow instances (spec14 §81). Required for a graph that declares
+   * a `WorkflowDef` in a multi-authority deployment; a single authority may omit it and get
+   * the in-memory reference (`createMemoryWorkflowStore`), which is not cross-process
+   * durable and says so.
+   */
+  workflowStore?: WorkflowStore;
+  /**
    * A durable coordination provider (spec12 §10). Supplying one, together with a durable
    * `persistence` adapter, activates multi-authority execution automatically — no
    * application API and no "cluster mode" flag (spec12 §88). Absent, the authority runs
@@ -380,6 +390,27 @@ export interface AxiomServer {
    * count of distinct observed application-meaning changes, projected from both.
    */
   revisionInspection(): Promise<{ applicationRevision: number; stateRevision: number; dataGeneration: number }>;
+  /**
+   * Start a durable workflow (spec14 §18). Idempotent on `(workflowId, principal,
+   * idempotencyKey)` — a retry after a lost response returns the same `instanceId`.
+   */
+  startWorkflow(request: {
+    workflowId: string;
+    arguments?: Record<string, unknown>;
+    credential?: unknown;
+    idempotencyKey?: string;
+  }): Promise<{ instanceId: string; status: string } | { error: { code: string; message: string } }>;
+  /** Cancel a workflow instance (spec14 §75). Idempotent; not a rollback. */
+  cancelWorkflow(
+    instanceId: string,
+    credential?: unknown,
+  ): Promise<{ ok: true; status: string } | { error: { code: string; message: string } }>;
+  /** The semantic status of one workflow instance (spec14 §136, §137) — no secrets. */
+  getWorkflow(instanceId: string): Promise<WorkflowInspection | undefined>;
+  /** Bounded listing of the workflow instances this authority can see (spec14 §136). */
+  inspectWorkflows(limit?: number): Promise<WorkflowInspection[]>;
+  /** The durable semantic transition history of one instance (spec14 §142, §144). */
+  workflowHistory(instanceId: string): Promise<Array<Record<string, unknown>>>;
   /** Every mutation this authority has applied, with its outcome. */
   mutationLog(): MutationLogEntry[];
   /**
@@ -1632,6 +1663,41 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     return response as InvokeResponse;
   }
 
+  // ---- Durable workflows (spec14) --------------------------------------------------
+
+  let workflowEventSeq = 0;
+  const workflowStore: WorkflowStore | undefined =
+    (ir.workflows?.length ?? 0) > 0 ? options.workflowStore ?? createMemoryWorkflowStore() : undefined;
+
+  const workflowEngine: WorkflowEngine | undefined = workflowStore
+    ? createWorkflowEngine({
+        workflows: ir.workflows ?? [],
+        store: workflowStore,
+        compatibilityFingerprint: compatibilityKeyStr,
+        instanceId,
+        ...(coordination ? { coordination } : {}),
+        resolvePrincipal: async (credential) => {
+          const principal = (host.authenticate ? await host.authenticate(credential as never) : null) ?? null;
+          return { principal, fingerprint: await fingerprint(principal ?? 'anon') };
+        },
+        // A workflow ActionDef step runs as a system invocation under the workflow's bound
+        // principal, with the stable logical invocation identity as its request id — so a
+        // crash between "action committed" and "workflow transition recorded" is reconciled
+        // by the idempotency window rather than executing the action twice (spec14 §31, §32).
+        invokeAction: async ({ actionId, arguments: args, principal, invocationId }) => {
+          const context: ExecutionContext = { principal: principal as PrincipalRecord | null, source: 'system' };
+          const replayKey = recordKey(context.principal, invocationId);
+          const cached = replies.get(replayKey);
+          const response = (cached ??
+            (await invokeCore(nodeId(actionId), args, context, invocationId, replayKey, 0))) as InvokeResponse;
+          const ok = response.ok === true;
+          const codes = (response.diagnostics ?? []).map((d) => ({ code: String(d.code), message: d.message }));
+          const retryable = !ok && codes.some((d) => d.code === 'CONCURRENCY_CONFLICT' || d.code === 'AUTHORITY_UNREACHABLE');
+          return { ok, retryable, diagnostics: codes };
+        },
+      })
+    : undefined;
+
   /**
    * The shared execution path every invocation — client request or system trigger —
    * funnels through, so a triggered action gets exactly the same semantics an ordinary
@@ -1980,6 +2046,13 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     }
     const fired = await triggerRuntime.fireEvent(eventId, payload, depth);
     report({ kind: 'event-dispatched', eventId });
+    // Durable workflows waiting on this event type are driven off the same accepted-event
+    // occurrence (spec14 §51, §54-§60). `eventSeq` is the monotone observation boundary a
+    // wait scans from; dedup has already collapsed a redelivered physical event upstream.
+    if (workflowEngine) {
+      workflowEventSeq += 1;
+      void workflowEngine.onEventAccepted(String(eventId), payload, workflowEventSeq);
+    }
     return { diagnostics: [], triggersOk: fired.ok };
   }
 
@@ -2360,6 +2433,11 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         liveQueryPollTimer = setInterval(() => void pollRemoteRevisionForLiveQueries(), liveQueryPollMs);
         liveQueryPollTimer.unref?.();
       }
+
+      // Durable workflows resume last: an authority discovers every runnable / retry-due /
+      // timer-due / recoverably-waiting instance and advances it, with no application
+      // intervention (spec14 §94, §95).
+      await workflowEngine?.start();
     },
 
     handle(request: ServerRequest): Promise<ServerResponse> {
@@ -2531,6 +2609,30 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     },
     clearQueryCache: invalidateQueryCache,
     queryCacheStats: () => ({ entries: queryCache.size, hits: queryCacheHits, enabled: cacheEnabled }),
+
+    async startWorkflow(request) {
+      if (!workflowEngine) {
+        return { error: { code: SERVER_DIAGNOSTIC_CODES.MALFORMED_REQUEST, message: 'this authority runs no workflows' } };
+      }
+      return workflowEngine.startWorkflow(request);
+    },
+    async cancelWorkflow(instanceId, credential) {
+      if (!workflowEngine) {
+        return { error: { code: SERVER_DIAGNOSTIC_CODES.MALFORMED_REQUEST, message: 'this authority runs no workflows' } };
+      }
+      return workflowEngine.cancelWorkflow(instanceId, credential);
+    },
+    async getWorkflow(instanceId) {
+      return workflowEngine?.getWorkflow(instanceId);
+    },
+    async inspectWorkflows(limit) {
+      return workflowEngine ? workflowEngine.listWorkflows(limit) : [];
+    },
+    async workflowHistory(instanceId) {
+      return workflowEngine
+        ? ((await workflowEngine.workflowHistory(instanceId)) as unknown as Array<Record<string, unknown>>)
+        : [];
+    },
 
     async openLiveQuery(request) {
       return serialize(async () => {
@@ -2731,6 +2833,7 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
     async stop(): Promise<void> {
       triggerRuntime.stop();
+      workflowEngine?.stop();
       if (liveQueryPollTimer) {
         clearInterval(liveQueryPollTimer);
         liveQueryPollTimer = undefined;

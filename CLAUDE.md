@@ -181,8 +181,40 @@ turn it into a working browser application whose generated JavaScript nobody rea
   provider-commit, 8-authority concurrent startup) + `live-query-invalidation.test.ts`.
   Report: `AXIOM_0_13_1_IMPLEMENTATION_REPORT.md`, design note
   `AXIOM_0_13_1_INVALIDATION_RESEARCH.md`.
+* `specs/spec14.md` — the **0.14 durable workflows release**: a first-class `WorkflowDef`
+  graph node (kind `workflow`, `packages/core/src/workflows.ts`) — six portable steps
+  (`action`, `wait-event`, `timer`, `branch`, `complete`, `fail`), **no script body**, no
+  mutable blob (typed single-assignment `WorkflowBinding`s), closed expression scope (inputs
+  / bindings / `EVENT` / `PRINCIPAL`; never `StateDef` / `QueryDef` / `now`·`uuid`·`random`).
+  `validateWorkflow` + 15 `WORKFLOW_*` diagnostics (entry / step ids / edges / cycle /
+  action & event refs / binding single-assignment / retry / timer / reachability / terminal
+  reachability / expression scope / nondeterminism). **Server IR `axiom.server.v8`** (v1–v7
+  frozen; a graph with no workflow is byte-identical and its `semanticFingerprint` is
+  unchanged — `'workflow'` joins `EXECUTABLE_KINDS`, empty group skipped).
+  `WorkflowStore` (`packages/server/src/workflow-store.ts`) — `createMemoryWorkflowStore`
+  (single-process ref) + `createSqliteWorkflowStore` (cross-process ref: `BEGIN IMMEDIATE`
+  with the `instanceRevision` + `fence` check **inside** the transaction, `busy_timeout`,
+  `CREATE TABLE IF NOT EXISTS` + `INSERT OR IGNORE` init). `createWorkflowEngine`
+  (`workflows.ts`) — leaderless: `advance(instanceId)` under a reused 0.12
+  `CoordinationProvider` lease+fence, every transition a fenced CAS; start idempotency on
+  `WorkflowStartIdentity`; action step with stable logical invocation id
+  `<instanceId>/<activationId>` (used as the `ActionDef` request id for crash
+  reconciliation); Model-B no-gap event wait (registration committed with the transition,
+  `sinceEventSeq` boundary, replay on startup, dedup unchanged); timer target captured once;
+  durable retry backoff (`nextEligibleAt`); cancellation as a fenced durable transition (not
+  rollback); crash-recovery poll loop (`recoverRunnable`). `createAxiomServer` wiring:
+  `startWorkflow` / `cancelWorkflow` / `getWorkflow` / `inspectWorkflows` / `workflowHistory`,
+  event-pipeline `onEventAccepted` hook, `workflowStore` option. `AgentAPI.analyzeWorkflow`.
+  New **`axiom.conformance.v8`** tier (`conformance/workflow/`, 13 fixtures + 2 negative
+  controls, `runWorkflowConformanceFixture` / `Suite` — deterministic driver script, folds
+  to the required logical transition history). Reports:
+  `AXIOM_0_14_IMPLEMENTATION_REPORT.md`, design note `AXIOM_0_14_WORKFLOW_RESEARCH.md`. Full
+  model: `docs/WORKFLOWS.md`. **Deferred (documented):** real-OS-process 1/2/8 chaos matrix
+  (§258 counts), reference-application harness, and a fully durable server-side idempotency
+  store (the action-double-execution window across a full process restart is currently
+  handled by reconciliation, not eliminated).
 
-Together, spec2–spec13.1 are the authority on design decisions — **except where the
+Together, spec2–spec14 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 

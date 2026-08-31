@@ -175,6 +175,39 @@ export const VALIDATION_CODES = {
   /** A `provider-record` location whose entity does not resolve, or whose identity field is not that entity's identity. */
   invalidProviderRecordLocation: 'INVALID_PROVIDER_RECORD_LOCATION',
 
+  // Durable workflows (0.14, spec14 §124). `validateGraph` rejects an internally
+  // inconsistent `WorkflowDef` before it can be compiled or executed.
+  /** `WorkflowDef.entry` does not name a step of that workflow. */
+  workflowEntryNotFound: 'WORKFLOW_ENTRY_NOT_FOUND',
+  /** A control-flow edge (`next`/`onError`/`then`/`else`/`onTimeout`) names a step that does not exist. */
+  workflowStepNotFound: 'WORKFLOW_STEP_NOT_FOUND',
+  /** Two steps in one workflow share an id, or a step id collides with a graph node id. */
+  workflowDuplicateStepId: 'WORKFLOW_DUPLICATE_STEP_ID',
+  /** A step whose `type` is outside `WORKFLOW_STEP_TYPES`, or whose shape is invalid for its type. */
+  workflowInvalidStep: 'WORKFLOW_INVALID_STEP',
+  /** The workflow control-flow graph contains a cycle (retries are runtime policy, not a cycle). */
+  workflowCycleNotAllowed: 'WORKFLOW_CYCLE_NOT_ALLOWED',
+  /** An `action` step references an `action` that does not exist. */
+  workflowActionNotFound: 'WORKFLOW_ACTION_NOT_FOUND',
+  /** A `wait-event` step references an `event` that does not exist. */
+  workflowEventNotFound: 'WORKFLOW_EVENT_NOT_FOUND',
+  /** A `bind` / expression names a `WorkflowBinding` the workflow does not declare, or reads one before its producer. */
+  workflowBindingNotFound: 'WORKFLOW_BINDING_NOT_FOUND',
+  /** Two steps declare themselves the producer of the same binding, or a `bind` assigns a binding twice. */
+  workflowDuplicateBinding: 'WORKFLOW_DUPLICATE_BINDING',
+  /** A `WorkflowRetryPolicy` with a non-positive `maxAttempts`/`initialDelaySeconds`, a `backoffMultiplier` < 1, or `maxDelaySeconds` < `initialDelaySeconds`. */
+  workflowInvalidRetryPolicy: 'WORKFLOW_INVALID_RETRY_POLICY',
+  /** A `timer` step with neither `after` nor `at`, both, or a non-positive `after.seconds`. */
+  workflowInvalidTimer: 'WORKFLOW_INVALID_TIMER',
+  /** A step unreachable from `entry` (spec14 §122 — an authoring mistake, not a warning). */
+  workflowUnreachableStep: 'WORKFLOW_UNREACHABLE_STEP',
+  /** A control-flow path that can neither reach `complete`/`fail` nor end in an intentional durable wait (spec14 §123). */
+  workflowNoTerminal: 'WORKFLOW_NO_TERMINAL',
+  /** A workflow expression references an id outside the workflow expression scope (inputs / bindings / EVENT / PRINCIPAL). */
+  workflowExpressionScope: 'WORKFLOW_EXPRESSION_SCOPE',
+  /** A workflow expression reads a nondeterministic builtin (`now`/`uuid`/`random`) outside captured-time semantics. */
+  workflowNondeterministic: 'WORKFLOW_NONDETERMINISTIC',
+
   // Schema evolution & semantic migrations (0.11). `validateGraph` rejects an internally
   // inconsistent migration declaration before any persisted data is touched (spec11 §77, §78).
   /** A `MigrationDef` whose `fromSchema`/`toSchema` are not consecutive positive integers, or a migration whose `fromSchema` is at or beyond `graph.schemaVersion`. */

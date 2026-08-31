@@ -69,6 +69,7 @@ const EXECUTABLE_KINDS = [
   'transition-constraint',
   'storage',
   'relationship',
+  'workflow',
 ] as const;
 
 /** Keys removed everywhere in the tree — human metadata, never executable meaning. */

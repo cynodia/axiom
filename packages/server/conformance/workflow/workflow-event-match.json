@@ -1,0 +1,277 @@
+{
+  "conformance": "axiom.conformance.v8",
+  "name": "workflow-event-match",
+  "covers": [
+    "wait-event",
+    "correlation"
+  ],
+  "description": "A wait-event step is unblocked by a matching event and completes.",
+  "workflowId": "wf_event",
+  "arguments": {
+    "input_key": "k1"
+  },
+  "steps": [
+    {
+      "do": "deliver-event",
+      "eventId": "event_go",
+      "payload": {
+        "field_pay_key": "k1"
+      }
+    }
+  ],
+  "expectHistory": [
+    "started",
+    "step-activated",
+    "event-matched",
+    "completed"
+  ],
+  "expectStatus": "completed",
+  "serverIR": {
+    "contract": "axiom.server.v8",
+    "id": "workflow-conformance",
+    "name": "Workflow Conformance",
+    "version": "0.14.0-alpha.1",
+    "entities": [
+      {
+        "id": "entity_pay",
+        "kind": "entity",
+        "fields": [
+          {
+            "id": "field_pay_key",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ]
+      }
+    ],
+    "fields": {
+      "field_pay_key": {
+        "entityId": "entity_pay",
+        "field": {
+          "id": "field_pay_key",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      }
+    },
+    "states": [],
+    "actions": {},
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [],
+    "events": [
+      {
+        "id": "event_go",
+        "kind": "event",
+        "payloadType": {
+          "kind": "entity",
+          "entityId": "entity_pay"
+        }
+      }
+    ],
+    "workflows": [
+      {
+        "id": "wf_start_complete",
+        "kind": "workflow",
+        "entry": "c",
+        "steps": [
+          {
+            "type": "complete",
+            "id": "c"
+          }
+        ]
+      },
+      {
+        "id": "wf_action",
+        "kind": "workflow",
+        "entry": "a",
+        "steps": [
+          {
+            "type": "action",
+            "id": "a",
+            "action": "action_do",
+            "arguments": {},
+            "next": "done",
+            "onError": "recover"
+          },
+          {
+            "type": "action",
+            "id": "recover",
+            "action": "action_alt",
+            "arguments": {},
+            "next": "done"
+          },
+          {
+            "type": "complete",
+            "id": "done"
+          }
+        ]
+      },
+      {
+        "id": "wf_action_fail",
+        "kind": "workflow",
+        "entry": "a",
+        "steps": [
+          {
+            "type": "action",
+            "id": "a",
+            "action": "action_do",
+            "arguments": {},
+            "next": "done"
+          },
+          {
+            "type": "complete",
+            "id": "done"
+          }
+        ]
+      },
+      {
+        "id": "wf_retry",
+        "kind": "workflow",
+        "entry": "a",
+        "steps": [
+          {
+            "type": "action",
+            "id": "a",
+            "action": "action_do",
+            "arguments": {},
+            "next": "done",
+            "retry": {
+              "maxAttempts": 5,
+              "initialDelaySeconds": 1,
+              "backoffMultiplier": 2,
+              "maxDelaySeconds": 30
+            }
+          },
+          {
+            "type": "complete",
+            "id": "done"
+          }
+        ]
+      },
+      {
+        "id": "wf_timer",
+        "kind": "workflow",
+        "entry": "t",
+        "steps": [
+          {
+            "type": "timer",
+            "id": "t",
+            "after": {
+              "seconds": 3600
+            },
+            "next": "done"
+          },
+          {
+            "type": "complete",
+            "id": "done"
+          }
+        ]
+      },
+      {
+        "id": "wf_event",
+        "kind": "workflow",
+        "inputs": [
+          {
+            "id": "input_key",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ],
+        "entry": "w",
+        "steps": [
+          {
+            "type": "wait-event",
+            "id": "w",
+            "event": "event_go",
+            "where": {
+              "kind": "binary",
+              "operator": "eq",
+              "left": {
+                "kind": "field",
+                "source": {
+                  "kind": "ref",
+                  "targetId": "EVENT"
+                },
+                "fieldId": "field_pay_key"
+              },
+              "right": {
+                "kind": "ref",
+                "targetId": "input_key"
+              }
+            },
+            "next": "done",
+            "timeout": {
+              "seconds": 7200
+            },
+            "onTimeout": "gaveup"
+          },
+          {
+            "type": "complete",
+            "id": "done"
+          },
+          {
+            "type": "fail",
+            "id": "gaveup",
+            "error": {
+              "reason": {
+                "kind": "literal",
+                "value": "timeout"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "wf_branch",
+        "kind": "workflow",
+        "inputs": [
+          {
+            "id": "input_flag",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "boolean"
+            },
+            "required": true
+          }
+        ],
+        "entry": "b",
+        "steps": [
+          {
+            "type": "branch",
+            "id": "b",
+            "when": {
+              "kind": "ref",
+              "targetId": "input_flag"
+            },
+            "then": "yes",
+            "else": "no"
+          },
+          {
+            "type": "complete",
+            "id": "yes"
+          },
+          {
+            "type": "fail",
+            "id": "no",
+            "error": {
+              "reason": {
+                "kind": "literal",
+                "value": "flag-false"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

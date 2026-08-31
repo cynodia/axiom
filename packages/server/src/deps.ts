@@ -59,6 +59,14 @@ export type {
   TriggerDef,
   TriggerSpec,
   TypeRef,
+  WorkflowDef,
+  WorkflowStep,
+  WorkflowActionStep,
+  WorkflowWaitEventStep,
+  WorkflowRetryPolicy,
+  WorkflowInput,
+  WorkflowBinding,
+  WorkflowDuration,
 } from '@cynodia/axiom-core';
 
 export type {
@@ -101,6 +109,17 @@ export {
   compareAuthorityCompatibility,
   SEMANTIC_FINGERPRINT_VERSION,
   sortMigrations,
+  WORKFLOW_EVENT_SCOPE,
+  WORKFLOW_PRINCIPAL_SCOPE,
+  WORKFLOW_STEP_TYPES,
+  workflowStepById,
+  workflowStepSuccessors,
+  workflowStepExpressions,
+  workflowActionIds,
+  workflowEventIds,
+  workflowReachableSteps,
+  workflowHasCycle,
+  workflowExpressions,
 } from '@cynodia/axiom-core';
 export {
   BLOB_CHECKSUM_FIELD,
