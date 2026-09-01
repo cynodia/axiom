@@ -41,6 +41,7 @@ import type {
   StateDef,
   StorageDef,
   TriggerDef,
+  WorkflowDef,
 } from '@cynodia/axiom-core';
 import {
   queryDefaultPageSize,
@@ -1665,12 +1666,29 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
   // ---- Durable workflows (spec14) --------------------------------------------------
 
-  const workflowStore: WorkflowStore | undefined =
-    (ir.workflows?.length ?? 0) > 0 ? options.workflowStore ?? createMemoryWorkflowStore() : undefined;
+  // spec14pt4 §29, §30 — a hand-tampered IR may carry `workflows` as the wrong shape
+  // entirely (a string, an object, a one-element array holding `null`). Route anything
+  // present-but-not-an-empty-array into the engine's total admission validator so it fails
+  // closed with a structured `WorkflowIRError` rather than being silently ignored (`{}` has
+  // no `.length`) or reaching a native `TypeError`.
+  // Anything other than absent-or-empty-array is routed into the engine's total admission
+  // validator (`null`, a string, an object, a non-empty array) so it fails closed rather
+  // than being silently ignored (`{}` / `null` have no useful `.length`).
+  const declaredWorkflows = ir.workflows as unknown;
+  const workflowsDeclared =
+    declaredWorkflows !== undefined &&
+    (!Array.isArray(declaredWorkflows) || declaredWorkflows.length > 0);
+
+  const workflowStore: WorkflowStore | undefined = workflowsDeclared
+    ? options.workflowStore ?? createMemoryWorkflowStore()
+    : undefined;
 
   const workflowEngine: WorkflowEngine | undefined = workflowStore
     ? createWorkflowEngine({
-        workflows: ir.workflows ?? [],
+        // Pass the declared value **through unchanged** (never `?? []`) so a tampered
+        // `null` / string / object reaches the total admission validator instead of being
+        // coalesced to an empty list (spec14pt4 §29, §63).
+        workflows: declaredWorkflows as readonly WorkflowDef[],
         store: workflowStore,
         compatibilityFingerprint: compatibilityKeyStr,
         instanceId,

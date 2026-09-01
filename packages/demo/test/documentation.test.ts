@@ -246,6 +246,9 @@ test('every validation code is documented, and every documented code exists', ()
     'SERVER_IR_LATEST_CONTRACT', 'TYPE_REF_KINDS', 'SEMANTIC_NODE_KINDS',
     // Semantic-identity vocabulary (spec14pt3): the exported executable-kind list, not a code.
     'EXECUTABLE_KINDS', 'SEMANTIC_FINGERPRINT_VERSION',
+    // spec14pt3/pt4: the structured `WorkflowIRError.code` for tampered workflow IR — a
+    // server-side error family, not a `VALIDATION_CODES` / `RUNTIME_DIAGNOSTIC_CODES` member.
+    'WORKFLOW_INVALID_IR',
     // Integrations, effects, triggers and events (0.8): exported vocabulary, not codes.
     'INTEGRATION_OPERATION_MODES', 'RETRY_POLICY_KINDS', 'TRIGGER_KINDS',
     'TRIGGER_OVERLAP_POLICIES', 'LIFECYCLE_EVENTS', 'MAX_EVENT_DISPATCH_DEPTH',

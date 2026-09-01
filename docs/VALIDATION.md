@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.14.0-alpha.2. Validation is authoring-time structural checking. It is not the same
+Axiom 0.14.0-alpha.3. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -196,6 +196,20 @@ connect schema 1 to it. A migration transform reads the old record through the r
 `validateGraph` rejects an internally inconsistent `WorkflowDef` before it can be compiled
 to `axiom.server.v8` or executed. Every failure is a structured diagnostic — never a thrown
 `TypeError` on a malformed step.
+
+**Totality (spec14pt4).** Every public surface that inspects, validates, compiles, admits or
+executes a `WorkflowDef` is total over *malformed* input: `validateGraph`,
+`compileToServerIR`, `AgentAPI.validate` and `AgentAPI.analyzeWorkflow` all produce a
+structured diagnostic (or a structured `Error`, for `analyzeWorkflow`) — never a native
+`TypeError` — for a `null` / non-object step, a `steps` / `inputs` / `bindings` that is not
+an array, or an unknown step kind. A hand-tampered Server IR (a stored / transported IR that
+never passed `validateGraph`) is rejected at **admission** — `createAxiomServer` /
+`createWorkflowEngine` throw `WorkflowIRError` (`WORKFLOW_INVALID_IR`) — for the same
+malformed container shapes and for broken references: a `bind` to an undeclared
+`WorkflowBinding`, a `WorkflowBinding.producedBy` that is not a step, an expression `ref`
+outside the closed workflow scope, or a `now`/`uuid`/`random` call. Unknown binding /
+reference semantics are **invalid**, never silently dropped, and can never produce a
+permanently `running` workflow.
 
 | Code | Raised when |
 | --- | --- |

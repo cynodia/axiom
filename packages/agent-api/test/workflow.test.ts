@@ -206,3 +206,89 @@ test('spec14pt3 F2: workflowStructuralProblems is total and flags the tampered s
   assert.ok(codes.includes('WORKFLOW_STEP_NOT_FOUND'));
   assert.ok(codes.includes('WORKFLOW_INVALID_STEP'));
 });
+
+// ------------------------------------------------------- spec14pt4 F1: analyzeWorkflow totality
+
+/**
+ * The reusable malformed-step corpus (spec14pt4 §9). The SAME list is run through every
+ * public workflow analysis / validation boundary; none may crash where another rejects.
+ */
+const MALFORMED_STEPS: Array<[string, unknown]> = [
+  ['null step', null],
+  ['undefined step', undefined],
+  ['string step', 'not-a-step'],
+  ['number step', 42],
+  ['boolean step', true],
+  ['array step', ['action']],
+  ['empty object', {}],
+  ['unknown string kind', { id: 's', type: 'sleep' }],
+  ['missing kind', { id: 's' }],
+  ['null kind', { id: 's', type: null }],
+  ['numeric kind', { id: 's', type: 7 }],
+];
+
+function withBadStep(bad: unknown) {
+  const g = base();
+  g.addNode<WorkflowDef>({
+    id: WF,
+    kind: 'workflow',
+    entry: nodeId('entry'),
+    steps: [
+      { type: 'branch', id: nodeId('entry'), when: literal(true), then: nodeId('done'), else: nodeId('done') },
+      { type: 'complete', id: nodeId('done') },
+      bad as never,
+    ],
+  });
+  return g;
+}
+
+test('spec14pt4 F1: AgentAPI.analyzeWorkflow is total over the malformed-step corpus (no native error)', () => {
+  for (const [label, bad] of MALFORMED_STEPS) {
+    const g = withBadStep(bad);
+    let threw: unknown;
+    try {
+      new AgentAPI(g).analyzeWorkflow(String(WF));
+    } catch (error) {
+      threw = error;
+    }
+    assert.ok(threw instanceof Error, `${label}: analyzeWorkflow rejected with a structured Error`);
+    const name = (threw as Error).name;
+    const msg = (threw as Error).message;
+    assert.ok(
+      name === 'Error' && !/TypeError|Cannot read|is not a function|undefined is not/.test(msg),
+      `${label}: not a native error (got ${name}: ${msg})`,
+    );
+    assert.match(msg, /analyzeWorkflow|WORKFLOW_/, `${label}: structured message`);
+  }
+});
+
+test('spec14pt4 F1/§8/§54: the malformed corpus is rejected consistently by validateGraph and analyzeWorkflow', () => {
+  // The compileToServerIR surface is exercised in packages/server (which references the
+  // compiler); here the two AgentAPI-visible surfaces must agree — one may not silently
+  // accept what the other identifies as structurally impossible.
+  for (const [label, bad] of MALFORMED_STEPS) {
+    const g = withBadStep(bad);
+    const result = new AgentAPI(g).validate();
+    assert.ok(
+      result.errors.map((x) => x.code).includes('WORKFLOW_INVALID_STEP'),
+      `${label}: AgentAPI.validate flags WORKFLOW_INVALID_STEP`,
+    );
+    let native = false;
+    try {
+      new AgentAPI(g).analyzeWorkflow(String(WF));
+    } catch (error) {
+      const e = error as Error;
+      native = /TypeError|Cannot read|is not a function/.test(`${e.name}: ${e.message}`);
+    }
+    assert.equal(native, false, `${label}: analyzeWorkflow produced no native error`);
+  }
+});
+
+test('spec14pt4 F1: analyzeWorkflow still analyzes a valid workflow unchanged', () => {
+  const g = base();
+  g.addNode<WorkflowDef>(fulfillment());
+  const analysis = new AgentAPI(g).analyzeWorkflow(String(WF));
+  assert.equal(analysis.entry, String(nodeId('reserve')));
+  assert.deepEqual(analysis.actionDependencies, [String(A_RELEASE), String(A_RESERVE), String(A_SHIP)]);
+  assert.equal(analysis.acyclic, true);
+});

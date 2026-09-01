@@ -51,14 +51,22 @@ function stripNonSemantic(value: unknown): unknown {
   return value;
 }
 
-function sortedRecord(record: Record<string, unknown> | undefined): unknown[] {
-  return Object.entries(record ?? {})
+// Both are **total** over a hand-tampered `ServerIR` slice (spec14pt4 §31): a slice that is
+// the wrong shape entirely (a string where an array is expected, say) projects to nothing
+// rather than throwing. A structurally invalid workflow is then refused by the engine's
+// admission validator with a structured `WorkflowIRError`; the compatibility key is never
+// the place a malformed IR surfaces as a native error. Valid graphs always have
+// array/object slices, so no valid fingerprint moves.
+function sortedRecord(record: unknown): unknown[] {
+  if (!record || typeof record !== 'object') return [];
+  return Object.entries(record as Record<string, unknown>)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([, v]) => stripNonSemantic(v));
 }
-function sortedList<T extends { id: unknown }>(list: readonly T[] | undefined): unknown[] {
-  return [...(list ?? [])]
-    .sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0))
+function sortedList(list: unknown): unknown[] {
+  if (!Array.isArray(list)) return [];
+  return [...list]
+    .sort((a, b) => (String((a as { id?: unknown })?.id) < String((b as { id?: unknown })?.id) ? -1 : String((a as { id?: unknown })?.id) > String((b as { id?: unknown })?.id) ? 1 : 0))
     .map((entry) => stripNonSemantic(entry));
 }
 

@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.14.0-alpha.2. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.14.0-alpha.3. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -1195,9 +1195,18 @@ semantic step — no transition, no `ActionDef` invoke, no event/timer/branch, n
 auto-failed or auto-cancelled, and `cancelWorkflow` from an incompatible build is refused.
 Presentation-only changes (`name` / `description` / `label`) and step declaration order are
 **not** semantic. A semantically identical fresh process recovers instances normally. There
-is no workflow instance migration in 0.14. Structurally invalid workflow IR is refused at
-`createAxiomServer` (`WorkflowIRError`); a malformed step reaches `validateGraph` as a
-`WORKFLOW_INVALID_STEP` diagnostic, never a native error.
+is no workflow instance migration in 0.14.
+
+Totality: every surface that inspects / validates / compiles / admits / executes a
+`WorkflowDef` is total over malformed input. `validateGraph` / `AgentAPI.validate` /
+`AgentAPI.analyzeWorkflow` / `compileToServerIR` produce a structured diagnostic (or
+structured `Error`), never a native `TypeError`, for a `null` / non-object step, a
+non-array `steps` / `inputs` / `bindings`, or an unknown step kind. A hand-tampered Server
+IR is refused at admission — `createAxiomServer` / `createWorkflowEngine` throw
+`WorkflowIRError` (`WORKFLOW_INVALID_IR`) — for those container shapes **and** for broken
+references (a `bind` to an undeclared binding, a `producedBy` to a non-step, a `ref` outside
+the closed workflow scope, a `now`/`uuid`/`random` call). Unknown references are invalid,
+never silently dropped; an admitted workflow can never wedge permanently `running` on one.
 
 Inspection: `server.getWorkflow(instanceId)` / `inspectWorkflows(limit)` — `status`,
 `currentStepId`, `activationId`, `attempt`, `waitingReason`, `nextEligibleAt`,

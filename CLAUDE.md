@@ -260,6 +260,30 @@ turn it into a working browser application whose generated JavaScript nobody rea
   **No new graph/IR vocabulary**; Server IR stays `axiom.server.v8`, conformance stays
   `axiom.conformance.v8`; `SEMANTIC_FINGERPRINT_VERSION` unchanged (non-workflow fingerprints
   frozen).
+* `specs/spec14pt4.md` — the **0.14 workflow input totality & structural validation closure**
+  (`0.14.0-alpha.3`), closing the narrow Phase 22 **F1 / F2 residuals** the focused external
+  retest of alpha.2 found. **F3 architecture is untouched** — the only edits to compatibility
+  code add `Array.isArray` / `typeof` guards that are no-ops for valid input, so no valid
+  graph's `semanticFingerprint` moves. **F1** — `AgentAPI.analyzeWorkflow` read `step.id`
+  before proving the step's shape; it now runs the shared total `workflowStructuralProblems`
+  first (structured `Error`, never a native `TypeError`) and filters traversal through
+  `isWorkflowStep` / `Array.isArray`. **F2** — `workflowStructuralProblems` is now total over
+  `unknown` (proves `workflow` is an object and `steps` / `inputs` / `bindings` are arrays of
+  the right shape *before* any traversal) **and** checks reference integrity: a `wait-event`
+  `bind` key must be a declared `WorkflowBinding` (`WORKFLOW_BINDING_NOT_FOUND`), every
+  `WorkflowBinding.producedBy` must resolve to a step, every workflow expression `ref` must
+  resolve in that location's closed scope (`WORKFLOW_EXPRESSION_SCOPE`), no `now`/`uuid`/
+  `random` (`WORKFLOW_NONDETERMINISTIC`). `createWorkflowEngine` guards a non-array
+  `workflows`; `createAxiomServer` routes any non-`undefined`, non-empty-array `ir.workflows`
+  into the validator unchanged (never `?? []`); `sortedList` / `sortedRecord` /
+  `canonicalWorkflowForFingerprint` / `workflowExpressions` are total over a tampered slice;
+  `advance` wraps `runStep` in try/catch (defense in depth — a corrupt instance fails
+  terminally, never an infinite `running` poll). The former "invalid ref → permanent
+  `running` wedge that survives restart" is impossible: admission fails, so there is no
+  instance. New tests: `agent-api/test/workflow.test.ts` (+3) + `server/test/workflow-ir-totality.test.ts`
+  (+6: 17 container tamper shapes + 10 reference tamper shapes → `WorkflowIRError`, `native
+  TypeError = 0`). **No new graph/IR vocabulary**; Server IR stays `axiom.server.v8`,
+  conformance `axiom.conformance.v8`, `SEMANTIC_FINGERPRINT_VERSION` unchanged.
 
 Together, spec2–spec14 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is

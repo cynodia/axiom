@@ -1,9 +1,11 @@
 import {
+  isWorkflowStep,
   workflowActionIds,
   workflowEventIds,
   workflowHasCycle,
   workflowReachableSteps,
   workflowStepSuccessors,
+  workflowStructuralProblems,
   type ApplicationGraph,
   type WorkflowActionStep,
   type WorkflowDef,
@@ -56,13 +58,27 @@ export interface WorkflowAnalysis {
 export function analyzeWorkflow(graph: ApplicationGraph, workflowId: string): WorkflowAnalysis {
   const workflow = graph
     .getNodesByKind('workflow')
-    .find((node) => String(node.id) === String(workflowId)) as WorkflowDef | undefined;
+    .find((node) => String((node as { id?: unknown })?.id) === String(workflowId)) as WorkflowDef | undefined;
   if (!workflow) {
     throw new Error(`analyzeWorkflow: no workflow node "${workflowId}"`);
   }
 
+  // spec14pt4 F1 — `analyzeWorkflow` is static analysis and must be **total** over a
+  // malformed `WorkflowDef` (a `null` step, `steps` that is not an array, an unknown step
+  // kind). Prove structural validity through the shared total validator *before* any
+  // traversal reads `step.id` / `step.type`; a structured `Error` (AgentAPI's existing
+  // convention, mirroring the "no workflow node" throw above) — never a native `TypeError`.
+  const structuralProblems = workflowStructuralProblems(workflow);
+  if (structuralProblems.length > 0) {
+    throw new Error(
+      `analyzeWorkflow: workflow "${String((workflow as { id?: unknown }).id ?? workflowId)}" is not structurally valid: ` +
+        structuralProblems.map((p) => `[${p.code}] ${p.message}`).join('; '),
+    );
+  }
+
+  const stepList: WorkflowStep[] = (Array.isArray(workflow.steps) ? workflow.steps : []).filter(isWorkflowStep);
   const reachable = workflowReachableSteps(workflow);
-  const steps: WorkflowStepAnalysis[] = workflow.steps
+  const steps: WorkflowStepAnalysis[] = stepList
     .filter((step) => reachable.has(String(step.id)))
     .map((step) => describeStep(step));
 
@@ -70,7 +86,7 @@ export function analyzeWorkflow(graph: ApplicationGraph, workflowId: string): Wo
   const failed = steps.filter((s) => s.type === 'fail').map((s) => s.id);
 
   const waitReasons = new Set<'event' | 'timer' | 'retry' | 'ownership'>(['ownership']);
-  for (const step of workflow.steps) {
+  for (const step of stepList) {
     if (!reachable.has(String(step.id))) continue;
     if (step.type === 'wait-event') waitReasons.add('event');
     if (step.type === 'timer') waitReasons.add('timer');
@@ -79,8 +95,14 @@ export function analyzeWorkflow(graph: ApplicationGraph, workflowId: string): Wo
 
   return {
     workflowId: String(workflow.id),
-    inputs: (workflow.inputs ?? []).map((input) => ({ id: String(input.id), required: input.required !== false })),
-    bindings: (workflow.bindings ?? []).map((b) => ({ id: String(b.id), producedBy: String(b.producedBy) })),
+    inputs: (Array.isArray(workflow.inputs) ? workflow.inputs : []).map((input) => ({
+      id: String(input.id),
+      required: input.required !== false,
+    })),
+    bindings: (Array.isArray(workflow.bindings) ? workflow.bindings : []).map((b) => ({
+      id: String(b.id),
+      producedBy: String(b.producedBy),
+    })),
     entry: String(workflow.entry),
     steps,
     actionDependencies: [...new Set(workflowActionIds(workflow).map(String))].sort(),

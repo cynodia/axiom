@@ -1,6 +1,6 @@
 # Axiom 0.14 — Durable Workflows: implementation report
 
-Release: `0.14.0-alpha.2`. Branch: `spec14-durable-workflows`. Baseline: `0.13.1-alpha.1`.
+Release: `0.14.0-alpha.3`. Branch: `spec14-durable-workflows`. Baseline: `0.13.1-alpha.1`.
 Design note: `AXIOM_0_14_WORKFLOW_RESEARCH.md`. Full model: `docs/WORKFLOWS.md`.
 Pre-publish corrective pass: `specs/spec14pt2.md` (F1 / F2 crash-safety closure) — **CLOSED**,
 see §"spec14pt2 closure" below.
@@ -11,16 +11,17 @@ orchestration meaning; the runtime owns scheduling, persistence, retries, per-in
 leases, fencing, crash recovery and physical execution. No application script body, no
 mutable workflow blob, no application-owned state machine.
 
-Test totals: **1444** across the repo, all green at `0.14.0-alpha.2` (server 601 incl.
+Test totals: **1453** across the repo, all green at `0.14.0-alpha.3` (server 607 incl.
 `workflow-engine` (9), `workflow-store` (memory + SQLite parity incl. the F2 durable-journal
 contract + concurrent-transition race, 3), `workflows-server` (5), `workflow-conformance`
 (13 fixtures + suite + 2 negative controls), **`workflow-crash-matrix` (7 real-OS-process
 scenarios — spec14pt2)**, **`workflow-compat` (10 — spec14pt3 F3/F1/F2 in-process)**,
-**`workflow-mixed-build` (6 real-OS-process — spec14pt3 F3)**, `persistence` (+2 F1
-idempotency-record cases); agent-api 95 incl. `analyzeWorkflow` + workflow validation (6) +
-the spec14pt3 F1 malformed-step matrix; core 279 incl. the `WORKFLOW_*` validation codes +
-workflow semantic-identity). `npm run build`, `npm test`, `release:pack` / `verify` /
-`consumer-test` / `probe` and the documentation tests pass.
+**`workflow-mixed-build` (6 real-OS-process — spec14pt3 F3)**, **`workflow-ir-totality` (6 —
+spec14pt4 F2)**, `persistence` (+2 F1 idempotency-record cases); agent-api 98 incl.
+`analyzeWorkflow` + workflow validation (6) + the spec14pt3/pt4 malformed-step matrix; core
+279 incl. the `WORKFLOW_*` validation codes + workflow semantic-identity). `npm run build`,
+`npm test`, `release:pack` / `verify` / `consumer-test` / `probe` and the documentation
+tests pass.
 
 Real-OS-process suites spawn independent processes over shared SQLite files.
 `workflow-crash-matrix` SIGKILL/SIGSTOPs at the narrowest crash boundaries (`AXIOM_WF_TRIALS`,
@@ -48,8 +49,8 @@ semantic-variant refusal tests takes ~57 s at 25).
 | 14 conformance v8 | ✅ | `axiom.conformance.v8` — `workflow-conformance.ts`, `scripts/workflow-conformance.mjs` (13 fixtures + manifest), public runner, 2 negative controls. |
 | 15 topology / crash suite | ✅ | in-process fencing/CAS + concurrent-transition race, **plus** the spec14pt2 real-OS-process `workflow-crash-matrix`: F1 SIGKILL ×50, F2 Case A SIGKILL ×50, Case B wait-vs-event race ×50 (deterministic before/after classification, no lost event), Case C duplicate + across-restart replay, 2- & 8-authority claim races (exactly one logical transition), SIGSTOP stale-owner (fenced write refused, zero stale commits). |
 | 16 historical regression | ✅ | 0.12 / 0.12.1 / 0.13.1 suites (575 server, incl. live-query and distributed-authority cross-process) re-run green. |
-| 17 docs / release prep | ✅ | `docs/WORKFLOWS.md`, `AGENT_REFERENCE` §DURABLE WORKFLOWS, `AUTHORITY.md` / `DISTRIBUTED_AUTHORITY.md` compatibility sections, `VALIDATION.md`, anti-patterns #72–#80, README + facade doc-map rows, `CLAUDE.md` entries. Version bump to `0.14.0-alpha.2` across every manifest / doc line / `llms.txt` / `package-lock.json`. |
-| 18 publish `0.14.0-alpha.2` | ⏳ | post this session — `release:pack` / `verify` / `consumer-test` / `probe` are the gate (§143). |
+| 17 docs / release prep | ✅ | `docs/WORKFLOWS.md`, `AGENT_REFERENCE` §DURABLE WORKFLOWS, `AUTHORITY.md` / `DISTRIBUTED_AUTHORITY.md` compatibility sections, `VALIDATION.md`, anti-patterns #72–#80, README + facade doc-map rows, `CLAUDE.md` entries. Version bump to `0.14.0-alpha.3` across every manifest / doc line / `llms.txt` / `package-lock.json`. |
+| 18 publish `0.14.0-alpha.3` | ⏳ | post this session — `release:pack` / `verify` / `consumer-test` / `probe` are the gate (§143). |
 | 19 blind Phase 22 | ⏳ | focused F3 external rerun first (§119, §120), then resume §125 mandatory areas; freeze only on `D1 / E1 / S1`. |
 
 ## Answers to §251 (model)
@@ -190,10 +191,10 @@ honours the configured coordination `leaseDurationMs` (previously a fixed 15 s).
 
 ## spec14pt3 closure — Phase 22 F3 (release blocker) + F1 / F2 hardening
 
-Phase 22 against published `0.14.0-alpha.2` returned `D1 / E1 / S3` with **F3**: a
+Phase 22 against published `0.14.0-alpha.3` returned `D1 / E1 / S3` with **F3**: a
 semantically incompatible authority build silently continued an in-flight workflow instance
 under changed `WorkflowDef` semantics (25/25 real-process trials). `specs/spec14pt3.md` is
-the corrective pass; all three findings are **CLOSED**. Corrective release: **`0.14.0-alpha.2`**.
+the corrective pass; all three findings are **CLOSED**. Corrective release: **`0.14.0-alpha.3`**.
 Server IR stays **`axiom.server.v8`**; conformance stays **`axiom.conformance.v8`** (no new
 vocabulary, no fixture edits). The 0.14 workflow model is unchanged (§4, §50, §51).
 
@@ -279,10 +280,72 @@ scoping); `packages/server/test/workflow-mixed-build.test.ts` (+6: real-OS-proce
 semantic variants × 25 trials refused with A2 recovery, presentation-only × 25 continues,
 2-/8-authority mixed topology). Repo total: **1444** tests green (from 1421).
 
+## spec14pt4 closure — Phase 22 F1 / F2 residuals (`0.14.0-alpha.3`)
+
+The focused external retest of `0.14.0-alpha.2` closed **F3** externally but found narrow
+residuals: `AgentAPI.analyzeWorkflow` still read `step.id` before proving the step's shape
+(F1), and IR admission did not yet prove every *container* shape or *reference* was valid
+(F2). `specs/spec14pt4.md` is the narrow corrective — **F3 architecture is untouched**
+(`EXECUTABLE_KINDS`, `SERVER_IR_EXECUTABLE_SLICES`, `canonicalWorkflowForFingerprint`,
+`AuthorityCompatibilityKey`, `isCompatible` unchanged in behaviour; the only edits there add
+`Array.isArray` / `typeof` guards that are no-ops for valid input — no valid graph's
+`semanticFingerprint` moves). Server IR stays `axiom.server.v8`, conformance
+`axiom.conformance.v8`, `SEMANTIC_FINGERPRINT_VERSION` unchanged. Both findings **CLOSED**.
+
+### F1 — `AgentAPI.analyzeWorkflow` totality
+
+| Question (spec14pt4 §68) | Answer |
+| --- | --- |
+| 1. Why did `validateGraph` reject malformed steps while `analyzeWorkflow` still threw? | `validate.ts` was hardened in pt3; `analyzeWorkflow` (a separate `packages/agent-api` traversal) was not — it did `workflow.steps.filter((s) => reachable.has(String(s.id)))` and `for (const step of workflow.steps) { …step.type… }` with no shape guard. |
+| 2. Which traversal read `step.id` before validation? | The reachable-steps `.filter`/`.map` and the wait-reasons `for…of` in `analyzeWorkflow`, plus `workflow.steps` / `.inputs` / `.bindings` assumed to be arrays. |
+| 3. Total over the full malformed-step corpus now? | Yes. `analyzeWorkflow` runs the shared total `workflowStructuralProblems(workflow)` **first** and throws a structured `Error` (AgentAPI's existing "no workflow node" convention) if non-empty; the subsequent traversal additionally filters through `isWorkflowStep` and `Array.isArray`. Corpus: `null` / `undefined` / string / number / boolean / array / `{}` / unknown-kind / missing-kind / null-kind / numeric-kind step. |
+| 4. Same validated helpers as core? | Yes — `workflowStructuralProblems`, `isWorkflowStep` from `@cynodia/axiom-core`. |
+| 5. Any malformed step still a native `TypeError`? | No. `native error count = 0` across `validateGraph`, `AgentAPI.validate`, `AgentAPI.analyzeWorkflow` and `compileToServerIR` for the whole corpus. |
+
+### F2 — IR admission container + reference totality
+
+| Question (spec14pt4 §69) | Answer |
+| --- | --- |
+| 1. Why were invalid binding references admitted? | `workflowStructuralProblems` (pt3) checked step shape and control-flow edges but not `wait-event` `bind` targets, `WorkflowBinding.producedBy`, or expression `ref` scope — those were only enforced by `validateGraph` at authoring time, which a hand-tampered `ServerIR` bypasses. |
+| 2. Why did unknown refs become permanent `running` wedges? | `evaluateWorkflowExpression`'s `ref` case throws for an id not in scope; the throw propagated out of `advance`, which `pollOnce` catches and ignores — so the instance stayed `running` and every poll re-threw. |
+| 3. Why could a malformed `workflows` / `steps` container reach `workflowExpressions` before refusal? | `workflowExpressions` did `workflow.steps.flatMap(...)`; `createWorkflowEngine` did `options.workflows.flatMap(...)` and `new Map(options.workflows.map(...))`; `serverIrSemanticProjection`'s `sortedList` did `[...(list ?? [])]` — each assumes an array. |
+| 4. Where is container validation now? | `workflowStructuralProblems` is total over *any* value: it proves `workflow` is an object and `steps` / `inputs` / `bindings` are arrays of the right element shape **before** any traversal. `createWorkflowEngine` guards `Array.isArray(options.workflows)`; `createAxiomServer` routes any non-`undefined`, non-empty-array `ir.workflows` into it unchanged (never `?? []`). `sortedList` / `sortedRecord` / `canonicalWorkflowForFingerprint` return empty/pass-through for a non-array/non-object slice. |
+| 5. Where is binding / reference integrity validated? | In `workflowStructuralProblems`: a `wait-event` `bind` key must be a declared `WorkflowBinding` (`WORKFLOW_BINDING_NOT_FOUND`); every `WorkflowBinding.producedBy` must resolve to a step (`WORKFLOW_STEP_NOT_FOUND`); every workflow expression `ref` must resolve in that location's closed scope — inputs / bindings / `PRINCIPAL`, plus `EVENT` only inside a `wait-event` `where`/`bind` (`WORKFLOW_EXPRESSION_SCOPE`); no `now`/`uuid`/`random` (`WORKFLOW_NONDETERMINISTIC`). |
+| 6. Can an invalid `bind` target reach event execution? | No — refused at admission; `createAxiomServer` throws `WorkflowIRError` and no instance is created. |
+| 7. Can an unknown `branch` ref reach branch execution? | No — same. |
+| 8. Can a malformed workflow container produce a native `TypeError`? | No — the full §29 tamper corpus (17 container + 10 reference shapes) throws `WorkflowIRError` / `WORKFLOW_INVALID_IR`; `native TypeError = 0`, `silent admission = 0`, `semantic execution = 0`, `permanent wedge = 0`. |
+| 9. Validation before engine execution? | Yes — at `createWorkflowEngine` construction, which `createAxiomServer` calls before `server.start()`. |
+| 10. Defense in depth if corrupt state bypasses admission? | `advance` wraps `runStep` in try/catch: a throw (e.g. a corrupt durable instance pointing at a bad ref) fails the instance with a structured `workflow-step-execution-error` terminal reason rather than letting `pollOnce` swallow it and retry forever. `runStep` also has a total `default`. |
+
+### Changes
+
+- **core** `workflows.ts` — `workflowStructuralProblems` is total over `unknown` and now also
+  checks bind / producer / expression-scope / nondeterminism (`WorkflowStructuralProblem.code`
+  widened with `WORKFLOW_BINDING_NOT_FOUND` / `WORKFLOW_EXPRESSION_SCOPE` /
+  `WORKFLOW_NONDETERMINISTIC`); `workflowExpressions` and `canonicalWorkflowForFingerprint`
+  guard a non-array `steps` / non-object workflow.
+- **agent-api** `workflow.ts` — `analyzeWorkflow` runs `workflowStructuralProblems` first and
+  filters traversal through `isWorkflowStep` / `Array.isArray`.
+- **server** `authority-identity.ts` (`sortedList` / `sortedRecord` total), `workflows.ts`
+  (`createWorkflowEngine` array guard + `advance` try/catch defense in depth), `server.ts`
+  (`ir.workflows` routing).
+
+### Tests added (+9; repo 1444 → 1453)
+
+`agent-api/test/workflow.test.ts` +3 (analyzeWorkflow totality over the malformed corpus, no
+native error; cross-surface consistency with `validateGraph`; valid workflow still analyzed).
+`server/test/workflow-ir-totality.test.ts` +6 (valid control; 17 container tamper shapes →
+`WorkflowIRError`; 10 reference tamper shapes → `WorkflowIRError`; former-wedge / no-silent-drop
+regression — admission fails so there is no instance to wedge; `createWorkflowEngine` /
+`createAxiomServer` parity; `compileToServerIR` malformed-step surface). spec14pt2/pt3
+regressions (crash matrix, mixed-build, compat smoke) re-run green.
+
 ## Blind Phase 22
 
-Focused F3 external rerun pending — requires the published `0.14.0-alpha.2` packages
-(`release:pack` / `verify` / `consumer-test` / `probe` are the gate). After a green focused
-F3 rerun, the remainder of Phase 22 (§125 mandatory areas) resumes. Required eventual
+Focused F1 / F2 external rerun pending — requires the published `0.14.0-alpha.3` packages
+(`release:pack` / `verify` / `consumer-test` / `probe` are the gate). F3 already has external
+closure from alpha.2; only a small smoke control is needed there (compat code untouched).
+After a green focused F1 / F2 rerun, the remainder of Phase 22 (§125 mandatory areas)
+resumes. Required eventual
 verdict `D1 / E1 / S1`; the 0.14 semantic model is **not** frozen before that external
 result.

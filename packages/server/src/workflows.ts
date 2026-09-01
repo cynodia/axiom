@@ -258,17 +258,30 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
   const recoverBatch = options.recoverBatch ?? 64;
   const store = options.store;
 
-  // spec14pt3 F2 — admission validation. The authoritative runtime is handed a `ServerIR`
-  // it did not necessarily compile itself; a structurally invalid `WorkflowDef` (unknown
-  // step kind, dangling edge, malformed timer/terminal, missing entry) must fail closed
-  // *here*, before any instance can be started or advanced, rather than surfacing as a
-  // native error or a permanently stuck instance deep in execution (spec14pt3 §46, §48).
+  // spec14pt3 F2 / spec14pt4 §11-§19, §25 — the single authoritative admission validator.
+  // The authoritative runtime is handed a `ServerIR` it did not necessarily compile itself;
+  // a structurally invalid or referentially inconsistent `WorkflowDef` — a malformed
+  // container (`workflows` / `steps` not an array), an unknown step kind, a dangling edge, a
+  // `bind` to an undeclared binding, a `producedBy` to a non-step, an expression `ref` to an
+  // id that is not in scope — must fail closed **here**, before any instance can be started
+  // or advanced, rather than surfacing as a native error or a permanently `running` wedge
+  // deep in execution (spec14pt4 §3, §26). Totally guarded: `options.workflows` itself may
+  // be the wrong shape.
+  if (!Array.isArray(options.workflows)) {
+    throw new WorkflowIRError([
+      { code: 'WORKFLOW_INVALID_IR', message: 'workflows is not an array' },
+    ]);
+  }
   const irProblems = options.workflows.flatMap((w) => workflowStructuralProblems(w));
   if (irProblems.length > 0) {
     throw new WorkflowIRError(irProblems);
   }
 
-  const byId = new Map<string, WorkflowDef>(options.workflows.map((w) => [String(w.id), w]));
+  // Every entry has now passed the total structural + reference check above, so it is a
+  // plain object with a string id and a valid step array.
+  const byId = new Map<string, WorkflowDef>(
+    options.workflows.map((w) => [String((w as { id?: unknown })?.id), w]),
+  );
 
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let running = false;
@@ -395,7 +408,43 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
             return;
           }
 
-          const progressed = await runStep({ workflow, record, step, fence });
+          // spec14pt4 §27, §28 — defense in depth. Admission validation makes this
+          // unreachable for an admitted workflow, but if a corrupt durable instance or a
+          // step object mutated post-construction somehow reaches here and a transition
+          // (e.g. a branch predicate over a bad ref) throws, fail the instance with a
+          // structured reason. Never let the poll loop swallow the throw and retry forever
+          // (`pollOnce` catches, so an unhandled throw here IS a permanent `running` wedge).
+          let progressed: boolean;
+          try {
+            progressed = await runStep({ workflow, record, step, fence });
+          } catch (error) {
+            await store
+              .transition({
+                instanceId: record.instanceId,
+                expectedRevision: record.instanceRevision,
+                fence,
+                next: {
+                  status: 'failed',
+                  currentStepId: record.currentStepId,
+                  activationId: record.activationId,
+                  attempt: 0,
+                  pendingAction: null,
+                  nextEligibleAt: null,
+                  failure: {
+                    reason: 'workflow-step-execution-error',
+                    stepId: record.currentStepId,
+                    detail: error instanceof Error ? error.message : String(error),
+                  },
+                  history: {
+                    kind: 'failed',
+                    stepId: record.currentStepId,
+                    detail: { reason: 'workflow-step-execution-error' },
+                  },
+                },
+              })
+              .catch(() => {});
+            return;
+          }
           if (!progressed) return;
         }
       });

@@ -216,7 +216,7 @@ export function workflowStepExpressions(step: WorkflowStep): Expression[] {
 
 /** Every `Expression` in a workflow — inputs carry none, so this is the step leaves. */
 export function workflowExpressions(workflow: WorkflowDef): Expression[] {
-  return workflow.steps.flatMap(workflowStepExpressions);
+  return (Array.isArray(workflow?.steps) ? workflow.steps : []).flatMap(workflowStepExpressions);
 }
 
 /** The `ActionDef` ids a workflow invokes. */
@@ -246,6 +246,9 @@ export function workflowEventIds(workflow: WorkflowDef): NodeId[] {
  * caller's projection exactly as elsewhere.
  */
 export function canonicalWorkflowForFingerprint<T extends Partial<WorkflowDef>>(workflow: T): T {
+  // Total over a hand-tampered slice: a non-object workflow value is returned unchanged and
+  // the engine's admission validator refuses it structurally (spec14pt4 §31).
+  if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) return workflow;
   const byId = <U>(list: readonly U[] | undefined): U[] =>
     [...(list ?? [])].sort((a, b) => {
       const ai = String((a as { id?: unknown })?.id ?? '');
@@ -260,27 +263,114 @@ export function canonicalWorkflowForFingerprint<T extends Partial<WorkflowDef>>(
   };
 }
 
-// -------------------------------------------------------- structural integrity (spec14pt3 F2)
+// ----------------------------------- structural + reference integrity (spec14pt3 F2 / spec14pt4)
 
 export interface WorkflowStructuralProblem {
-  code: 'WORKFLOW_INVALID_STEP' | 'WORKFLOW_ENTRY_NOT_FOUND' | 'WORKFLOW_STEP_NOT_FOUND' | 'WORKFLOW_INVALID_TIMER';
+  code:
+    | 'WORKFLOW_INVALID_STEP'
+    | 'WORKFLOW_ENTRY_NOT_FOUND'
+    | 'WORKFLOW_STEP_NOT_FOUND'
+    | 'WORKFLOW_INVALID_TIMER'
+    | 'WORKFLOW_BINDING_NOT_FOUND'
+    | 'WORKFLOW_EXPRESSION_SCOPE'
+    | 'WORKFLOW_NONDETERMINISTIC';
   message: string;
 }
 
+const WORKFLOW_NONDETERMINISTIC_BUILTINS = new Set(['now', 'uuid', 'random']);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 /**
- * A **runtime-boundary** structural check on a `WorkflowDef`, independent of an
- * `ApplicationGraph` (spec14pt3 §44-§49). `validateGraph` remains the authoring-time
- * authority; this is what the authoritative runtime runs on a `ServerIR` it did not compile
- * itself — stored, transported or hand-tampered — so structurally invalid workflow IR fails
- * closed with a structured result instead of reaching a native `TypeError`, a silently
- * skipped step or a permanently wedged instance. It checks only what the engine dereferences
- * to execute; cross-node references (`ActionDef` / `EventDef` ids) are a compile-time
- * concern and are not re-checked here.
+ * Walk an expression tree, total over arbitrary input, collecting every scope `ref` target
+ * id and every non-deterministic builtin call. `literal` node payloads are not recursed
+ * into (a literal object value that happens to look like a `ref` is data, not a reference).
  */
-export function workflowStructuralProblems(workflow: WorkflowDef): WorkflowStructuralProblem[] {
+function walkExpression(
+  expression: unknown,
+  refs: Set<string>,
+  nondeterministic: Set<string>,
+  seen: Set<object> = new Set(),
+): void {
+  if (!isPlainObject(expression) || seen.has(expression)) return;
+  seen.add(expression);
+  if (expression.kind === 'ref' && expression.targetId !== undefined) {
+    refs.add(String(expression.targetId));
+  }
+  if (
+    expression.kind === 'call' &&
+    typeof expression.function === 'string' &&
+    WORKFLOW_NONDETERMINISTIC_BUILTINS.has(expression.function)
+  ) {
+    nondeterministic.add(expression.function);
+  }
+  if (expression.kind === 'literal') return;
+  for (const value of Object.values(expression)) {
+    if (Array.isArray(value)) {
+      for (const entry of value) walkExpression(entry, refs, nondeterministic, seen);
+    } else if (isPlainObject(value)) {
+      walkExpression(value, refs, nondeterministic, seen);
+    }
+  }
+}
+
+/**
+ * The complete **runtime-boundary** admission check on a `WorkflowDef` — total over *any*
+ * value, including a hand-tampered `ServerIR` where `workflows`, `steps`, `inputs` or
+ * `bindings` are the wrong shape entirely (spec14pt3 §44-§49, spec14pt4 §11-§19, §31).
+ * `validateGraph` remains the authoring-time authority; this is what the authoritative
+ * runtime runs on a `ServerIR` it did not compile itself, so a structurally invalid or
+ * referentially inconsistent workflow fails closed with a structured result instead of
+ * reaching a native exception, a silently dropped binding or a permanently wedged
+ * `running` instance.
+ *
+ * It checks, in order (never traverse before proving shape):
+ *   1. container shape — `workflow` is an object; `steps` / `inputs` / `bindings` are arrays
+ *      of the right element shape;
+ *   2. step shape + control-flow edges (`entry` / `next` / `then` / `else` / `onError` /
+ *      `onTimeout` resolve; `action` / `event` targets present; timer / terminal shape);
+ *   3. reference integrity — a `wait-event` `bind` key is a declared `WorkflowBinding`; a
+ *      `WorkflowBinding.producedBy` resolves to a step; every workflow expression `ref`
+ *      resolves in that location's closed scope (inputs / bindings / `PRINCIPAL`, plus
+ *      `EVENT` only inside a `wait-event` `where` / `bind`); no `now` / `uuid` / `random`.
+ *
+ * Cross-node references (`ActionDef` / `EventDef` *existence in the graph*) stay a
+ * compile-time concern — a missing target id surfaces as a structured `UNKNOWN_SERVER_ACTION`
+ * refusal at invoke time, not a wedge.
+ */
+export function workflowStructuralProblems(workflow: unknown): WorkflowStructuralProblem[] {
   const problems: WorkflowStructuralProblem[] = [];
-  const wid = String((workflow as { id?: unknown })?.id ?? '<unknown>');
-  const steps = Array.isArray(workflow?.steps) ? workflow.steps : [];
+  const wid = isPlainObject(workflow) ? String(workflow.id ?? '<unknown>') : '<unknown>';
+
+  // 1. Container shape — before any traversal.
+  if (!isPlainObject(workflow)) {
+    return [{ code: 'WORKFLOW_INVALID_STEP', message: `Workflow ${wid} is not an object` }];
+  }
+  if (!Array.isArray(workflow.steps)) {
+    problems.push({ code: 'WORKFLOW_INVALID_STEP', message: `Workflow ${wid} steps is not an array` });
+  }
+  if (workflow.inputs !== undefined && !Array.isArray(workflow.inputs)) {
+    problems.push({ code: 'WORKFLOW_INVALID_STEP', message: `Workflow ${wid} inputs is not an array` });
+  }
+  if (workflow.bindings !== undefined && !Array.isArray(workflow.bindings)) {
+    problems.push({ code: 'WORKFLOW_INVALID_STEP', message: `Workflow ${wid} bindings is not an array` });
+  }
+  const steps: unknown[] = Array.isArray(workflow.steps) ? workflow.steps : [];
+  const rawInputs: unknown[] = Array.isArray(workflow.inputs) ? workflow.inputs : [];
+  const rawBindings: unknown[] = Array.isArray(workflow.bindings) ? workflow.bindings : [];
+
+  const inputIds = new Set<string>();
+  for (const input of rawInputs) {
+    if (!isPlainObject(input) || typeof input.id !== 'string') {
+      problems.push({ code: 'WORKFLOW_INVALID_STEP', message: `Workflow ${wid} has an input that is not an object with a string id` });
+    } else {
+      inputIds.add(input.id);
+    }
+  }
+
+  // 2. Steps.
   const ids = new Set<string>();
   for (const step of steps) {
     if (!isWorkflowStep(step)) {
@@ -292,12 +382,29 @@ export function workflowStructuralProblems(workflow: WorkflowDef): WorkflowStruc
     }
     ids.add(String(step.id));
   }
-  if (workflow?.entry === undefined || !ids.has(String(workflow.entry))) {
+
+  const bindingIds = new Set<string>();
+  for (const binding of rawBindings) {
+    if (!isPlainObject(binding) || typeof binding.id !== 'string') {
+      problems.push({ code: 'WORKFLOW_INVALID_STEP', message: `Workflow ${wid} has a binding that is not an object with a string id` });
+      continue;
+    }
+    bindingIds.add(binding.id);
+    if (binding.producedBy === undefined || !ids.has(String(binding.producedBy))) {
+      problems.push({
+        code: 'WORKFLOW_STEP_NOT_FOUND',
+        message: `Workflow ${wid} binding ${binding.id} is producedBy ${String(binding.producedBy)}, which is not a step`,
+      });
+    }
+  }
+
+  if (workflow.entry === undefined || !ids.has(String(workflow.entry))) {
     problems.push({
       code: 'WORKFLOW_ENTRY_NOT_FOUND',
-      message: `Workflow ${wid} entry ${String(workflow?.entry)} is not one of its steps`,
+      message: `Workflow ${wid} entry ${String(workflow.entry)} is not one of its steps`,
     });
   }
+
   const edge = (target: unknown, from: string): void => {
     if (target !== undefined && !ids.has(String(target))) {
       problems.push({
@@ -306,6 +413,32 @@ export function workflowStructuralProblems(workflow: WorkflowDef): WorkflowStruc
       });
     }
   };
+
+  const scopeCheck = (expression: unknown, from: string, eventInScope: boolean): void => {
+    const refs = new Set<string>();
+    const nondeterministic = new Set<string>();
+    walkExpression(expression, refs, nondeterministic);
+    for (const id of refs) {
+      const ok =
+        inputIds.has(id) ||
+        bindingIds.has(id) ||
+        id === WORKFLOW_PRINCIPAL_SCOPE ||
+        (eventInScope && id === WORKFLOW_EVENT_SCOPE);
+      if (!ok) {
+        problems.push({
+          code: 'WORKFLOW_EXPRESSION_SCOPE',
+          message: `Workflow ${wid} step ${from} references ${id}, which is not in scope (inputs / bindings${eventInScope ? ' / EVENT' : ''} / PRINCIPAL)`,
+        });
+      }
+    }
+    for (const fn of nondeterministic) {
+      problems.push({
+        code: 'WORKFLOW_NONDETERMINISTIC',
+        message: `Workflow ${wid} step ${from} calls ${fn}(), which is not deterministic and not allowed in a workflow expression`,
+      });
+    }
+  };
+
   for (const step of steps) {
     if (!isWorkflowStep(step)) continue;
     const from = String(step.id);
@@ -323,8 +456,16 @@ export function workflowStructuralProblems(workflow: WorkflowDef): WorkflowStruc
         }
         edge(step.next, from);
         edge(step.onTimeout, from);
-        if (step.timeout !== undefined && !(Number(step.timeout?.seconds) > 0)) {
+        if (step.timeout !== undefined && !(Number((step.timeout as { seconds?: unknown })?.seconds) > 0)) {
           problems.push({ code: 'WORKFLOW_INVALID_TIMER', message: `Workflow ${wid} wait-event step ${from} has a non-positive timeout` });
+        }
+        for (const bindingId of isPlainObject(step.bind) ? Object.keys(step.bind) : []) {
+          if (!bindingIds.has(bindingId)) {
+            problems.push({
+              code: 'WORKFLOW_BINDING_NOT_FOUND',
+              message: `Workflow ${wid} step ${from} binds ${bindingId}, which is not a declared WorkflowBinding`,
+            });
+          }
         }
         break;
       case 'timer': {
@@ -332,7 +473,7 @@ export function workflowStructuralProblems(workflow: WorkflowDef): WorkflowStruc
         const hasAt = step.at !== undefined;
         if (hasAfter === hasAt) {
           problems.push({ code: 'WORKFLOW_INVALID_TIMER', message: `Workflow ${wid} timer step ${from} must declare exactly one of after / at` });
-        } else if (hasAfter && !(Number(step.after?.seconds) > 0)) {
+        } else if (hasAfter && !(Number((step.after as { seconds?: unknown })?.seconds) > 0)) {
           problems.push({ code: 'WORKFLOW_INVALID_TIMER', message: `Workflow ${wid} timer step ${from} has a non-positive after.seconds` });
         }
         edge(step.next, from);
@@ -348,6 +489,10 @@ export function workflowStructuralProblems(workflow: WorkflowDef): WorkflowStruc
       case 'complete':
       case 'fail':
         break;
+    }
+    // 3. Expression reference / scope integrity (spec14pt4 §17, §18).
+    for (const expression of workflowStepExpressions(step)) {
+      scopeCheck(expression, from, step.type === 'wait-event');
     }
   }
   return problems;

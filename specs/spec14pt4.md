@@ -2,7 +2,7 @@
 ## Workflow Input Totality and Structural Validation Closure
 
 **Target:** `0.14.0-alpha.3` or equivalent corrective release  
-**Baseline:** published `0.14.0-alpha.2`  
+**Baseline:** published `0.14.0-alpha.3`  
 **Recommended branch:** `spec14pt4-workflow-validation-closure`  
 **Status:** Narrow corrective specification following focused external Phase 22 retest  
 **Scope:** Close residual Phase 22 F1 and F2 findings only  
@@ -13,7 +13,7 @@
 
 # 1. Purpose
 
-The focused external retest of `0.14.0-alpha.2` established:
+The focused external retest of `0.14.0-alpha.3` established:
 
 ```text
 F3 — mixed-build semantic compatibility
@@ -110,7 +110,7 @@ It MUST NOT depend on host-language exceptions for correctness.
 
 # 4. Phase 22 F1 Residual
 
-`0.14.0-alpha.2` correctly fixed malformed-step handling in:
+`0.14.0-alpha.3` correctly fixed malformed-step handling in:
 
 ```text
 validateGraph
@@ -1529,7 +1529,7 @@ Answer:
 
 # 70. Versioning
 
-`0.14.0-alpha.2` is already published and externally tested.
+`0.14.0-alpha.3` is already published and externally tested.
 
 Do not overwrite it.
 
