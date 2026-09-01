@@ -349,6 +349,28 @@ scans framework sources for application vocabulary, `packages/runtime/test/store
 checks that state writes stay confined to the mutation subsystem, and
 `packages/compiler/test/presentation.test.ts` checks that no CSS reaches the IR.
 
+## Two test tiers, one suite
+
+Every test runs in both tiers. What changes is only how many times the **randomized
+multi-process soak tests** repeat, through the `AXIOM_*` environment knobs those tests
+already declare (`AXIOM_WF_TRIALS`, `AXIOM_WF_MIXED_TRIALS`, `AXIOM_RACE_TRIALS`,
+`AXIOM_AUTHORITIES` and the rest — `grep 'process.env.AXIOM' packages/server/test`).
+
+| Tier | Command | Trials | Wall clock |
+| ---- | ------- | ------ | ---------- |
+| Fast | `npm test` | 3 / 2 | ~80s |
+| Soak | `npm run test:soak` | 50 / 25 | ~7min |
+
+`packages/server/test/workflow-crash-matrix.test.ts` and `workflow-mixed-build.test.ts`
+fork real authority processes and SIGKILL them; at the full counts they are 354 of the
+suite's 400 seconds, and nothing else in the repository takes longer than 7. A trial is a
+*repetition*, so the fast tier still executes every file, every test and every assertion —
+what it gives up is the probability of catching a rare interleaving, which is exactly what
+the soak tier is for. **CI and `release:prepare` both run the soak tier**, so nothing is
+pushed or published on the reduced counts — the fast tier is for local iteration.
+
+Each knob still overrides either tier: `AXIOM_WF_TRIALS=200 npm test -w packages/server`.
+
 ## Commands
 
 Requires **Node ≥ 22** — `npm test` relies on the test runner's native glob expansion of
@@ -358,6 +380,7 @@ Requires **Node ≥ 22** — `npm test` relies on the test runner's native glob 
 npm install
 npm run build               # tsc -b across all workspaces; also writes both demo pages
 npm test                    # runs node:test over COMPILED output — build first, always
+npm run test:soak           # the same suite with the full soak trial counts (~7x slower)
 npm run test:browser        # real-Chromium dialog conformance; FAILS if Playwright is absent
 
 npm run conformance:generate # rewrite packages/server/conformance/*.json + manifest.json
