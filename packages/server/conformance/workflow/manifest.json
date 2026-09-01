@@ -2,7 +2,7 @@
   "conformance": "axiom.conformance.v8",
   "baseContract": "axiom.server.v8",
   "protocol": "axiom.protocol.v1",
-  "release": "0.14.0-alpha.3",
+  "release": "0.14.0-alpha.4",
   "description": "Portable workflow conformance fixtures (spec14 §156-§159). Each file carries a compiled axiom.server.v8 Server IR, the start arguments, a deterministic driver script, and the required logical transition history + terminal state. Physical action attempts may be duplicated; the logical history must match exactly. Running one needs only the in-memory WorkflowStore and the semantics in docs/WORKFLOWS.md.",
   "fixtures": [
     {

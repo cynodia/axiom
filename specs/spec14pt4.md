@@ -1,8 +1,8 @@
 # Axiom 0.14 Part 4 Specification
 ## Workflow Input Totality and Structural Validation Closure
 
-**Target:** `0.14.0-alpha.3` or equivalent corrective release  
-**Baseline:** published `0.14.0-alpha.3`  
+**Target:** `0.14.0-alpha.4` or equivalent corrective release  
+**Baseline:** published `0.14.0-alpha.4`  
 **Recommended branch:** `spec14pt4-workflow-validation-closure`  
 **Status:** Narrow corrective specification following focused external Phase 22 retest  
 **Scope:** Close residual Phase 22 F1 and F2 findings only  
@@ -13,7 +13,7 @@
 
 # 1. Purpose
 
-The focused external retest of `0.14.0-alpha.3` established:
+The focused external retest of `0.14.0-alpha.4` established:
 
 ```text
 F3 — mixed-build semantic compatibility
@@ -110,7 +110,7 @@ It MUST NOT depend on host-language exceptions for correctness.
 
 # 4. Phase 22 F1 Residual
 
-`0.14.0-alpha.3` correctly fixed malformed-step handling in:
+`0.14.0-alpha.4` correctly fixed malformed-step handling in:
 
 ```text
 validateGraph
@@ -1529,14 +1529,14 @@ Answer:
 
 # 70. Versioning
 
-`0.14.0-alpha.3` is already published and externally tested.
+`0.14.0-alpha.4` is already published and externally tested.
 
 Do not overwrite it.
 
 Recommended corrective version:
 
 ```text
-0.14.0-alpha.3
+0.14.0-alpha.4
 ```
 
 Use coherent exact versions across all published `@cynodia/*` packages.
@@ -1584,7 +1584,7 @@ F2
 Fresh npm consumer:
 
 ```text
-@cynodia/*@0.14.0-alpha.3
+@cynodia/*@0.14.0-alpha.4
 ```
 
 Run malformed workflow corpus through:

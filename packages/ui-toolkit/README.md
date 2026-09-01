@@ -1,7 +1,7 @@
 # @cynodia/axiom-ui
 
 Semantic UI authoring for [Axiom](https://github.com/cynodia/axiom). Pre-release
-(`0.14.0-alpha.3`); the API may change.
+(`0.14.0-alpha.4`); the API may change.
 
 **AI agents:** read [`docs/TOOLKIT_AGENT_REFERENCE.md`](docs/TOOLKIT_AGENT_REFERENCE.md)
 before expanding a pattern, and `docs/AGENT_REFERENCE.md` inside the installed

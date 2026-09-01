@@ -205,7 +205,9 @@ export function usesMigrationVocabulary(ir: {
  * declares no workflow compiles to the byte-identical v1–v7 document it always did.
  */
 export function usesWorkflowVocabulary(ir: { workflows?: readonly unknown[] }): boolean {
-  return (ir.workflows?.length ?? 0) > 0;
+  // Total over a tampered IR: only a non-empty **array** counts (a string has a `.length`
+  // but is not workflow vocabulary); a malformed present value is refused at admission.
+  return Array.isArray(ir.workflows) && ir.workflows.length > 0;
 }
 
 /**
@@ -299,7 +301,9 @@ export function serverIRExpressions(ir: {
   for (const migration of ir.migrations ?? []) {
     found.push(...migrationExpressions(migration));
   }
-  for (const workflow of ir.workflows ?? []) {
+  // Total over a hand-tampered IR: a `workflows` that is not an array contributes nothing
+  // here and is refused structurally at admission (spec14pt5). Never iterate a non-array.
+  for (const workflow of Array.isArray(ir.workflows) ? ir.workflows : []) {
     found.push(...workflowExpressions(workflow));
   }
   return found;

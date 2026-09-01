@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.14.0-alpha.3. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.14.0-alpha.4. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:

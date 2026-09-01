@@ -1,6 +1,6 @@
 # Subscriptions
 
-Axiom 0.14.0-alpha.3. How an application receives a stream of external events — an MQTT
+Axiom 0.14.0-alpha.4. How an application receives a stream of external events — an MQTT
 topic, a WebSocket feed, a queue consumer, a filesystem watcher, a serial port — without a
 client, a socket or a callback anywhere in the graph.
 

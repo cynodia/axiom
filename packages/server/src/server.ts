@@ -61,7 +61,7 @@ import {
   type CoordinationConfig,
   type CoordinationProvider,
 } from './coordination.js';
-import { createWorkflowEngine, type WorkflowEngine, type WorkflowInspection } from './workflows.js';
+import { WorkflowIRError, createWorkflowEngine, type WorkflowEngine, type WorkflowInspection } from './workflows.js';
 import { createMemoryWorkflowStore, type WorkflowStore } from './workflow-store.js';
 import {
   createDistributedEffectRunner,
@@ -568,6 +568,19 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       `Unsupported Server IR contract "${String(options.ir.contract)}"; this runtime executes ${SERVER_IR_CONTRACTS.join(', ')}`,
     );
   }
+
+  // spec14pt5 — the workflow admission boundary. `understatedContract` /
+  // `serverIRExpressions` and the compatibility fingerprint below all traverse
+  // `ir.workflows`; a hand-tampered IR where `workflows` is present but not an array (a
+  // number, a plain object, a boolean, a string) must fail closed **here** with the same
+  // structured `WorkflowIRError` `createWorkflowEngine` raises — never a native iteration
+  // error, and never coerced to `[]`. Absent or `[]` is admissible; per-element / reference
+  // validation runs later in `createWorkflowEngine`.
+  const workflowsContainer: unknown = options.ir.workflows;
+  if (workflowsContainer !== undefined && !Array.isArray(workflowsContainer)) {
+    throw new WorkflowIRError([{ code: 'WORKFLOW_INVALID_IR', message: 'workflows is not an array' }]);
+  }
+
   // A document may not claim a contract older than the vocabulary it uses. Executing it
   // anyway would make the label meaningless, and the label is what another implementation
   // decides by.

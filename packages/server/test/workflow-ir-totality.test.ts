@@ -251,3 +251,63 @@ test('spec14pt4 F1/§54: compileToServerIR rejects the malformed-step corpus wit
     );
   }
 });
+
+// ------------------------------------------- spec14pt5: ir.workflows container-shape totality
+
+test('spec14pt5: a malformed ir.workflows container is refused by createAxiomServer with no native error', async () => {
+  const malformed: Array<[string, unknown]> = [
+    ['workflows = 123 (external repro)', 123],
+    ['workflows = {} (external repro)', {}],
+    ['workflows = plain object with keys', { a: 1, b: 2 }],
+    ['workflows = true', true],
+    ['workflows = false', false],
+    ['workflows = string', 'workflows'],
+    ['workflows = null', null],
+  ];
+  for (const [label, value] of malformed) {
+    const ir = structuredClone(validIr()) as unknown as { workflows: unknown };
+    ir.workflows = value;
+
+    // createAxiomServer — must fail closed *before* understatedContract / serverIRExpressions
+    // / the compatibility fingerprint touch it.
+    let serverErr: unknown;
+    try {
+      const s = createAxiomServer({ ir: ir as unknown as ServerIR, workflowStore: createMemoryWorkflowStore() });
+      await s.start();
+      await s.stop().catch(() => {});
+    } catch (error) {
+      serverErr = error;
+    }
+    assert.ok(serverErr instanceof WorkflowIRError, `${label}: createAxiomServer → WorkflowIRError (got ${serverErr instanceof Error ? `${serverErr.name}: ${serverErr.message}` : String(serverErr)})`);
+    assert.equal((serverErr as WorkflowIRError).code, 'WORKFLOW_INVALID_IR', `${label}: WORKFLOW_INVALID_IR`);
+    const stext = `${(serverErr as Error).name}: ${(serverErr as Error).message}`;
+    assert.ok(!/TypeError|ReferenceError|RangeError|is not iterable|Cannot read/.test(stext), `${label}: createAxiomServer produced no native error (${stext})`);
+
+    // createWorkflowEngine — parity: the same malformed value is rejected the same way.
+    assert.throws(
+      () =>
+        createWorkflowEngine({
+          workflows: value as never,
+          store: createMemoryWorkflowStore(),
+          invokeAction: async () => ({ ok: true, retryable: false }),
+          compatibilityFingerprint: 'k',
+          instanceId: 'a',
+          resolvePrincipal: async () => ({ principal: null, fingerprint: 'anon' }),
+        }),
+      (e: unknown) => e instanceof WorkflowIRError && !/TypeError|is not iterable/.test((e as Error).message),
+      `${label}: createWorkflowEngine parity`,
+    );
+  }
+});
+
+test('spec14pt5: absent / empty ir.workflows is still admissible (not coerced, not refused)', async () => {
+  for (const value of [undefined, []] as const) {
+    const ir = structuredClone(validIr()) as unknown as { workflows: unknown };
+    ir.workflows = value;
+    const s = createAxiomServer({ ir: ir as unknown as ServerIR, workflowStore: createMemoryWorkflowStore() });
+    await s.start();
+    // No workflow engine, no workflow instances — but the server is fully constructed.
+    assert.deepEqual(await s.inspectWorkflows(), []);
+    await s.stop();
+  }
+});

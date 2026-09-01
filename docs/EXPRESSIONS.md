@@ -1,6 +1,6 @@
 # Expressions
 
-Axiom 0.14.0-alpha.3. An expression describes **what value is computed**. It is a tree of
+Axiom 0.14.0-alpha.4. An expression describes **what value is computed**. It is a tree of
 plain data, never source text and never a callback. Evaluation is pure: an expression MUST
 NOT change state.
 

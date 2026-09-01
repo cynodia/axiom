@@ -2,7 +2,7 @@
 
 ## Durable Workflow Crash-Safety Closure
 
-`spec14` is structurally implemented and green, but **do not publish `0.14.0-alpha.3` yet**.
+`spec14` is structurally implemented and green, but **do not publish `0.14.0-alpha.4` yet**.
 
 Before publish / blind Phase 22, close or conclusively prove the two remaining crash-safety gaps below.
 
@@ -442,7 +442,7 @@ How many no-gap race trials?
 
 # 7. Publish Gate
 
-Do not publish `0.14.0-alpha.3` until:
+Do not publish `0.14.0-alpha.4` until:
 
 ```text
 F1 durable action reconciliation:
@@ -470,7 +470,7 @@ release:probe:
     GREEN
 ```
 
-Then publish the coherent `0.14.0-alpha.3` package set and run the full blind Phase 22 specification unchanged.
+Then publish the coherent `0.14.0-alpha.4` package set and run the full blind Phase 22 specification unchanged.
 
 Required eventual external verdict:
 

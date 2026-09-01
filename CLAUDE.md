@@ -284,6 +284,22 @@ turn it into a working browser application whose generated JavaScript nobody rea
   (+6: 17 container tamper shapes + 10 reference tamper shapes → `WorkflowIRError`, `native
   TypeError = 0`). **No new graph/IR vocabulary**; Server IR stays `axiom.server.v8`,
   conformance `axiom.conformance.v8`, `SEMANTIC_FINGERPRINT_VERSION` unchanged.
+* `specs/spec14pt5.md` — the **0.14 F2 admission-surface totality fix** (`0.14.0-alpha.4`),
+  closing the last narrow Phase 22 F2 residual: `createAxiomServer` threw a native
+  `TypeError` for a hand-tampered `ir.workflows = 123` / `= {}` because `understatedContract`
+  → `serverIRExpressions(ir)` did `for (const workflow of ir.workflows ?? [])` **before** the
+  workflow admission validator ran. Fix (the boundary, not scattered guards):
+  `createAxiomServer` validates the `ir.workflows` *container shape* as its first step — a
+  present non-array `workflows` throws the same `WorkflowIRError` / `WORKFLOW_INVALID_IR`
+  `createWorkflowEngine` raises; absent / `[]` stay admissible; a malformed value is never
+  coerced. Defense in depth: `serverIRExpressions` iterates
+  `Array.isArray(ir.workflows) ? ir.workflows : []`, `usesWorkflowVocabulary` requires a
+  non-empty array. `createAxiomServer` is now as total over a malformed `ir.workflows` as
+  `createWorkflowEngine` already was. **F1 / F3 code untouched**; no valid graph's
+  `semanticFingerprint` moves; Server IR `axiom.server.v8`, conformance `axiom.conformance.v8`.
+  New tests: `server/test/workflow-ir-totality.test.ts` (+2 — `ir.workflows` ∈ {number,
+  object, boolean, string, null} → `WorkflowIRError` from both entry points; {absent, `[]`}
+  → server starts).
 
 Together, spec2–spec14 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is

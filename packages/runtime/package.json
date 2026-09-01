@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom-runtime",
-  "version": "0.14.0-alpha.3",
+  "version": "0.14.0-alpha.4",
   "description": "Domain-independent runtime that executes an Axiom application graph.",
   "license": "MIT",
   "author": "AskTech AS",
@@ -31,7 +31,7 @@
     }
   },
   "dependencies": {
-    "@cynodia/axiom-core": "0.14.0-alpha.3"
+    "@cynodia/axiom-core": "0.14.0-alpha.4"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",
