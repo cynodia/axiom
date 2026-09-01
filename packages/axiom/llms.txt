@@ -1,6 +1,6 @@
 # Axiom
 
-> AI-native semantic application framework, version 0.14.0-alpha.1. An Axiom application is a
+> AI-native semantic application framework, version 0.14.0-alpha.2. An Axiom application is a
 > typed semantic graph — state, behavior, constraints, UI structure, presentation and
 > authority as structured data — executed by generic runtimes. The JavaScript, HTML and CSS
 > that reach a browser are compiler output and are never authored or edited. The primary

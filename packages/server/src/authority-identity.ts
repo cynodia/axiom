@@ -10,17 +10,31 @@
  * The resulting {@link AuthorityCompatibilityKey} is what `createDurableWorkStore` stamps as
  * its `authorityKey`: an incompatible / older build then refuses to claim work a newer build
  * created (spec12 §44, §47).
+ *
+ * **spec14pt3 §5 G1 — one canonical semantic projection.** The slices this hashes are keyed
+ * by `core`'s {@link EXECUTABLE_KINDS} — the *same* list the graph-level `semanticFingerprint`
+ * iterates — through {@link SERVER_IR_EXECUTABLE_SLICES}. Phase 22 F3 was exactly the failure
+ * this now prevents: `WorkflowDef` had been added to `EXECUTABLE_KINDS` (so
+ * `semanticFingerprint(graph)` moved for a workflow semantic change) but this projection's
+ * hand-maintained slice list omitted `workflows`, so two authorities running different
+ * workflow semantics reported `compatible: true` and one silently advanced an in-flight
+ * instance under changed meaning. A `server` test now pins that every `EXECUTABLE_KINDS`
+ * member is projected here.
  */
 
 import { createHash } from 'node:crypto';
 import {
+  EXECUTABLE_KINDS,
   SEMANTIC_FINGERPRINT_VERSION,
   authorityCompatibilityKey,
   canonicalJSON,
+  canonicalWorkflowForFingerprint,
   compatibilityKeyString,
   type AuthorityCompatibilityKey,
   type ServerIR,
 } from './deps.js';
+
+type ExecutableKind = (typeof EXECUTABLE_KINDS)[number];
 
 const NON_SEMANTIC_KEYS = new Set(['name', 'description', 'label', 'metadata', 'axiom.authoring']);
 
@@ -49,30 +63,70 @@ function sortedList<T extends { id: unknown }>(list: readonly T[] | undefined): 
 }
 
 /**
- * The canonical executable-meaning projection of a Server IR: actions, constraints,
- * transition constraints, expression defs, integrations + operations, triggers, events,
- * subscriptions, storages, read policies, relationships, queries, plus the schema version.
- * Everything a distributed worker executes; nothing a rename touches.
+ * The Server IR slice carrying each executable graph kind. Keyed by `core`'s
+ * {@link EXECUTABLE_KINDS} so this projection and the graph-level `semanticFingerprint`
+ * cannot disagree about what is executable (spec14pt3 §5, §6, §189).
+ *
+ * `since: 'v8'` marks a slice added after `axiom.server.v1..v7` were frozen: it contributes
+ * to the fingerprint **only when non-empty**, exactly as `core`'s `semanticProjection` skips
+ * an empty kind — so every pre-workflow (non-`WorkflowDef`) graph's authority fingerprint is
+ * byte-identical to what it was before this correction (spec14pt3 §35, §38, §103). The 13
+ * pre-v8 slices stay unconditionally present (an empty array included) to keep *their*
+ * frozen bytes unchanged.
+ */
+const SERVER_IR_EXECUTABLE_SLICES: Record<
+  ExecutableKind,
+  { field: keyof ServerIR; shape: 'record' | 'list'; since?: 'v8' }
+> = {
+  action: { field: 'actions', shape: 'record' },
+  integration: { field: 'integrations', shape: 'list' },
+  'integration-operation': { field: 'integrationOperations', shape: 'record' },
+  trigger: { field: 'triggers', shape: 'list' },
+  event: { field: 'events', shape: 'list' },
+  subscription: { field: 'subscriptions', shape: 'list' },
+  'read-policy': { field: 'readPolicies', shape: 'list' },
+  query: { field: 'queries', shape: 'list' },
+  expression: { field: 'expressionDefs', shape: 'record' },
+  constraint: { field: 'constraints', shape: 'list' },
+  'transition-constraint': { field: 'transitionConstraints', shape: 'list' },
+  storage: { field: 'storages', shape: 'list' },
+  relationship: { field: 'relationships', shape: 'list' },
+  workflow: { field: 'workflows', shape: 'list', since: 'v8' },
+};
+
+/**
+ * The canonical executable-meaning projection of a Server IR: everything a distributed
+ * worker executes — actions, constraints, transition constraints, expression defs,
+ * integrations + operations, triggers, events, subscriptions, storages, read policies,
+ * relationships, queries, **and workflows** — plus the schema version. Nothing a rename
+ * touches. Built by iterating {@link EXECUTABLE_KINDS} so a future primitive cannot be
+ * omitted (spec14pt3 F3 root cause).
  */
 export function serverIrSemanticProjection(ir: ServerIR): Record<string, unknown> {
-  return {
+  const projection: Record<string, unknown> = {
     fingerprintVersion: SEMANTIC_FINGERPRINT_VERSION,
     schemaVersion: ir.schemaVersion ?? 1,
-    actions: sortedRecord(ir.actions),
-    constraints: sortedList(ir.constraints),
-    transitionConstraints: sortedList(ir.transitionConstraints),
-    expressionDefs: sortedRecord(ir.expressionDefs),
-    integrations: sortedList(ir.integrations),
-    integrationOperations: sortedRecord(ir.integrationOperations),
-    triggers: sortedList(ir.triggers),
-    events: sortedList(ir.events),
-    subscriptions: sortedList(ir.subscriptions),
-    storages: sortedList(ir.storages),
-    readPolicies: sortedList(ir.readPolicies),
-    relationships: sortedList(ir.relationships),
-    queries: sortedList(ir.queries),
   };
+  for (const kind of EXECUTABLE_KINDS) {
+    const slice = SERVER_IR_EXECUTABLE_SLICES[kind];
+    let raw: unknown = ir[slice.field];
+    // Workflows are canonicalized (authoring order of steps / inputs / bindings is not
+    // semantic) through the *same* core helper the graph-level fingerprint uses (spec14pt3
+    // §5 G1, §64), so the two projections cannot disagree about a workflow.
+    if (kind === 'workflow' && Array.isArray(raw)) {
+      raw = raw.map((w) => canonicalWorkflowForFingerprint(w as Record<string, unknown>));
+    }
+    const projected =
+      slice.shape === 'record'
+        ? sortedRecord(raw as Record<string, unknown> | undefined)
+        : sortedList(raw as ReadonlyArray<{ id: unknown }> | undefined);
+    if (slice.since === 'v8' && projected.length === 0) continue;
+    projection[slice.field as string] = projected;
+  }
+  return projection;
 }
+
+export { SERVER_IR_EXECUTABLE_SLICES };
 
 export function serverIrSemanticFingerprint(ir: ServerIR): string {
   return createHash('sha256').update(canonicalJSON(serverIrSemanticProjection(ir))).digest('hex');

@@ -23,7 +23,9 @@ import type {
 import {
   WORKFLOW_EVENT_SCOPE,
   WORKFLOW_PRINCIPAL_SCOPE,
+  isWorkflowStep,
   workflowStepById,
+  workflowStructuralProblems,
 } from './deps.js';
 import type { CoordinationProvider, Lease } from './coordination.js';
 import type {
@@ -198,6 +200,14 @@ export interface WorkflowInspection {
   instanceRevision: number;
   failure?: Record<string, unknown>;
   output?: Record<string, unknown>;
+  /**
+   * Whether *this* authority build may semantically advance the instance (spec14pt3 §26,
+   * §164). `false` when the instance was created / last advanced under incompatible
+   * `WorkflowDef` semantics — read-only inspection stays available so an operator can see
+   * *why* it is not progressing rather than finding it silently stuck.
+   */
+  compatible: boolean;
+  incompatibleReason?: 'incompatible-build';
 }
 
 export interface WorkflowEngine {
@@ -218,6 +228,22 @@ export interface WorkflowEngine {
   advance(instanceId: string): Promise<void>;
 }
 
+/**
+ * Structurally invalid workflow IR reached the authoritative runtime (spec14pt3 F2 §44-§49).
+ * `createWorkflowEngine` fails closed with this rather than letting a hand-tampered / stored /
+ * transported `ServerIR` reach a native `TypeError`, a silently skipped step or a wedged
+ * instance. `problems` is a structured list; nothing implementation-internal is exposed.
+ */
+export class WorkflowIRError extends Error {
+  readonly code = 'WORKFLOW_INVALID_IR' as const;
+  readonly problems: ReadonlyArray<{ code: string; message: string }>;
+  constructor(problems: ReadonlyArray<{ code: string; message: string }>) {
+    super(`workflow IR is structurally invalid: ${problems.map((p) => p.message).join('; ')}`);
+    this.name = 'WorkflowIRError';
+    this.problems = problems;
+  }
+}
+
 const WF_DIAGNOSTIC = {
   UNKNOWN_WORKFLOW: 'WORKFLOW_NOT_FOUND',
   ARGUMENT_MISMATCH: 'WORKFLOW_ARGUMENT_MISMATCH',
@@ -231,6 +257,17 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
   const pollMs = options.pollMs ?? 250;
   const recoverBatch = options.recoverBatch ?? 64;
   const store = options.store;
+
+  // spec14pt3 F2 — admission validation. The authoritative runtime is handed a `ServerIR`
+  // it did not necessarily compile itself; a structurally invalid `WorkflowDef` (unknown
+  // step kind, dangling edge, malformed timer/terminal, missing entry) must fail closed
+  // *here*, before any instance can be started or advanced, rather than surfacing as a
+  // native error or a permanently stuck instance deep in execution (spec14pt3 §46, §48).
+  const irProblems = options.workflows.flatMap((w) => workflowStructuralProblems(w));
+  if (irProblems.length > 0) {
+    throw new WorkflowIRError(irProblems);
+  }
+
   const byId = new Map<string, WorkflowDef>(options.workflows.map((w) => [String(w.id), w]));
 
   let pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -258,6 +295,24 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
   }
 
   // ---- scope + step evaluation -------------------------------------------------
+
+  /**
+   * spec14pt3 F3 — whether this authority build may interpret this durable instance. The
+   * instance durably records the `AuthorityCompatibilityKey` string it was created under
+   * (`{ serverContract, schemaFingerprint, semanticFingerprint }`, and `semanticFingerprint`
+   * now covers `WorkflowDef` executable meaning). A build whose key differs — a changed
+   * action target, event id, branch predicate, timer duration, retry policy or control-flow
+   * edge — must fail closed rather than advance the instance under changed semantics. A
+   * missing / malformed stored fingerprint is also incompatible (never "missing ⇒
+   * compatible", spec14pt3 §175).
+   */
+  function isCompatible(record: WorkflowInstanceRecord): boolean {
+    return (
+      typeof record.compatibilityFingerprint === 'string' &&
+      record.compatibilityFingerprint.length > 0 &&
+      record.compatibilityFingerprint === options.compatibilityFingerprint
+    );
+  }
 
   function scopeFor(record: WorkflowInstanceRecord, eventPayload?: unknown): Record<string, unknown> {
     return {
@@ -304,14 +359,41 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
           const record = await store.load(instanceId);
           if (!record) return;
           if (record.status === 'completed' || record.status === 'failed' || record.status === 'cancelled') return;
-          if (record.compatibilityFingerprint !== options.compatibilityFingerprint) {
-            // A semantically incompatible build must not advance this instance (spec14 §116).
+          if (!isCompatible(record)) {
+            // spec14pt3 F3 — fail closed *before* any semantic step: no ActionDef invoke,
+            // no event/timer/branch transition, no binding write, no `instanceRevision`
+            // advance. The instance is left exactly as it stands for a compatible authority
+            // to resume; incompatibility is an execution-environment problem, never an
+            // automatic `failed` / `cancelled` (spec14pt3 §23, §76, §156).
             return;
           }
           const workflow = byId.get(record.workflowId);
           if (!workflow) return;
           const step = workflowStepById(workflow, record.currentStepId);
-          if (!step) return;
+          // spec14pt3 F2: admission validation already rejected a structurally invalid
+          // workflow, so this only fires if the in-memory definition was mutated after the
+          // engine started. Fail the instance with a structured reason rather than looping
+          // the poll forever (a silent permanent wedge is explicitly forbidden, §46).
+          if (!step || !isWorkflowStep(step)) {
+            await store
+              .transition({
+                instanceId: record.instanceId,
+                expectedRevision: record.instanceRevision,
+                fence,
+                next: {
+                  status: 'failed',
+                  currentStepId: record.currentStepId,
+                  activationId: record.activationId,
+                  attempt: 0,
+                  pendingAction: null,
+                  nextEligibleAt: null,
+                  failure: { reason: 'workflow-invalid-step', stepId: record.currentStepId },
+                  history: { kind: 'failed', stepId: record.currentStepId, detail: { reason: 'workflow-invalid-step' } },
+                },
+              })
+              .catch(() => {});
+            return;
+          }
 
           const progressed = await runStep({ workflow, record, step, fence });
           if (!progressed) return;
@@ -474,6 +556,12 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
       case 'action': {
         return runActionStep({ ...args, step });
       }
+
+      default:
+        // Unreachable: `advance` fails the instance before calling `runStep` for a step
+        // that is not one of the six kinds, and admission validation rejects such IR
+        // outright. Present so the switch is total and never returns `undefined`.
+        return false;
     }
   }
 
@@ -620,7 +708,10 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
     for (const wait of waits) {
       if (eventSeq <= wait.sinceEventSeq) continue;
       const loaded = await store.load(wait.instanceId);
-      if (!loaded || loaded.compatibilityFingerprint !== options.compatibilityFingerprint) continue;
+      // spec14pt3 F3 — an incompatible build may journal the canonical event as
+      // infrastructure but must not apply its (changed) `where` / `bind` semantics to this
+      // instance. A compatible authority reconciles it later from the durable journal.
+      if (!loaded || !isCompatible(loaded)) continue;
       const workflow = byId.get(loaded.workflowId ?? '');
       if (!workflow) continue;
       const step = workflowStepById(workflow, wait.stepId) as WorkflowWaitEventStep | undefined;
@@ -719,7 +810,7 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
       compatibilityFingerprint: options.compatibilityFingerprint,
     };
     const instanceId = `wf_${createHash('sha256').update(workflowStartKey(start)).digest('hex').slice(0, 24)}_${randomUUID().slice(0, 8)}`;
-    const { instance } = await store.createIdempotent(start, () => ({
+    const { instance, created } = await store.createIdempotent(start, () => ({
       instanceId,
       workflowId: request.workflowId,
       compatibilityFingerprint: options.compatibilityFingerprint,
@@ -728,6 +819,18 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
       inputs,
       entryStepId: String(workflow.entry),
     }));
+    // spec14pt3 §161, §162 — a repeated start identity that resolves to an *existing*
+    // instance created under incompatible workflow semantics must NOT silently reuse it and
+    // continue it under this build. Return it, plainly labelled incompatible; never
+    // reinterpret it. (A brand-new instance created just now always matches this build.)
+    if (!created && !isCompatible(instance)) {
+      return {
+        error: {
+          code: WF_DIAGNOSTIC.INCOMPATIBLE,
+          message: `Workflow instance ${instance.instanceId} was created under workflow semantics incompatible with this authority build`,
+        },
+      };
+    }
     // Drive it forward immediately (local fast path); the poll loop is the durable backstop.
     await advance(instance.instanceId).catch(() => {});
     const fresh = (await store.load(instance.instanceId)) ?? instance;
@@ -740,6 +843,18 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
     if (record.status === 'cancelled') return { ok: true as const, status: 'cancelled' };
     if (record.status === 'completed' || record.status === 'failed') {
       return { ok: true as const, status: record.status }; // idempotent; a terminal workflow is not resurrected
+    }
+    // spec14pt3 §163 — cancellation writes a durable `cancelled` transition on this
+    // instance, so it is compatibility-gated like every other transition: an incompatible
+    // build must not transition an instance whose workflow meaning it does not share. The
+    // instance is left for a compatible authority to cancel or complete.
+    if (!isCompatible(record)) {
+      return {
+        error: {
+          code: WF_DIAGNOSTIC.INCOMPATIBLE,
+          message: `Workflow instance ${instanceId} is incompatible with this authority build; it cannot be cancelled here`,
+        },
+      };
     }
     const result = await withOwnership(instanceId, async (fence) => {
       const fresh = await store.load(instanceId);
@@ -785,6 +900,8 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
       instanceRevision: record.instanceRevision,
       ...(record.failure ? { failure: record.failure } : {}),
       ...(record.output ? { output: record.output } : {}),
+      compatible: isCompatible(record),
+      ...(isCompatible(record) ? {} : { incompatibleReason: 'incompatible-build' as const }),
     };
   }
 

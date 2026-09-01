@@ -3,7 +3,7 @@
 ## Durable Workflows
 
 **Status:** Feature specification
-**Target:** `@cynodia/axiom 0.14.0-alpha.1`
+**Target:** `@cynodia/axiom 0.14.0-alpha.2`
 **Baseline:** `0.13.1-alpha.1` — Realtime / Live Canonical Queries
 **Prerequisite:** Axiom 0.13 externally validated at `D1 / E1 / S1`
 **Primary capability:** Durable, portable, analyzable long-running workflows
@@ -3513,7 +3513,7 @@ After internal implementation is green:
 publish:
 
 ```text
-0.14.0-alpha.1
+0.14.0-alpha.2
 ```
 
 Then run a new blind external regression:
@@ -3566,7 +3566,7 @@ Create a clean npm consumer.
 Exact-pin every companion package to:
 
 ```text
-0.14.0-alpha.1
+0.14.0-alpha.2
 ```
 
 No:
@@ -4661,7 +4661,7 @@ Safety:            S1
 Only after published:
 
 ```text
-0.14.0-alpha.1
+0.14.0-alpha.2
 ```
 
 passes blind Phase 22 at:

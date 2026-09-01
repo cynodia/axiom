@@ -1,6 +1,6 @@
 # Distributed authority
 
-*This document describes Axiom `0.14.0-alpha.1`.*
+*This document describes Axiom `0.14.0-alpha.2`.*
 
 The authoritative runtime (`docs/AUTHORITY.md`) may run as **more than one process at the
 same time**, over one shared persistence provider, without any change to the
@@ -294,19 +294,31 @@ An authority's **compatibility key** is four fields:
 - `schemaVersion` / `schemaFingerprint` — the 0.11 persistence-relevant identity. A schema
   mismatch is already fatal per 0.11 migration safety.
 - `serverContract` — the Server IR contract the document declares.
-- `semanticFingerprint` — a **new**, versioned, deterministic hash over the *executable
-  server-side meaning*: action bodies, guards and operations, integration operation
-  definitions, triggers, events, subscription policy, read-policy predicates, query
-  semantics, expression definitions, constraints. It **excludes** everything a rename
-  touches — names, descriptions, labels, free-form metadata, all UI / routes / themes /
-  presentation, and declaration order. It is distinct from `schemaFingerprint`, which
-  deliberately excludes executable meaning: two graphs whose actions do entirely different
-  things but store the same shapes have the same `schemaFingerprint` and different
+- `semanticFingerprint` — a versioned, deterministic hash over the *executable server-side
+  meaning* of **every** executable graph kind (`core`'s single `EXECUTABLE_KINDS` list):
+  action bodies, guards and operations, integration operation definitions, triggers, events,
+  subscription policy, read-policy predicates, query semantics, expression definitions,
+  constraints, storage authorization, relationships, **and `WorkflowDef` executable meaning**
+  — a workflow's inputs / bindings / entry, and every step's kind, control-flow edges and
+  step-specific semantics (the `ActionDef` / `EventDef` it targets and, transitively, those
+  bodies; argument / `where` / `bind` / `when` / output expressions; `retry` policy; `timer`
+  duration). The authority-side projection derives from the same `EXECUTABLE_KINDS` list as
+  the graph-level `semanticFingerprint`, so a future graph primitive cannot alter executable
+  meaning yet escape authority compatibility. It **excludes** everything a rename touches —
+  names, descriptions, labels, free-form metadata, all UI / routes / themes / presentation,
+  and declaration order (workflow steps included). It is distinct from `schemaFingerprint`,
+  which deliberately excludes executable meaning: two graphs whose actions do entirely
+  different things but store the same shapes have the same `schemaFingerprint` and different
   `semanticFingerprint`s.
 
-Durable work records the compatibility key of the build that created it. An authority whose
-key differs **refuses to claim** that work (`INCOMPATIBLE_AUTHORITY` / the item is simply
-not claimed and stays visible as incompatible). A compatible authority runs it. During a
+Durable work — and every **durable workflow instance** — records the compatibility key of
+the build that created it. An authority whose key differs **refuses to claim** that work
+(`INCOMPATIBLE_AUTHORITY` / the item is simply not claimed and stays visible as
+incompatible). For a workflow instance the refusal is checked before *any* semantic step
+(action invocation, event match, timer fire, branch, retry, terminal transition, or a
+cancellation that would transition it); the instance is left untouched for a compatible
+authority to resume — never auto-failed or auto-cancelled. A compatible authority — topology
+and process identity aside — runs it. During a
 schema migration, incompatible workers stop claiming new work, ordinary serving is refused
 per 0.11, the migration completes, and compatible new authorities resume — migration
 ownership stays host-controlled and separate from ordinary distributed-work ownership; there

@@ -149,3 +149,88 @@ test('compatibilityKeyString is canonical — field order does not matter', () =
   });
   assert.equal(a, b);
 });
+
+// --------------------------------------------------------------- spec14pt3: WorkflowDef
+
+import type { EventDef, WorkflowDef } from '@cynodia/axiom-core';
+import { binary, field as fieldExpr, literal as lit, ref } from '@cynodia/axiom-core';
+
+const EV_GO = nodeId('event_go');
+const EV_ALT = nodeId('event_alt');
+const A_ALT = nodeId('action_alt');
+const WF = nodeId('wf_order');
+
+function workflowGraph(mut: (w: WorkflowDef) => void = () => {}): ApplicationGraph {
+  const graph = baseGraph();
+  graph.addNode<EventDef>({ id: EV_GO, kind: 'event', payloadType: primitiveType('string') });
+  graph.addNode<EventDef>({ id: EV_ALT, kind: 'event', payloadType: primitiveType('string') });
+  graph.addNode<ActionDef>({
+    id: A_ALT,
+    kind: 'action',
+    operations: [{ kind: 'set', target: { kind: 'state', stateId: S_ORDERS }, value: { kind: 'literal', value: 9 } }],
+  });
+  const wf: WorkflowDef = {
+    id: WF,
+    kind: 'workflow',
+    name: 'Order workflow',
+    inputs: [{ id: nodeId('in_id'), valueType: primitiveType('string'), required: true }],
+    entry: nodeId('s_wait'),
+    steps: [
+      { type: 'wait-event', id: nodeId('s_wait'), event: EV_GO, next: nodeId('s_branch') },
+      { type: 'branch', id: nodeId('s_branch'), when: binary('eq', ref(nodeId('in_id')), lit('x')), then: nodeId('s_timer'), else: nodeId('s_fail') },
+      { type: 'timer', id: nodeId('s_timer'), after: { seconds: 60 }, next: nodeId('s_act') },
+      { type: 'action', id: nodeId('s_act'), action: A_APPROVE, arguments: { id: ref(nodeId('in_id')) }, next: nodeId('s_done') },
+      { type: 'complete', id: nodeId('s_done'), output: { id: ref(nodeId('in_id')) } },
+      { type: 'fail', id: nodeId('s_fail'), error: { reason: lit('no') } },
+    ],
+  };
+  mut(wf);
+  graph.addNode<WorkflowDef>(wf);
+  return graph;
+}
+
+const stepOf = (w: WorkflowDef, id: string) => w.steps.find((s) => String(s.id) === id)!;
+
+test('spec14pt3: WorkflowDef executable meaning is in the graph semantic fingerprint', () => {
+  const base = semanticFingerprint(workflowGraph());
+  assert.equal(base, semanticFingerprint(workflowGraph()), 'deterministic');
+
+  const cases: Array<[string, (w: WorkflowDef) => void]> = [
+    ['entry step', (w) => { w.entry = nodeId('s_branch'); }],
+    ['wait-event event id', (w) => { (stepOf(w, 's_wait') as never as { event: unknown }).event = EV_ALT; }],
+    ['action target', (w) => { (stepOf(w, 's_act') as never as { action: unknown }).action = A_ALT; }],
+    ['action arguments', (w) => { (stepOf(w, 's_act') as never as { arguments: unknown }).arguments = { id: lit('const') }; }],
+    ['action next edge', (w) => { (stepOf(w, 's_act') as never as { next: unknown }).next = nodeId('s_fail'); }],
+    ['action retry policy', (w) => { (stepOf(w, 's_act') as never as { retry: unknown }).retry = { maxAttempts: 3, initialDelaySeconds: 1, backoffMultiplier: 2, maxDelaySeconds: 9 }; }],
+    ['branch predicate', (w) => { (stepOf(w, 's_branch') as never as { when: unknown }).when = binary('eq', ref(nodeId('in_id')), lit('y')); }],
+    ['branch then edge', (w) => { (stepOf(w, 's_branch') as never as { then: unknown }).then = nodeId('s_done'); }],
+    ['timer duration', (w) => { (stepOf(w, 's_timer') as never as { after: unknown }).after = { seconds: 600 }; }],
+    ['complete output', (w) => { (stepOf(w, 's_done') as never as { output: unknown }).output = { id: lit('done') }; }],
+    ['fail error', (w) => { (stepOf(w, 's_fail') as never as { error: unknown }).error = { reason: lit('other') }; }],
+    ['inputs', (w) => { w.inputs = [{ id: nodeId('in_id'), valueType: primitiveType('number'), required: true }]; }],
+    ['step kind', (w) => { (stepOf(w, 's_timer') as never as { type: unknown }).type = 'complete'; }],
+  ];
+  for (const [label, mut] of cases) {
+    assert.notEqual(semanticFingerprint(workflowGraph(mut)), base, `${label} change → fingerprint moves`);
+  }
+});
+
+test('spec14pt3: a workflow presentation-only change does NOT move the fingerprint', () => {
+  const base = semanticFingerprint(workflowGraph());
+  assert.equal(semanticFingerprint(workflowGraph((w) => { w.name = 'Renamed workflow'; (w as { description?: string }).description = 'docs here'; })), base);
+});
+
+test('spec14pt3: a transitively-referenced ActionDef change moves the workflow graph fingerprint', () => {
+  const base = semanticFingerprint(workflowGraph());
+  const mutated = workflowGraph();
+  const approve = mutated.getNode(A_APPROVE) as ActionDef;
+  approve.operations = [{ kind: 'set', target: { kind: 'state', stateId: S_ORDERS }, value: { kind: 'literal', value: 42 } }];
+  mutated.updateNode(approve);
+  assert.notEqual(semanticFingerprint(mutated), base, 'the referenced ActionDef body is executable meaning');
+});
+
+test('spec14pt3: construction order does not affect the workflow fingerprint', () => {
+  const forward = workflowGraph();
+  const shuffled = workflowGraph((w) => { w.steps = [...w.steps].reverse(); });
+  assert.equal(semanticFingerprint(forward), semanticFingerprint(shuffled), 'steps are keyed by id, not position');
+});

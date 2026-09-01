@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.14.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.14.0-alpha.2. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -1181,12 +1181,28 @@ Multi-authority: leaderless. Any compatible authority advances any eligible inst
 per-instance lease+fence (reused 0.12 `CoordinationProvider`); stale owner refused. Startup
 discovers runnable / retry-due / timer-due / recoverably-waiting instances and advances them
 — the application does **not** scan stuck workflows, call `resumeWorkflow`, or re-register
-timers/waits. Same logical outcome at 1 or N authorities. Incompatible build refuses to
-advance an instance (fail-closed).
+timers/waits. Same logical outcome at 1 or N authorities.
+
+Compatibility (safety boundary, not deployment metadata): an instance durably records the
+`AuthorityCompatibilityKey` at creation. `semanticFingerprint` covers `WorkflowDef`
+executable meaning — **changing a step's `action` / `event` target, argument or `where`
+expression, `retry` policy, `timer` duration, `branch` predicate, `complete`/`fail` output,
+or any control-flow edge (`next` / `then` / `else` / `onError` / `onTimeout` / `entry`), or
+the body of a referenced `ActionDef` / `EventDef`, makes existing in-flight instances
+incompatible with the new build.** An incompatible authority fails closed *before* any
+semantic step — no transition, no `ActionDef` invoke, no event/timer/branch, no
+`instanceRevision` advance — and leaves the instance for a compatible authority; it is never
+auto-failed or auto-cancelled, and `cancelWorkflow` from an incompatible build is refused.
+Presentation-only changes (`name` / `description` / `label`) and step declaration order are
+**not** semantic. A semantically identical fresh process recovers instances normally. There
+is no workflow instance migration in 0.14. Structurally invalid workflow IR is refused at
+`createAxiomServer` (`WorkflowIRError`); a malformed step reaches `validateGraph` as a
+`WORKFLOW_INVALID_STEP` diagnostic, never a native error.
 
 Inspection: `server.getWorkflow(instanceId)` / `inspectWorkflows(limit)` — `status`,
 `currentStepId`, `activationId`, `attempt`, `waitingReason`, `nextEligibleAt`,
-`instanceRevision`, `failure`, `output` (no secrets). `server.workflowHistory(instanceId)`
+`instanceRevision`, `failure`, `output`, `compatible` /
+`incompatibleReason: 'incompatible-build'` (no secrets). `server.workflowHistory(instanceId)`
 — the durable transition log. `AgentAPI.analyzeWorkflow(workflowId)` — static: inputs, steps
 + edges, action/event dependencies, terminal outcomes, acyclicity, possible wait reasons.
 

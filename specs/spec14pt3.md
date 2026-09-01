@@ -2,7 +2,7 @@
 ## Mixed-Build Compatibility Closure and Workflow Validation Hardening
 
 **Target:** `0.14.0-alpha.2` or equivalent corrective release  
-**Baseline:** published `0.14.0-alpha.1`  
+**Baseline:** published `0.14.0-alpha.2`  
 **Recommended branch:** `spec14pt3-workflow-compatibility`  
 **Status:** Corrective specification following Phase 22 blind external regression  
 **Scope:** Close Phase 22 F3 release blocker and harden F1/F2 without expanding WorkflowDef semantics  
@@ -12,7 +12,7 @@
 
 # 1. Purpose
 
-Phase 22 against published `0.14.0-alpha.1` produced:
+Phase 22 against published `0.14.0-alpha.2` produced:
 
 ```text
 Discoverability: D1
@@ -502,7 +502,7 @@ after: 5 seconds
 
 must be incompatible.
 
-Phase 22 directly demonstrated this failure mode in `0.14.0-alpha.1`.
+Phase 22 directly demonstrated this failure mode in `0.14.0-alpha.2`.
 
 ---
 
@@ -1015,7 +1015,7 @@ semanticFingerprint
 schemaFingerprint
 ```
 
-must remain unchanged from `0.14.0-alpha.1` unless the previous value was itself demonstrably incorrect.
+must remain unchanged from `0.14.0-alpha.2` unless the previous value was itself demonstrably incorrect.
 
 For valid workflow graphs, authority compatibility behaviour must change as necessary to close F3.
 
@@ -1753,7 +1753,7 @@ This is mandatory because over-fingerprinting is also a defect.
 
 Reproduce the exact Phase 22 failure shape using real OS processes.
 
-Baseline proof should demonstrate old behaviour if harness supports running published `0.14.0-alpha.1`:
+Baseline proof should demonstrate old behaviour if harness supports running published `0.14.0-alpha.2`:
 
 ```text
 A creates instance
@@ -2337,7 +2337,7 @@ live queries
 
 but no WorkflowDef.
 
-Compare compatibility behaviour with `0.14.0-alpha.1`.
+Compare compatibility behaviour with `0.14.0-alpha.2`.
 
 Expected:
 
@@ -3130,7 +3130,7 @@ Do not publish from a tree different from the tested tree.
 
 # 144. Versioning
 
-Because `0.14.0-alpha.1` has already been externally tested and contains a release-blocking semantic compatibility defect, do not overwrite/reuse it.
+Because `0.14.0-alpha.2` has already been externally tested and contains a release-blocking semantic compatibility defect, do not overwrite/reuse it.
 
 Publish the corrective build as a new immutable version.
 
@@ -3717,7 +3717,7 @@ If another architecture is used, prove equivalent crash safety.
 
 # 174. Existing Instances From alpha.1
 
-Decide explicitly whether workflow instances created by `0.14.0-alpha.1` contain sufficient durable identity for `alpha.2` to determine compatibility.
+Decide explicitly whether workflow instances created by `0.14.0-alpha.2` contain sufficient durable identity for `alpha.2` to determine compatibility.
 
 Possible outcomes:
 

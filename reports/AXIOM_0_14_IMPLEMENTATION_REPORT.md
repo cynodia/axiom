@@ -1,6 +1,6 @@
 # Axiom 0.14 — Durable Workflows: implementation report
 
-Release: `0.14.0-alpha.1`. Branch: `spec14-durable-workflows`. Baseline: `0.13.1-alpha.1`.
+Release: `0.14.0-alpha.2`. Branch: `spec14-durable-workflows`. Baseline: `0.13.1-alpha.1`.
 Design note: `AXIOM_0_14_WORKFLOW_RESEARCH.md`. Full model: `docs/WORKFLOWS.md`.
 Pre-publish corrective pass: `specs/spec14pt2.md` (F1 / F2 crash-safety closure) — **CLOSED**,
 see §"spec14pt2 closure" below.
@@ -11,19 +11,22 @@ orchestration meaning; the runtime owns scheduling, persistence, retries, per-in
 leases, fencing, crash recovery and physical execution. No application script body, no
 mutable workflow blob, no application-owned state machine.
 
-Test totals: **1421** across the repo, all green at `0.14.0-alpha.1` (server 584 incl.
+Test totals: **1444** across the repo, all green at `0.14.0-alpha.2` (server 601 incl.
 `workflow-engine` (9), `workflow-store` (memory + SQLite parity incl. the F2 durable-journal
 contract + concurrent-transition race, 3), `workflows-server` (5), `workflow-conformance`
 (13 fixtures + suite + 2 negative controls), **`workflow-crash-matrix` (7 real-OS-process
-scenarios — spec14pt2)**, `persistence` (+2 F1 idempotency-record cases); agent-api 93 incl.
-`analyzeWorkflow` + workflow validation (6); core 275 incl. the `WORKFLOW_*` validation
-codes). `npm run build`, `npm test`, `release:pack` / `verify` / `consumer-test` / `probe`
-and the documentation tests pass.
+scenarios — spec14pt2)**, **`workflow-compat` (10 — spec14pt3 F3/F1/F2 in-process)**,
+**`workflow-mixed-build` (6 real-OS-process — spec14pt3 F3)**, `persistence` (+2 F1
+idempotency-record cases); agent-api 95 incl. `analyzeWorkflow` + workflow validation (6) +
+the spec14pt3 F1 malformed-step matrix; core 279 incl. the `WORKFLOW_*` validation codes +
+workflow semantic-identity). `npm run build`, `npm test`, `release:pack` / `verify` /
+`consumer-test` / `probe` and the documentation tests pass.
 
-The `workflow-crash-matrix` suite spawns real independent OS processes over shared SQLite
-files and SIGKILL/SIGSTOPs them at the narrowest crash boundaries; `AXIOM_WF_TRIALS` sets
-the trial count (default 50 — the spec14pt2 release-gate figure; the F1 and F2-Case-A runs
-each take ~65 s at 50).
+Real-OS-process suites spawn independent processes over shared SQLite files.
+`workflow-crash-matrix` SIGKILL/SIGSTOPs at the narrowest crash boundaries (`AXIOM_WF_TRIALS`,
+default 50); `workflow-mixed-build` runs semantically divergent builds against one shared
+store (`AXIOM_WF_MIXED_TRIALS`, default 25 — the spec14pt3 §120 figure; each of the three
+semantic-variant refusal tests takes ~57 s at 25).
 
 ## What shipped (spec14 §249 phases)
 
@@ -45,9 +48,9 @@ each take ~65 s at 50).
 | 14 conformance v8 | ✅ | `axiom.conformance.v8` — `workflow-conformance.ts`, `scripts/workflow-conformance.mjs` (13 fixtures + manifest), public runner, 2 negative controls. |
 | 15 topology / crash suite | ✅ | in-process fencing/CAS + concurrent-transition race, **plus** the spec14pt2 real-OS-process `workflow-crash-matrix`: F1 SIGKILL ×50, F2 Case A SIGKILL ×50, Case B wait-vs-event race ×50 (deterministic before/after classification, no lost event), Case C duplicate + across-restart replay, 2- & 8-authority claim races (exactly one logical transition), SIGSTOP stale-owner (fenced write refused, zero stale commits). |
 | 16 historical regression | ✅ | 0.12 / 0.12.1 / 0.13.1 suites (575 server, incl. live-query and distributed-authority cross-process) re-run green. |
-| 17 docs / release prep | ✅ | `docs/WORKFLOWS.md`, `AGENT_REFERENCE` §DURABLE WORKFLOWS, `AUTHORITY.md` v8 row, `VALIDATION.md`, anti-patterns #72–#77, README + facade doc-map rows, `CLAUDE.md` entry. Version bump across every manifest / doc line / `llms.txt` / `graph.ts` / `package-lock.json`. |
-| 18 publish alpha | ⏳ | post this session. |
-| 19 blind Phase 22 | ⏳ | post-publish. |
+| 17 docs / release prep | ✅ | `docs/WORKFLOWS.md`, `AGENT_REFERENCE` §DURABLE WORKFLOWS, `AUTHORITY.md` / `DISTRIBUTED_AUTHORITY.md` compatibility sections, `VALIDATION.md`, anti-patterns #72–#80, README + facade doc-map rows, `CLAUDE.md` entries. Version bump to `0.14.0-alpha.2` across every manifest / doc line / `llms.txt` / `package-lock.json`. |
+| 18 publish `0.14.0-alpha.2` | ⏳ | post this session — `release:pack` / `verify` / `consumer-test` / `probe` are the gate (§143). |
+| 19 blind Phase 22 | ⏳ | focused F3 external rerun first (§119, §120), then resume §125 mandatory areas; freeze only on `D1 / E1 / S1`. |
 
 ## Answers to §251 (model)
 
@@ -185,8 +188,101 @@ fresh generation, A thaws and its scheduled fenced transition is **refused** (`f
 `terminal` / `revision`) — zero stale successful commits. The workflow engine now also
 honours the configured coordination `leaseDurationMs` (previously a fixed 15 s).
 
+## spec14pt3 closure — Phase 22 F3 (release blocker) + F1 / F2 hardening
+
+Phase 22 against published `0.14.0-alpha.2` returned `D1 / E1 / S3` with **F3**: a
+semantically incompatible authority build silently continued an in-flight workflow instance
+under changed `WorkflowDef` semantics (25/25 real-process trials). `specs/spec14pt3.md` is
+the corrective pass; all three findings are **CLOSED**. Corrective release: **`0.14.0-alpha.2`**.
+Server IR stays **`axiom.server.v8`**; conformance stays **`axiom.conformance.v8`** (no new
+vocabulary, no fixture edits). The 0.14 workflow model is unchanged (§4, §50, §51).
+
+### F3 — WorkflowDef in authority compatibility
+
+| Question (spec14pt3 §146) | Answer |
+| --- | --- |
+| 1. Why did `semanticFingerprint(graph)` detect WorkflowDef changes while `AuthorityCompatibilityKey.semanticFingerprint` did not? | Two projections. `core`'s `semanticProjection` iterates `EXECUTABLE_KINDS`, which spec14 correctly added `'workflow'` to — so the *graph-level* fingerprint moved. The *authority-side* projection, `serverIrSemanticProjection` in `packages/server/src/authority-identity.ts`, was a **hand-maintained slice list** (`actions`, `constraints`, … `queries`) that spec14 never extended with `workflows`. So `serverIrSemanticFingerprint` — and therefore the enforced `AuthorityCompatibilityKey` — was blind to every workflow executable change. |
+| 2. The exact divergent mechanism? | `serverIrSemanticProjection`'s literal 13-field object vs. `core`'s `EXECUTABLE_KINDS`-driven loop. Independently maintained inclusion sets that drifted — the architecture spec14pt3 §5 forbids. |
+| 3. The single authoritative semantic projection now? | `EXECUTABLE_KINDS` (exported from `core/semantic-identity.ts`) is the one source of truth for "which graph kinds carry executable meaning". `serverIrSemanticProjection` now **iterates `EXECUTABLE_KINDS`** via `SERVER_IR_EXECUTABLE_SLICES` (`kind → { field, shape }`), and a `packages/server` test asserts every `EXECUTABLE_KINDS` member has a slice. Workflows pass through `core`'s `canonicalWorkflowForFingerprint` (step / input / binding order is not semantic) in *both* projections, so they cannot disagree. |
+| 4. How does WorkflowDef enter authority compatibility? | `SERVER_IR_EXECUTABLE_SLICES.workflow = { field: 'workflows', shape: 'list', since: 'v8' }`. `since: 'v8'` ⇒ the slice contributes only when non-empty, so every pre-workflow graph's authority fingerprint is byte-identical to alpha.1 (§35, §38, §103 — verified: a non-workflow `serverIrSemanticProjection` has no `workflows` key). A workflow graph gets `"workflows": [...]` and its fingerprint moves. |
+| 5. Referenced ActionDefs included transitively? | Yes — by construction. The projection hashes the **whole** `ir.actions` slice, not only workflow-referenced ids, so a changed `ActionDef` body flips the fingerprint even if the workflow text is untouched (test: "a transitively-referenced ActionDef change flips compatibility"). |
+| 6. Referenced EventDefs transitively? | Yes, identically — the whole `ir.events` slice is hashed. |
+| 7. Which WorkflowDef fields are semantic? | `inputs` (id/type/required), `bindings` (id/type/`producedBy`), `entry`, and per step: `id`, `type`, control-flow edges (`next` / `then` / `else` / `onError` / `onTimeout`), `action` / `event` target, `arguments` / `where` / `bind` / `when` / `output` / `error` expression trees, `retry` policy (all four fields), `timeout`, `after` / `at`. Direct tests cover each. |
+| 8. Presentation-only fields? | `name`, `description`, `label` anywhere in the workflow (stripped by `stripNonSemantic`), and **step declaration order** (`canonicalWorkflowForFingerprint` sorts by id). Both proven not to move the fingerprint. |
+| 9. Identity stored with an instance? | The `AuthorityCompatibilityKey` string (`compatibilityKeyString` = canonical JSON of `{ schemaVersion, schemaFingerprint, serverContract, semanticFingerprint }`), written durably in the **same** `WorkflowStore.createIdempotent` transaction that creates the instance (SQLite: one `INSERT` inside `BEGIN IMMEDIATE`; §173 — no crash gap). |
+| 10. Exact refusal point? | `createWorkflowEngine.advance()` — after `store.load`, after the terminal check, **before** `runStep` (so before any `ActionDef` invoke, event / timer / branch transition, binding write or `instanceRevision` CAS). Also in `deliverEventToWaits` (before the event-match transition), in `startWorkflow` (an existing incompatible instance is returned as `INCOMPATIBLE_AUTHORITY`, never reused), and in `cancelWorkflow` (a `cancelled` transition is compatibility-gated). A missing / empty / malformed stored fingerprint is incompatible (`isCompatible` requires a non-empty exact string match — never "missing ⇒ compatible", §175). |
+| 11. Can an incompatible authority mutate `instanceRevision`? | No — verified in-process (2 engines / 1 store) and across 25 real-process trials per semantic variant: revision, status, current step, bindings and logical history are byte-unchanged after an incompatible authority is given every opportunity (poll loop, explicit event, cancel). |
+| 12. Invoke an ActionDef? | No — `S_COUNT` (a `StateDef` the action increments by 1) stays `0` on the incompatible authority in every trial; it becomes `1` only once a compatible authority resumes. |
+| 13. Match an event? | No — the incompatible authority may journal the canonical event as infrastructure (so a compatible authority reconciles it later) but applies no `where` / `bind` semantics and writes no `event-matched` transition. |
+| 14. Fire a timer? | No — with the timer long overdue the incompatible authority still writes no `timer-fired` transition; a compatible authority fires it once. |
+| 15. Can a semantically identical fresh process recover the instance? | Yes — the "presentation-only build B continues it" (25/25) and "compatible A2 completes it" controls pass; the fix binds instances to `semanticFingerprint`, never to process / authority identity. |
+| 16. Still leaderless? | Yes — no leader, no sticky routing, no homogeneous-build assumption. Compatibility only decides *eligibility* to interpret a given instance; compatible authorities still compete for the fenced per-instance lease. 2- and 8-authority mixed (half compatible / half a semantic B) deployments: only compatible authorities advance, final meaning == all-A oracle. |
+| 17. Server IR still `axiom.server.v8`? | Yes — no IR vocabulary change; `server-ir.v8.schema.json` unchanged. |
+| 18. Conformance still `axiom.conformance.v8`? | Yes — 13/13 workflow fixtures unchanged; compatibility is a multi-build property the conformance runner does not model, so it is covered by the dedicated `workflow-compat` / `workflow-mixed-build` regression tests (§92 allows this). |
+
+### F1 — unknown workflow step validation
+
+- **Malformed step that caused the Phase 22 `TypeError`:** a step object with an unknown
+  `type` (and, in the harsher probes, a `null` step) reached `validateWorkflow`'s
+  reachability / expression walk, where `workflowStepExpressions` / `workflowStepSuccessors`
+  fell through their non-exhaustive `switch` and returned `undefined`, and a `null` step hit
+  an unguarded `(step as {id}).id` read.
+- **Where validation assumed a known kind:** `core/workflows.ts` accessors
+  (`workflowStepSuccessors`, `workflowStepExpressions`, `workflowIsTerminalStep`,
+  `workflowActionIds`, `workflowEventIds`) and `validate.ts`'s unreachable-step loop.
+- **Now emitted:** `WORKFLOW_INVALID_STEP` (the already-public code — no new diagnostic).
+  The accessors are total over any input (guarded by a new `isWorkflowStep` predicate +
+  `default` cases returning `[]`); `validate.ts`'s `.id` reads are null-safe.
+- **`validateGraph` / `compileToServerIR` agree:** `compileToServerIR` runs `validateGraph`
+  and throws `GraphValidationError` carrying `WORKFLOW_INVALID_STEP`; a server test asserts
+  the message contains that code and **not** `TypeError` / `Cannot read`.
+- **Can malformed input still leak a native `TypeError`?** No — covered for unknown string
+  kind, missing kind, `null` kind, numeric kind, `step = null`, `step = string`,
+  `step = array`, `{}` (`native TypeError count = 0`).
+
+### F2 — tampered Server IR fail-closed
+
+- **Tampered shapes that previously wedged / threw:** unknown step kind, a `next` / `entry`
+  edge to a non-existent step, a `null` step, a `timer` with neither `after` nor `at`, a
+  missing `action` / `event` target, a malformed terminal.
+- **Where invalid IR is now rejected:** at **admission** — `createWorkflowEngine` (and hence
+  `createAxiomServer`) runs `workflowStructuralProblems` (a new `core` runtime-boundary
+  check, graph-context-free) on every `WorkflowDef` and throws `WorkflowIRError` (structured
+  `.problems`, no internals) before any instance can start or advance. Defence in depth: a
+  step object mutated *after* construction is caught in `advance` (the instance is failed
+  with a structured `workflow-invalid-step` reason rather than the poll loop spinning
+  forever), and `runStep` has a total `default`.
+- **Structured error produced:** `WorkflowIRError` (`code: 'WORKFLOW_INVALID_IR'`).
+- **Can unknown workflow IR execute partially / reach an ActionDef or event transition?**
+  No — admission refusal precedes engine construction; `0 native TypeError`,
+  `0 silent execution`, `0 permanent wedge` across the tamper matrix.
+
+### spec14pt2 regression (§94-§100)
+
+`workflow-crash-matrix.test.ts` re-run: F1 SIGKILL-after-commit and F2 Case A
+SIGKILL-before-transition (`S_COUNT == 1`, one `step-succeeded` / `event-matched`), Case B
+race, Case C replay, 2-/8-authority claim races (one logical transition), SIGSTOP
+stale-owner (refused) — all green. Start idempotency, timer target capture and event dedup
+suites unaffected. Non-workflow `semanticFingerprint` / `serverIrSemanticFingerprint` /
+`schemaFingerprint` and 0.12 / 0.13 authority-compatibility behaviour: unchanged (full
+`packages/server` + `packages/core` suites green).
+
+### Tests added
+
+`packages/core/test/semantic-identity.test.ts` (+4: workflow field sensitivity, presentation
+control, transitive ActionDef, construction order); `packages/agent-api/test/workflow.test.ts`
+(+2: F1 malformed-step matrix, `workflowStructuralProblems`);
+`packages/server/test/workflow-compat.test.ts` (+10: `EXECUTABLE_KINDS` ↔ slice guard, every
+§62 mutation flips compatibility, presentation / canonicalization / transitive controls, F2
+admission refusal, F1/§41 consistency, in-process mixed-build §76-§78, start-identity
+scoping); `packages/server/test/workflow-mixed-build.test.ts` (+6: real-OS-process — 3
+semantic variants × 25 trials refused with A2 recovery, presentation-only × 25 continues,
+2-/8-authority mixed topology). Repo total: **1444** tests green (from 1421).
+
 ## Blind Phase 22
 
-Pending — requires the published `0.14.0-alpha.1` packages. Required verdict `D1 / E1 / S1`.
-`release:probe` confirms a cold agent is routed to `docs/AGENT_REFERENCE.md` and
-`docs/WORKFLOWS.md` from the tarball alone.
+Focused F3 external rerun pending — requires the published `0.14.0-alpha.2` packages
+(`release:pack` / `verify` / `consumer-test` / `probe` are the gate). After a green focused
+F3 rerun, the remainder of Phase 22 (§125 mandatory areas) resumes. Required eventual
+verdict `D1 / E1 / S1`; the 0.14 semantic model is **not** frozen before that external
+result.

@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.14.0-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.14.0-alpha.2. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -202,7 +202,7 @@ to `axiom.server.v8` or executed. Every failure is a structured diagnostic — n
 | `WORKFLOW_ENTRY_NOT_FOUND` | `WorkflowDef.entry` does not name a step of that workflow. |
 | `WORKFLOW_STEP_NOT_FOUND` | A control-flow edge (`next` / `onError` / `then` / `else` / `onTimeout`) or a binding's `producedBy` names a step that does not exist. |
 | `WORKFLOW_DUPLICATE_STEP_ID` | Two steps in one workflow share an id, or a step id collides with a graph node id. |
-| `WORKFLOW_INVALID_STEP` | A step with no id, or a `type` outside the six (`action`, `wait-event`, `timer`, `branch`, `complete`, `fail`). |
+| `WORKFLOW_INVALID_STEP` | A step with no id, a non-object step (`null`, a string, an array), or a `type` outside the six (`action`, `wait-event`, `timer`, `branch`, `complete`, `fail`). Any malformed step shape produces this diagnostic — never a native `TypeError` (spec14pt3 F1). |
 | `WORKFLOW_CYCLE_NOT_ALLOWED` | The workflow control-flow graph contains a cycle. Retries are runtime policy, not graph edges. |
 | `WORKFLOW_ACTION_NOT_FOUND` | An `action` step references an `action` node that does not exist. |
 | `WORKFLOW_EVENT_NOT_FOUND` | A `wait-event` step references an `event` node that does not exist. |

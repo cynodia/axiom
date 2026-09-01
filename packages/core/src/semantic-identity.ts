@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { canonicalJSON } from './schema-identity.js';
 import { AUTHORING_METADATA_KEY } from './authoring-metadata.js';
+import { canonicalWorkflowForFingerprint } from './workflows.js';
 import type { ApplicationGraph } from './graph.js';
 
 /**
@@ -37,6 +38,14 @@ import type { ApplicationGraph } from './graph.js';
  * - `StorageDef` — `readAuthorization` / `uploadAuthorization` expressions, `retry`.
  * - `RelationshipDef` — endpoints and cardinality (also in the schema fingerprint; repeated
  *   here so a semantic-only comparison is self-contained).
+ * - `WorkflowDef` — `inputs`, `bindings`, `entry`, and every step's kind, control-flow edges
+ *   and step-specific executable semantics (the `ActionDef` / `EventDef` a step targets, an
+ *   `action` step's argument expressions / `retry` policy, a `wait-event` step's correlation
+ *   `where` / `bind` / `timeout`, a `timer` step's `after` / `at`, a `branch` step's `when`
+ *   and edges, `complete` / `fail` output/error expressions). A workflow's referenced
+ *   `ActionDef` / `EventDef` bodies are covered transitively — they are their own executable
+ *   nodes in this same projection (spec14pt3 §5, §7, §30-§33). Presentation-only fields
+ *   (`name` / `description` / `label`) are stripped exactly as elsewhere.
  * - `graph.schemaVersion`.
  *
  * ### Exclusions (what does NOT change it)
@@ -55,7 +64,15 @@ import type { ApplicationGraph } from './graph.js';
 /** The projection algorithm's own version, mixed into the hash (spec12 §46). */
 export const SEMANTIC_FINGERPRINT_VERSION = 1;
 
-const EXECUTABLE_KINDS = [
+/**
+ * Every graph node kind that carries executable meaning — the single source of truth for
+ * "which graph changes alter executable semantic meaning" (spec14pt3 §5 G1). Both the
+ * graph-level {@link semanticFingerprint} and the ServerIR-side authority-compatibility
+ * fingerprint MUST derive from this same list; a `packages/server` test pins that they do,
+ * so a future primitive cannot be added to one and silently omitted from the other
+ * (spec14pt3 §189, §190 — the deeper architectural correction behind Phase 22 F3).
+ */
+export const EXECUTABLE_KINDS = [
   'action',
   'integration',
   'integration-operation',
@@ -71,6 +88,8 @@ const EXECUTABLE_KINDS = [
   'relationship',
   'workflow',
 ] as const;
+
+export type ExecutableKind = (typeof EXECUTABLE_KINDS)[number];
 
 /** Keys removed everywhere in the tree — human metadata, never executable meaning. */
 const NON_SEMANTIC_KEYS = new Set(['name', 'description', 'label', 'metadata', AUTHORING_METADATA_KEY]);
@@ -113,7 +132,9 @@ export function semanticProjection(graph: SemanticInput): SemanticProjection {
     if (group.length === 0) {
       continue;
     }
-    nodes[kind] = byId(group as Array<{ id: unknown }>).map((node) => stripNonSemantic(node));
+    nodes[kind] = byId(group as Array<{ id: unknown }>).map((node) =>
+      stripNonSemantic(kind === 'workflow' ? canonicalWorkflowForFingerprint(node as Record<string, unknown>) : node),
+    );
   }
   return {
     fingerprintVersion: SEMANTIC_FINGERPRINT_VERSION,

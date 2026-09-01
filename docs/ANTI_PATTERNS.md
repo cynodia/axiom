@@ -1,6 +1,6 @@
 # Anti-patterns
 
-Axiom 0.14.0-alpha.1. Each of these compiles. Each is wrong. Each is followed by the correct
+Axiom 0.14.0-alpha.2. Each of these compiles. Each is wrong. Each is followed by the correct
 alternative.
 
 ## 1. Field names as entity runtime keys
@@ -1046,3 +1046,51 @@ Why wrong: workflow execution is leaderless — any compatible authority advance
 instance under a fenced per-instance lease. Recovery discovery is bounded and indexed and
 runs on startup automatically. Reading status is safe through any authority. The application
 writes none of this.
+
+## 78. Treating matching ids, or a matching Server IR version, as workflow compatibility
+
+```ts
+// WRONG — every one of these can be true while the executable meaning has changed.
+if (a.workflowId === b.workflowId && sameStepIds(a, b)) continueUnderNewBuild();
+if (a.contract === 'axiom.server.v8' && b.contract === 'axiom.server.v8') safe();
+if (a.packageVersion === b.packageVersion) safe();
+```
+
+Why wrong: Phase 22 proved a workflow's meaning can change while `workflowId`, every step id
+and the active step id stay identical — a different `action` / `event` target, a different
+`branch` predicate, a different `timer` duration, a rewired `next` edge. IR-version
+compatibility only means both runtimes understand the *vocabulary*; it says nothing about
+whether two graphs contain equivalent executable semantics, and neither does the package
+version string. The only authority is the executable `semanticFingerprint`, which now covers
+`WorkflowDef`. Keep distinct: IR protocol compatibility, graph semantic compatibility,
+workflow instance compatibility.
+
+## 79. Continuing an in-flight workflow under changed executable semantics
+
+```ts
+// WRONG — reinterpreting durable meaning under a new definition.
+const inst = load(id);                       // created under build A
+replayHistory(inst, buildB.workflowDef);     // "catch up" under B
+advance(inst, buildB.workflowDef);           // B chooses B's branch / event / timer
+```
+
+Why wrong: a durable workflow instance is bound to the semantics it was created and advanced
+under. An authority whose graph changes the executable meaning must **fail closed** — leave
+the instance untouched for a compatible authority — not replay its history under the new
+definition, not pick the new branch, not match the new event, not recompute the new timer,
+and not "find the closest step" for a renamed one. There is no workflow instance migration
+in 0.14. This is framework-owned: the application does not route by build, keep a
+compatibility registry, or migrate instances by hand.
+
+## 80. Hashing workflow presentation metadata to make mixed-build checks stricter
+
+```ts
+// WRONG — an over-tight fingerprint breaks rolling deploys for no safety gain.
+const key = sha256(JSON.stringify(workflowDef));  // includes name / description / step order
+```
+
+Why wrong: a compatibility check that fires on a `description` edit or a reordered (but
+edge-identical) step list is a defect too — it strands instances that a semantically
+identical authority could safely resume. `semanticFingerprint` deliberately strips
+`name` / `description` / `label` and is independent of step declaration order. Fingerprint
+*meaning*, not bytes.

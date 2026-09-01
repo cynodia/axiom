@@ -231,6 +231,35 @@ turn it into a working browser application whose generated JavaScript nobody rea
   refusal; `AXIOM_WF_TRIALS` tunes the count). **No new graph/IR vocabulary**; Server IR
   stays `axiom.server.v8`, conformance stays `axiom.conformance.v8` (the conformance runner
   drops its unused explicit event seq).
+* `specs/spec14pt3.md` — the **0.14 mixed-build compatibility closure** (`0.14.0-alpha.2`),
+  closing Phase 22 **F3** (release blocker) + two hardening findings. **F3** — the
+  authority-side `serverIrSemanticProjection` (`packages/server/src/authority-identity.ts`)
+  was a hand-maintained slice list that never gained `workflows` when spec14 added them, so
+  a workflow semantic change (action / event target, `where`, `branch` predicate, `timer`
+  duration, `retry`, control-flow edge) moved `semanticFingerprint(graph)` but **not** the
+  enforced `AuthorityCompatibilityKey.semanticFingerprint` — an incompatible authority
+  silently advanced an in-flight instance. Fix: `EXECUTABLE_KINDS` is exported from
+  `core/semantic-identity.ts` as the single source of truth; `serverIrSemanticProjection`
+  now iterates it via `SERVER_IR_EXECUTABLE_SLICES` (a `server` test pins every kind is
+  covered), and both projections pass workflows through `core`'s
+  `canonicalWorkflowForFingerprint` (step / input / binding order is not semantic). The
+  `workflows` slice is emitted only when non-empty, so every non-workflow graph's fingerprint
+  is byte-identical to alpha.1. Transitive `ActionDef` / `EventDef` changes are covered by
+  construction (the whole slice is hashed). Instance enforcement (fail closed *before* any
+  semantic step, `startWorkflow` refuses an existing incompatible instance, `cancelWorkflow`
+  is compat-gated, `WorkflowInspection.compatible` / `incompatibleReason`) uses `isCompatible`
+  — a missing / empty stored fingerprint is incompatible. **F1** — `core/workflows.ts`
+  accessors are total over malformed input (`isWorkflowStep` guard + `default` cases);
+  `validate.ts` `.id` reads are null-safe; a bad step is `WORKFLOW_INVALID_STEP`, never a
+  native `TypeError`. **F2** — `workflowStructuralProblems` (new `core` runtime-boundary
+  check) runs at engine admission; `createWorkflowEngine` / `createAxiomServer` throw
+  `WorkflowIRError` on structurally invalid workflow IR rather than reaching a wedge. New
+  tests: `workflow-compat.test.ts` (in-process) + real-OS-process
+  `workflow-mixed-build.test.ts` (semantic B refuses ×25 with compatible-A2 recovery,
+  presentation-only B continues ×25, 2-/8-authority mixed topology; `AXIOM_WF_MIXED_TRIALS`).
+  **No new graph/IR vocabulary**; Server IR stays `axiom.server.v8`, conformance stays
+  `axiom.conformance.v8`; `SEMANTIC_FINGERPRINT_VERSION` unchanged (non-workflow fingerprints
+  frozen).
 
 Together, spec2–spec14 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is

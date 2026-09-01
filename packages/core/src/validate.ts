@@ -1261,10 +1261,11 @@ function validateWorkflow(workflow: WorkflowDef, context: Context): void {
   // Reachability + acyclicity + terminal reachability.
   const reachable = workflowReachableSteps(workflow);
   for (const step of steps) {
-    if (typeof (step as { id?: unknown }).id === 'string' && !reachable.has(String(step.id))) {
+    const sid = step && typeof step === 'object' ? (step as { id?: unknown }).id : undefined;
+    if (typeof sid === 'string' && !reachable.has(sid)) {
       context.errors.push({
         code: VALIDATION_CODES.workflowUnreachableStep,
-        message: `Workflow ${workflow.id} step ${String(step.id)} is unreachable from entry`,
+        message: `Workflow ${workflow.id} step ${sid} is unreachable from entry`,
         nodeId: workflow.id,
       });
     }

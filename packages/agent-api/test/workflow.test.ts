@@ -152,3 +152,57 @@ test('validateGraph rejects a nondeterministic workflow expression (spec14 §129
   const errors = new AgentAPI(g).validate().errors.map((e) => e.code);
   assert.ok(errors.includes('WORKFLOW_NONDETERMINISTIC'), errors.join(','));
 });
+
+// -------------------------------------------------------------- spec14pt3 F1: malformed steps
+
+import { workflowStepSuccessors, workflowStepExpressions, workflowStructuralProblems } from '@cynodia/axiom-core';
+
+test('spec14pt3 F1: an unknown / malformed workflow step yields a structured diagnostic, never a TypeError', () => {
+  const shapes: Array<[string, unknown]> = [
+    ['unknown string kind', { type: 'sleep', id: 'x', next: 'done' }],
+    ['missing kind', { id: 'x', next: 'done' }],
+    ['null kind', { type: null, id: 'x' }],
+    ['numeric kind', { type: 123, id: 'x' }],
+    ['step is null', null],
+    ['step is a string', 'not-a-step'],
+    ['step is an array', ['action']],
+    ['empty object', {}],
+  ];
+  for (const [label, badStep] of shapes) {
+    const g = base();
+    g.addNode<WorkflowDef>({
+      id: WF,
+      kind: 'workflow',
+      entry: nodeId('entry'),
+      steps: [
+        { type: 'branch', id: nodeId('entry'), when: literal(true), then: nodeId('done'), else: nodeId('done') },
+        { type: 'complete', id: nodeId('done') },
+        badStep as never,
+      ],
+    });
+    let result: ReturnType<AgentAPI['validate']>;
+    assert.doesNotThrow(() => {
+      result = new AgentAPI(g).validate();
+    }, `${label}: validateGraph must not throw`);
+    const codes = result!.errors.map((e) => e.code);
+    assert.ok(codes.includes('WORKFLOW_INVALID_STEP'), `${label}: emits WORKFLOW_INVALID_STEP (got ${codes.join(',')})`);
+    // The accessors are total over the same bad input.
+    assert.doesNotThrow(() => workflowStepSuccessors(badStep as never));
+    assert.doesNotThrow(() => workflowStepExpressions(badStep as never));
+    assert.deepEqual(workflowStepSuccessors(badStep as never), []);
+  }
+});
+
+test('spec14pt3 F2: workflowStructuralProblems is total and flags the tampered shapes', () => {
+  assert.deepEqual(workflowStructuralProblems({ id: nodeId('w'), kind: 'workflow', entry: nodeId('a'), steps: [
+    { type: 'complete', id: nodeId('a') },
+  ] } as WorkflowDef), []);
+  const bad = workflowStructuralProblems({ id: nodeId('w'), kind: 'workflow', entry: nodeId('ghost'), steps: [
+    { type: 'action', id: nodeId('a'), action: A_RESERVE, arguments: {}, next: nodeId('nowhere') } as never,
+    null as never,
+  ] } as WorkflowDef);
+  const codes = bad.map((p) => p.code);
+  assert.ok(codes.includes('WORKFLOW_ENTRY_NOT_FOUND'));
+  assert.ok(codes.includes('WORKFLOW_STEP_NOT_FOUND'));
+  assert.ok(codes.includes('WORKFLOW_INVALID_STEP'));
+});

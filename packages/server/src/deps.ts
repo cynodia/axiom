@@ -67,6 +67,7 @@ export type {
   WorkflowInput,
   WorkflowBinding,
   WorkflowDuration,
+  WorkflowStructuralProblem,
 } from '@cynodia/axiom-core';
 
 export type {
@@ -107,6 +108,7 @@ export {
   authorityCompatibilityKey,
   compatibilityKeyString,
   compareAuthorityCompatibility,
+  EXECUTABLE_KINDS,
   SEMANTIC_FINGERPRINT_VERSION,
   sortMigrations,
   WORKFLOW_EVENT_SCOPE,
@@ -120,6 +122,9 @@ export {
   workflowReachableSteps,
   workflowHasCycle,
   workflowExpressions,
+  isWorkflowStep,
+  workflowStructuralProblems,
+  canonicalWorkflowForFingerprint,
 } from '@cynodia/axiom-core';
 export {
   BLOB_CHECKSUM_FIELD,

@@ -148,12 +148,30 @@ export interface WorkflowDef extends NodeBase {
 
 // ---------------------------------------------------------------------------- accessors
 
-export function workflowStepById(workflow: WorkflowDef, stepId: NodeId | string): WorkflowStep | undefined {
-  return workflow.steps.find((step) => String(step.id) === String(stepId));
+/**
+ * Whether a value is a structurally recognizable workflow step — an object with an `id` and
+ * one of the six {@link WORKFLOW_STEP_TYPES}. The accessors below are total over *any* input
+ * (a malformed graph, a hand-tampered Server IR) precisely so a bad step produces a
+ * structured diagnostic rather than a native `TypeError` (spec14pt3 F1 / F2 §39-§48).
+ */
+export function isWorkflowStep(step: unknown): step is WorkflowStep {
+  return (
+    !!step &&
+    typeof step === 'object' &&
+    !Array.isArray(step) &&
+    typeof (step as { id?: unknown }).id === 'string' &&
+    (WORKFLOW_STEP_TYPES as readonly string[]).includes((step as { type?: unknown }).type as string)
+  );
 }
 
-/** Every step id a step can hand control to (control-flow successors). */
+export function workflowStepById(workflow: WorkflowDef, stepId: NodeId | string): WorkflowStep | undefined {
+  const steps = Array.isArray(workflow?.steps) ? workflow.steps : [];
+  return steps.find((step) => !!step && typeof step === 'object' && String((step as { id?: unknown }).id) === String(stepId));
+}
+
+/** Every step id a step can hand control to (control-flow successors). Total over bad input. */
 export function workflowStepSuccessors(step: WorkflowStep): NodeId[] {
+  if (!isWorkflowStep(step)) return [];
   switch (step.type) {
     case 'action':
       return step.onError ? [step.next, step.onError] : [step.next];
@@ -166,15 +184,18 @@ export function workflowStepSuccessors(step: WorkflowStep): NodeId[] {
     case 'complete':
     case 'fail':
       return [];
+    default:
+      return [];
   }
 }
 
 export function workflowIsTerminalStep(step: WorkflowStep): boolean {
-  return step.type === 'complete' || step.type === 'fail';
+  return isWorkflowStep(step) && (step.type === 'complete' || step.type === 'fail');
 }
 
-/** Every `Expression` embedded in a step — the leaves dependency / scope analysis walks. */
+/** Every `Expression` embedded in a step — the leaves dependency / scope analysis walks. Total over bad input. */
 export function workflowStepExpressions(step: WorkflowStep): Expression[] {
+  if (!isWorkflowStep(step)) return [];
   switch (step.type) {
     case 'action':
       return Object.values(step.arguments ?? {});
@@ -188,6 +209,8 @@ export function workflowStepExpressions(step: WorkflowStep): Expression[] {
       return Object.values(step.output ?? {});
     case 'fail':
       return Object.values(step.error ?? {});
+    default:
+      return [];
   }
 }
 
@@ -198,12 +221,136 @@ export function workflowExpressions(workflow: WorkflowDef): Expression[] {
 
 /** The `ActionDef` ids a workflow invokes. */
 export function workflowActionIds(workflow: WorkflowDef): NodeId[] {
-  return workflow.steps.filter((s): s is WorkflowActionStep => s.type === 'action').map((s) => s.action);
+  return (Array.isArray(workflow?.steps) ? workflow.steps : [])
+    .filter((s): s is WorkflowActionStep => isWorkflowStep(s) && s.type === 'action')
+    .map((s) => s.action);
 }
 
 /** The `EventDef` ids a workflow waits on. */
 export function workflowEventIds(workflow: WorkflowDef): NodeId[] {
-  return workflow.steps.filter((s): s is WorkflowWaitEventStep => s.type === 'wait-event').map((s) => s.event);
+  return (Array.isArray(workflow?.steps) ? workflow.steps : [])
+    .filter((s): s is WorkflowWaitEventStep => isWorkflowStep(s) && s.type === 'wait-event')
+    .map((s) => s.event);
+}
+
+// ----------------------------------------------------- canonical form for fingerprinting
+
+/**
+ * A `WorkflowDef` reduced to a form where **authoring order is not semantic** (spec14pt3
+ * §19, §64): `steps`, `inputs` and `bindings` are ordered by id. Control flow is by explicit
+ * `entry` / `next` / `then` / `else` / `onError` / `onTimeout` edges, never by array
+ * position, so two workflows that differ only in the order their steps were declared are the
+ * same executable meaning. Both the graph-level `semanticFingerprint` and the ServerIR-side
+ * authority-compatibility fingerprint pass workflows through this before hashing, so they
+ * agree (spec14pt3 §5 G1). Non-`id` fields are untouched; human metadata is stripped by the
+ * caller's projection exactly as elsewhere.
+ */
+export function canonicalWorkflowForFingerprint<T extends Partial<WorkflowDef>>(workflow: T): T {
+  const byId = <U>(list: readonly U[] | undefined): U[] =>
+    [...(list ?? [])].sort((a, b) => {
+      const ai = String((a as { id?: unknown })?.id ?? '');
+      const bi = String((b as { id?: unknown })?.id ?? '');
+      return ai < bi ? -1 : ai > bi ? 1 : 0;
+    });
+  return {
+    ...workflow,
+    ...(Array.isArray(workflow.steps) ? { steps: byId(workflow.steps) } : {}),
+    ...(Array.isArray(workflow.inputs) ? { inputs: byId(workflow.inputs) } : {}),
+    ...(Array.isArray(workflow.bindings) ? { bindings: byId(workflow.bindings) } : {}),
+  };
+}
+
+// -------------------------------------------------------- structural integrity (spec14pt3 F2)
+
+export interface WorkflowStructuralProblem {
+  code: 'WORKFLOW_INVALID_STEP' | 'WORKFLOW_ENTRY_NOT_FOUND' | 'WORKFLOW_STEP_NOT_FOUND' | 'WORKFLOW_INVALID_TIMER';
+  message: string;
+}
+
+/**
+ * A **runtime-boundary** structural check on a `WorkflowDef`, independent of an
+ * `ApplicationGraph` (spec14pt3 §44-§49). `validateGraph` remains the authoring-time
+ * authority; this is what the authoritative runtime runs on a `ServerIR` it did not compile
+ * itself — stored, transported or hand-tampered — so structurally invalid workflow IR fails
+ * closed with a structured result instead of reaching a native `TypeError`, a silently
+ * skipped step or a permanently wedged instance. It checks only what the engine dereferences
+ * to execute; cross-node references (`ActionDef` / `EventDef` ids) are a compile-time
+ * concern and are not re-checked here.
+ */
+export function workflowStructuralProblems(workflow: WorkflowDef): WorkflowStructuralProblem[] {
+  const problems: WorkflowStructuralProblem[] = [];
+  const wid = String((workflow as { id?: unknown })?.id ?? '<unknown>');
+  const steps = Array.isArray(workflow?.steps) ? workflow.steps : [];
+  const ids = new Set<string>();
+  for (const step of steps) {
+    if (!isWorkflowStep(step)) {
+      problems.push({
+        code: 'WORKFLOW_INVALID_STEP',
+        message: `Workflow ${wid} has a step that is not an object with an id and a known kind`,
+      });
+      continue;
+    }
+    ids.add(String(step.id));
+  }
+  if (workflow?.entry === undefined || !ids.has(String(workflow.entry))) {
+    problems.push({
+      code: 'WORKFLOW_ENTRY_NOT_FOUND',
+      message: `Workflow ${wid} entry ${String(workflow?.entry)} is not one of its steps`,
+    });
+  }
+  const edge = (target: unknown, from: string): void => {
+    if (target !== undefined && !ids.has(String(target))) {
+      problems.push({
+        code: 'WORKFLOW_STEP_NOT_FOUND',
+        message: `Workflow ${wid} step ${from} points at ${String(target)}, which is not a step`,
+      });
+    }
+  };
+  for (const step of steps) {
+    if (!isWorkflowStep(step)) continue;
+    const from = String(step.id);
+    switch (step.type) {
+      case 'action':
+        if (typeof step.action !== 'string') {
+          problems.push({ code: 'WORKFLOW_INVALID_STEP', message: `Workflow ${wid} action step ${from} has no action target` });
+        }
+        edge(step.next, from);
+        edge(step.onError, from);
+        break;
+      case 'wait-event':
+        if (typeof step.event !== 'string') {
+          problems.push({ code: 'WORKFLOW_INVALID_STEP', message: `Workflow ${wid} wait-event step ${from} has no event target` });
+        }
+        edge(step.next, from);
+        edge(step.onTimeout, from);
+        if (step.timeout !== undefined && !(Number(step.timeout?.seconds) > 0)) {
+          problems.push({ code: 'WORKFLOW_INVALID_TIMER', message: `Workflow ${wid} wait-event step ${from} has a non-positive timeout` });
+        }
+        break;
+      case 'timer': {
+        const hasAfter = step.after !== undefined;
+        const hasAt = step.at !== undefined;
+        if (hasAfter === hasAt) {
+          problems.push({ code: 'WORKFLOW_INVALID_TIMER', message: `Workflow ${wid} timer step ${from} must declare exactly one of after / at` });
+        } else if (hasAfter && !(Number(step.after?.seconds) > 0)) {
+          problems.push({ code: 'WORKFLOW_INVALID_TIMER', message: `Workflow ${wid} timer step ${from} has a non-positive after.seconds` });
+        }
+        edge(step.next, from);
+        break;
+      }
+      case 'branch':
+        if (step.when === undefined) {
+          problems.push({ code: 'WORKFLOW_INVALID_STEP', message: `Workflow ${wid} branch step ${from} has no when expression` });
+        }
+        edge(step.then, from);
+        edge(step.else, from);
+        break;
+      case 'complete':
+      case 'fail':
+        break;
+    }
+  }
+  return problems;
 }
 
 /**

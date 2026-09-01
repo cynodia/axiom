@@ -244,6 +244,8 @@ test('every validation code is documented, and every documented code exists', ()
     'AUTHORING_METADATA_KEY', 'BROWSER_RENDERER_CAPABILITIES',
     'GROUP_KEY_FIELD', 'GROUP_ITEMS_FIELD', 'UI_NODE_KINDS', 'SERVER_IR_CONTRACTS',
     'SERVER_IR_LATEST_CONTRACT', 'TYPE_REF_KINDS', 'SEMANTIC_NODE_KINDS',
+    // Semantic-identity vocabulary (spec14pt3): the exported executable-kind list, not a code.
+    'EXECUTABLE_KINDS', 'SEMANTIC_FINGERPRINT_VERSION',
     // Integrations, effects, triggers and events (0.8): exported vocabulary, not codes.
     'INTEGRATION_OPERATION_MODES', 'RETRY_POLICY_KINDS', 'TRIGGER_KINDS',
     'TRIGGER_OVERLAP_POLICIES', 'LIFECYCLE_EVENTS', 'MAX_EVENT_DISPATCH_DEPTH',

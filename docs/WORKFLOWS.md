@@ -1,6 +1,6 @@
 # Durable workflows
 
-Axiom 0.14.0-alpha.1. The operational contract for **long-running semantic computations with
+Axiom 0.14.0-alpha.2. The operational contract for **long-running semantic computations with
 a durable control position** — orchestration that survives process death, authority
 failover, retries, timer delivery, event delivery and ordinary distributed contention
 without application-owned infrastructure. `axiom.server.v8`.
@@ -211,14 +211,45 @@ logical outcome.
 
 ## Compatibility
 
-A running instance stores the `AuthorityCompatibilityKey` (`{ schemaVersion,
-schemaFingerprint, serverContract, semanticFingerprint }`) at start. An authority whose key
-differs **refuses to advance it**, fail-closed — the same mechanism the distributed work
-store applies. A presentation-only graph change moves no fingerprint and stays compatible. A
-semantic workflow change makes new instances incompatible with old authorities; old
-instances are not auto-migrated — they run to completion on a compatible authority or are
-surfaced as stranded. A graph with **no** `WorkflowDef` compiles to the byte-identical
-`axiom.server.v1`–`v7` document it always did, and its `semanticFingerprint` is unchanged.
+> Durable workflow instances are bound to **executable semantic compatibility**. An
+> authority whose graph changes the executable meaning of the workflow must fail closed
+> rather than continue the instance under changed semantics.
+
+A running instance durably stores the `AuthorityCompatibilityKey` (`{ schemaVersion,
+schemaFingerprint, serverContract, semanticFingerprint }`) at creation, in the same
+transaction that creates it. Before **any** semantic step — action invocation, event match,
+timer fire, branch evaluation, retry, `complete` / `fail`, or a cancellation that would
+transition the instance — an authority checks that key against its own. If it differs the
+authority **refuses**: no `instanceRevision` advance, no `ActionDef` invocation, no event or
+timer transition, no binding write. The instance is left exactly as it stands for a
+compatible authority to resume; incompatibility is an execution-environment condition, never
+an automatic `failed` or `cancelled`.
+
+`semanticFingerprint` covers `WorkflowDef` executable meaning: `inputs`, `bindings`, `entry`,
+every step's kind and control-flow edges, and step-specific semantics — the `ActionDef` /
+`EventDef` a step targets (and, transitively, those definitions' own bodies), an `action`
+step's argument expressions / `retry` policy, a `wait-event` step's `where` / `bind` /
+`timeout`, a `timer` step's `after` / `at`, a `branch` step's `when` and edges, and
+`complete` / `fail` output/error expressions. It is computed from `core`'s single
+`EXECUTABLE_KINDS` list, so it and the authority-compatibility fingerprint cannot disagree.
+
+- **Semantically incompatible workflow definitions fail closed.** Changing any of the above
+  while an instance is in flight strands that instance on incompatible authorities.
+- **Presentation-only changes stay compatible.** `name`, `description`, `label` — anywhere
+  in the workflow — move no fingerprint. Step *declaration order* is not semantic either
+  (control flow is by explicit edges).
+- **Authority / process identity is irrelevant.** A fresh process running a semantically
+  identical build recovers the instance normally; topology and authority count may change
+  freely.
+- **Workflow migration across incompatible definitions is not provided in 0.14.** An old
+  instance waits for a compatible authority; there is no instance upgrader, step remapping
+  or binding migration, and none is inferred ("closest step" recovery never happens).
+- A graph with **no** `WorkflowDef` compiles to the byte-identical `axiom.server.v1`–`v7`
+  document it always did, and its `semanticFingerprint` / `schemaFingerprint` are unchanged.
+- Pre-`0.14.0-alpha.2` instances carry a compatibility key computed before `WorkflowDef`
+  participated; a corrected authority treats them as incompatible and fails closed (these
+  are pre-freeze alpha releases — silent reinterpretation is the only unacceptable
+  outcome).
 
 ---
 
@@ -226,8 +257,11 @@ surfaced as stranded. A graph with **no** `WorkflowDef` compiles to the byte-ide
 
 `server.getWorkflow(instanceId)` / `server.inspectWorkflows(limit)` return the semantic
 fields — `status`, `currentStepId`, `activationId`, `attempt`, `waitingReason`,
-`nextEligibleAt`, `createdAt`, `updatedAt`, `instanceRevision`, `failure`, `output` — and
-**no** secrets (no HMAC keys, database paths, raw SQL, credentials).
+`nextEligibleAt`, `createdAt`, `updatedAt`, `instanceRevision`, `failure`, `output`,
+`compatible` (whether *this* build may advance it; `incompatibleReason: 'incompatible-build'`
+when not) — and **no** secrets (no HMAC keys, database paths, raw SQL, credentials).
+Read-only inspection of an incompatible instance stays available so an operator can see
+*why* it is not progressing rather than finding it silently stuck.
 `server.workflowHistory(instanceId)` is the durable semantic transition log (`started`,
 `step-activated`, `step-succeeded`, `step-failed`, `retry-scheduled`, `event-matched`,
 `timer-fired`, `timeout-fired`, `branch-chosen`, `completed`, `failed`, `cancelled`) — a
@@ -280,3 +314,8 @@ the fixtures from the contract alone.
   is retained past its `sinceEventSeq` is an implementation-owned retention concern.
 - `WorkflowStore` bounded retention of terminal instances and history is
   implementation-owned; an active workflow never expires.
+- Structurally invalid workflow IR (unknown step kind, dangling edge, malformed
+  timer/terminal, missing entry) is refused at authority admission — `createAxiomServer`
+  throws `WorkflowIRError` rather than starting with a workflow it cannot execute. Malformed
+  step input to `validateGraph` produces a `WORKFLOW_INVALID_STEP` diagnostic, never a
+  native error.
