@@ -35,12 +35,13 @@ lease system.
 | 14 | `axiom.conformance.v8` — 13 fixtures + manifest + public runner + 2 negative controls. | ✅ |
 | 15 | in-process fencing/CAS + SQLite conflicting-transition race, **plus** the spec14pt2 real-OS-process `workflow-crash-matrix` (F1 SIGKILL ×50, F2 A ×50, F2 B race ×50, F2 C replay, 2-/8-authority claim races, SIGSTOP stale owner). | ✅ |
 | 16 | 0.12 / 0.12.1 / 0.13.1 suites re-run green (584 server incl. cross-process + the new crash matrix). | ✅ |
-| 17 | `docs/WORKFLOWS.md`, AGENT_REFERENCE §DURABLE WORKFLOWS, AUTHORITY / DISTRIBUTED_AUTHORITY compatibility, VALIDATION (+ spec14pt4 totality), anti-patterns #72–#80, doc-map rows, CLAUDE.md, version bump to `0.14.0-alpha.4`. `release:pack`/`verify`/`consumer`/`probe` green. | ✅ |
-| 18 | Publish `0.14.0-alpha.4`. | ⏳ |
-| 19 | Blind Phase 22 — focused F1/F2 external rerun (F3 externally closed at alpha.2), then §125 mandatory areas; freeze only on `D1 / E1 / S1`. | ⏳ **post-publish** |
+| 17 | `docs/WORKFLOWS.md`, AGENT_REFERENCE §DURABLE WORKFLOWS, AUTHORITY / DISTRIBUTED_AUTHORITY compatibility, VALIDATION (+ spec14pt4 totality), anti-patterns #72–#80, doc-map rows, CLAUDE.md, version bump to `0.14.0-alpha.5`. `release:pack`/`verify`/`consumer`/`probe` green. | ✅ |
+| 18 | Publish `0.14.0-alpha.5`. | ⏳ |
+| 19 | Blind Phase 22 — focused F4 external rerun (F1 closed at alpha.3, F2 at alpha.4, F3 at alpha.2), then §125 mandatory areas; freeze only on `D1 / E1 / S1`. | ⏳ **post-publish** |
 | — | **spec14pt2** F1/F2 crash-safety closure (`0.14.0-alpha.1`) — durable action idempotency + durable event journal. | ✅ |
 | — | **spec14pt3** F3 mixed-build compatibility closure (`0.14.0-alpha.2`) — `WorkflowDef` in the authority `semanticFingerprint`. | ✅ |
 | — | **spec14pt4** F1/F2 residual closure (`0.14.0-alpha.3`) — `analyzeWorkflow` + IR-admission totality over malformed / referentially-broken workflow input. | ✅ |
 | — | **spec14pt5** F2 admission-surface totality (`0.14.0-alpha.4`) — `createAxiomServer` validates the `ir.workflows` container shape before any pre-admission helper traverses it; parity with `createWorkflowEngine`. | ✅ |
+| — | **spec14pt6** F4 cancellation authorization (`0.14.0-alpha.5`) — `cancelWorkflow` resolves the caller credential and refuses `AUTHORIZATION_DENIED` (no mutation) unless the principal fingerprint matches the one the instance was started under; topology-independent. | ✅ |
 
 ## Release classification target (spec14): B — LIVE CANONICAL QUERIES lineage / Durable Workflows

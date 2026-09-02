@@ -249,6 +249,8 @@ const WF_DIAGNOSTIC = {
   ARGUMENT_MISMATCH: 'WORKFLOW_ARGUMENT_MISMATCH',
   INCOMPATIBLE: 'INCOMPATIBLE_AUTHORITY',
   NOT_FOUND: 'WORKFLOW_INSTANCE_NOT_FOUND',
+  /** The canonical Axiom authorization refusal — same code `authorize()` uses (spec14pt6 F4). */
+  UNAUTHORIZED: 'AUTHORIZATION_DENIED',
 } as const;
 
 export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEngine {
@@ -886,13 +888,32 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
     return { instanceId: fresh.instanceId, status: fresh.status };
   }
 
-  async function cancelWorkflow(instanceId: string) {
+  async function cancelWorkflow(instanceId: string, credential?: unknown) {
     const record = await store.load(instanceId);
     if (!record) return { error: { code: WF_DIAGNOSTIC.NOT_FOUND, message: `No workflow instance ${instanceId}` } };
     if (record.status === 'cancelled') return { ok: true as const, status: 'cancelled' };
     if (record.status === 'completed' || record.status === 'failed') {
       return { ok: true as const, status: record.status }; // idempotent; a terminal workflow is not resurrected
     }
+
+    // spec14pt6 F4 — cancellation is an authorized durable mutation. The calling
+    // credential is resolved to a canonical principal and its fingerprint must match the
+    // one the instance was **started** under (spec14 §257 — instance access is keyed by
+    // `principalFingerprint`). A cross-principal caller is refused with the canonical
+    // `AUTHORIZATION_DENIED` **before** any lease claim or transition — no
+    // `instanceRevision` advance, no history, no wake. The check resolves identically on
+    // every authority (durable `principalFingerprint` + deterministic `resolvePrincipal`),
+    // so it is topology-independent.
+    const { fingerprint } = await options.resolvePrincipal(credential);
+    if (fingerprint !== record.principalFingerprint) {
+      return {
+        error: {
+          code: WF_DIAGNOSTIC.UNAUTHORIZED,
+          message: `Not authorized to cancel workflow instance ${instanceId}`,
+        },
+      };
+    }
+
     // spec14pt3 §163 — cancellation writes a durable `cancelled` transition on this
     // instance, so it is compatibility-gated like every other transition: an incompatible
     // build must not transition an instance whose workflow meaning it does not share. The

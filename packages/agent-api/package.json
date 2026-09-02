@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom-agent-api",
-  "version": "0.14.0-alpha.4",
+  "version": "0.14.0-alpha.5",
   "description": "Semantic queries and transactional graph transformations for AI agents.",
   "license": "MIT",
   "author": "AskTech AS",
@@ -31,7 +31,7 @@
     }
   },
   "dependencies": {
-    "@cynodia/axiom-core": "0.14.0-alpha.4"
+    "@cynodia/axiom-core": "0.14.0-alpha.5"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",

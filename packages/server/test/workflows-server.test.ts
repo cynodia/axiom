@@ -194,3 +194,118 @@ test('cancelWorkflow is idempotent and stops future progress (spec14 §75, §79)
     await s.stop();
   }
 });
+
+// ------------------------------------------------- spec14pt6: cancellation authorization (F4)
+
+import { createMemoryWorkflowStore } from '@cynodia/axiom-server';
+
+/** A host that authenticates `c1` / `c2` to distinct principals; anything else → anonymous. */
+function authHost() {
+  return createDeterministicServerHost({
+    authenticate: (credential) => (credential == null ? null : { userId: String(credential) }),
+  });
+}
+
+async function authServer(workflowStore?: ReturnType<typeof createMemoryWorkflowStore>) {
+  const s = createAxiomServer({ ir: IR, host: authHost(), ...(workflowStore ? { workflowStore } : {}) });
+  await s.start();
+  return s;
+}
+
+test('spec14pt6 F4: the starting principal may cancel its own workflow', async () => {
+  const s = await authServer();
+  try {
+    const started = await s.startWorkflow({ workflowId: String(WF_APPROVAL), arguments: { [String(P_NAME)]: 'a' }, credential: 'c1' });
+    const id = (started as { instanceId: string }).instanceId;
+    await waitFor(() => s.getWorkflow(id), (w) => w.status === 'waiting');
+
+    assert.deepEqual(await s.cancelWorkflow(id, 'c1'), { ok: true, status: 'cancelled' });
+    assert.equal((await s.getWorkflow(id))?.status, 'cancelled');
+  } finally {
+    await s.stop();
+  }
+});
+
+test('spec14pt6 F4: a cross-principal cancel is refused AUTHORIZATION_DENIED and mutates nothing', async () => {
+  const s = await authServer();
+  try {
+    const started = await s.startWorkflow({ workflowId: String(WF_APPROVAL), arguments: { [String(P_NAME)]: 'b' }, credential: 'c1' });
+    const id = (started as { instanceId: string }).instanceId;
+    const waiting = await waitFor(() => s.getWorkflow(id), (w) => w.status === 'waiting');
+    const revBefore = waiting.instanceRevision;
+    const historyBefore = (await s.workflowHistory(id)).length;
+
+    const refused = await s.cancelWorkflow(id, 'c2');
+    assert.ok('error' in refused, JSON.stringify(refused));
+    assert.equal((refused as { error: { code: string } }).error.code, 'AUTHORIZATION_DENIED');
+
+    const after = await s.getWorkflow(id);
+    assert.equal(after?.status, 'waiting', 'still waiting');
+    assert.equal(after?.instanceRevision, revBefore, 'no instanceRevision advance');
+    const history = await s.workflowHistory(id);
+    assert.equal(history.length, historyBefore, 'no cancellation history appended');
+    assert.ok(!history.some((h) => String(h.kind) === 'cancelled'), 'no cancelled entry');
+
+    // An anonymous caller (no credential) is likewise refused.
+    assert.equal(((await s.cancelWorkflow(id)) as { error?: { code: string } }).error?.code, 'AUTHORIZATION_DENIED');
+  } finally {
+    await s.stop();
+  }
+});
+
+test('spec14pt6 F4: after a refused cancel the workflow continues normally', async () => {
+  const s = await authServer();
+  try {
+    const started = await s.startWorkflow({ workflowId: String(WF_APPROVAL), arguments: { [String(P_NAME)]: 'go' }, credential: 'c1' });
+    const id = (started as { instanceId: string }).instanceId;
+    await waitFor(() => s.getWorkflow(id), (w) => w.status === 'waiting');
+
+    assert.ok('error' in (await s.cancelWorkflow(id, 'c2')));
+
+    // The matching event still drives it to completion; no corruption, no stuck state.
+    await s.handle({ kind: 'event', protocol: PROTOCOL_VERSION, eventId: EV_APPROVED, payload: { [String(F_A_NAME)]: 'go' } } as ServerRequest);
+    const done = await waitFor(() => s.getWorkflow(id), (w) => w.status === 'completed');
+    assert.equal(done.status, 'completed');
+    assert.equal(s.getState(S_LOG), 10, 'the notify action ran exactly once, after the refused cancel');
+  } finally {
+    await s.stop();
+  }
+});
+
+test('spec14pt6 F4: the authorization result is the same from a different authority (failover)', async () => {
+  const shared = createMemoryWorkflowStore();
+  const a = await authServer(shared);
+  const b = await authServer(shared);
+  try {
+    const started = await a.startWorkflow({ workflowId: String(WF_APPROVAL), arguments: { [String(P_NAME)]: 'f' }, credential: 'c1' });
+    const id = (started as { instanceId: string }).instanceId;
+    await waitFor(() => a.getWorkflow(id), (w) => w.status === 'waiting');
+
+    // Authority B never started it, but resolves the same durable principal fingerprint.
+    assert.equal(((await b.cancelWorkflow(id, 'c2')) as { error?: { code: string } }).error?.code, 'AUTHORIZATION_DENIED');
+    assert.equal((await b.getWorkflow(id))?.status, 'waiting', 'B mutated nothing');
+
+    assert.deepEqual(await b.cancelWorkflow(id, 'c1'), { ok: true, status: 'cancelled' });
+    assert.equal((await a.getWorkflow(id))?.status, 'cancelled', 'A sees B’s authorized cancel');
+  } finally {
+    await a.stop();
+    await b.stop();
+  }
+});
+
+test('spec14pt6 F4: cancelling an already-terminal workflow stays idempotent for any caller', async () => {
+  const s = await authServer();
+  try {
+    const started = await s.startWorkflow({ workflowId: String(WF_PROVISION), arguments: { [String(P_NAME)]: 't' }, credential: 'c1' });
+    const id = (started as { instanceId: string }).instanceId;
+    const done = await waitFor(() => s.getWorkflow(id), (w) => w.status === 'completed');
+    assert.equal(done.status, 'completed');
+
+    // Terminal-state behaviour is unchanged: idempotent success, no auth gate, no mutation.
+    assert.deepEqual(await s.cancelWorkflow(id, 'c2'), { ok: true, status: 'completed' });
+    assert.deepEqual(await s.cancelWorkflow(id), { ok: true, status: 'completed' });
+    assert.equal((await s.getWorkflow(id))?.status, 'completed');
+  } finally {
+    await s.stop();
+  }
+});

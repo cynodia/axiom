@@ -1,6 +1,6 @@
 # Presentation
 
-Axiom 0.14.0-alpha.4. Presentation is **semantic UX intent**, expressed as data on a UI
+Axiom 0.14.0-alpha.5. Presentation is **semantic UX intent**, expressed as data on a UI
 node. It names roles, tokens and device classes. It never names a colour, a length, a media
 query or a CSS property.
 

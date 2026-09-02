@@ -300,6 +300,22 @@ turn it into a working browser application whose generated JavaScript nobody rea
   New tests: `server/test/workflow-ir-totality.test.ts` (+2 — `ir.workflows` ∈ {number,
   object, boolean, string, null} → `WorkflowIRError` from both entry points; {absent, `[]`}
   → server starts).
+* `specs/spec14pt6.md` — the **0.14 workflow cancellation authorization closure**
+  (`0.14.0-alpha.5`), closing the final Phase 22 finding **F4**: `cancelWorkflow(instanceId,
+  credential)` accepted a credential but never enforced it, so any principal who knew an
+  `instanceId` could cancel another principal's workflow. Fix (existing Axiom auth
+  machinery, no new vocabulary): the engine's `cancelWorkflow` now resolves the credential
+  via `resolvePrincipal` and requires `fingerprint === record.principalFingerprint` (the
+  fingerprint the instance was durably stamped with at start — spec14 §257) **before** any
+  lease claim or transition; a mismatch returns the canonical `AUTHORIZATION_DENIED` with no
+  `instanceRevision` advance, no history, no wake. Topology-independent (durable fingerprint
+  + deterministic resolve → same result on any authority). Already-terminal cancellation
+  stays idempotent for any caller (unchanged). Authorized cancellation is the prior path
+  byte-for-byte. **No graph/runtime semantic change** — auth is runtime, not the graph;
+  Server IR `axiom.server.v8`, conformance `axiom.conformance.v8`, `semanticFingerprint`
+  untouched. New tests: `server/test/workflows-server.test.ts` (+5 — owner cancels,
+  cross-principal / anonymous refused with zero mutation, continue-after-refusal, failover
+  parity, terminal idempotency).
 
 Together, spec2–spec14 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is

@@ -2,7 +2,7 @@
   "conformance": "axiom.conformance.v7",
   "baseContract": "axiom.server.v7",
   "protocol": "axiom.protocol.v1",
-  "release": "0.14.0-alpha.4",
+  "release": "0.14.0-alpha.5",
   "description": "Portable live-query conformance fixtures (spec13 §152, §194). Each file carries a compiled axiom.server.v7 Server IR, a dataset of provider rows, the live query to open, its required initial result, and a script of committed mutations each paired with the live message that must follow (canonical update / whole reset / none). The runner also checks the primary invariant: folding the delivered stream must equal a fresh one-shot execution of the same QueryDef. Running one needs only a DataProvider and the semantics in docs/LIVE_QUERIES.md.",
   "fixtures": [
     {

@@ -1,6 +1,6 @@
 # Durable workflows
 
-Axiom 0.14.0-alpha.4. The operational contract for **long-running semantic computations with
+Axiom 0.14.0-alpha.5. The operational contract for **long-running semantic computations with
 a durable control position** — orchestration that survives process death, authority
 failover, retries, timer delivery, event delivery and ordinary distributed contention
 without application-owned infrastructure. `axiom.server.v8`.
@@ -185,6 +185,15 @@ for a `cancelled` (or `completed` / `failed`) instance does not transition it. A
 cancel-versus-transition race linearizes on `instanceRevision`: whichever fenced CAS commits
 first wins.
 
+**Cancellation is authorized.** `credential` is resolved to a canonical principal and its
+fingerprint must match the one the instance was **started** under (spec14 §257 — instance
+access is keyed by principal fingerprint), or the call is refused with the canonical
+`AUTHORIZATION_DENIED` diagnostic and mutates nothing — no `instanceRevision` advance, no
+history entry, no ownership claim. The check resolves identically on every authority (the
+fingerprint is durable, `resolvePrincipal` is deterministic), so cancellation is not
+topology-dependent. Cancelling an already-terminal instance stays idempotent for any caller.
+General authorization completeness is 0.15's subject; this is the one cancellation rule.
+
 Terminal statuses — `completed`, `failed`, `cancelled` — are durable and irreversible under
 normal execution. A stale authority cannot resurrect a terminal workflow.
 
@@ -246,7 +255,7 @@ step's argument expressions / `retry` policy, a `wait-event` step's `where` / `b
   or binding migration, and none is inferred ("closest step" recovery never happens).
 - A graph with **no** `WorkflowDef` compiles to the byte-identical `axiom.server.v1`–`v7`
   document it always did, and its `semanticFingerprint` / `schemaFingerprint` are unchanged.
-- Pre-`0.14.0-alpha.4` instances carry a compatibility key computed before `WorkflowDef`
+- Pre-`0.14.0-alpha.5` instances carry a compatibility key computed before `WorkflowDef`
   participated; a corrected authority treats them as incompatible and fails closed (these
   are pre-freeze alpha releases — silent reinterpretation is the only unacceptable
   outcome).

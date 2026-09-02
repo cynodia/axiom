@@ -1,6 +1,6 @@
 # Axiom 0.14 — Durable Workflows: implementation report
 
-Release: `0.14.0-alpha.4`. Branch: `spec14-durable-workflows`. Baseline: `0.13.1-alpha.1`.
+Release: `0.14.0-alpha.5`. Branch: `spec14-durable-workflows`. Baseline: `0.13.1-alpha.1`.
 Design note: `AXIOM_0_14_WORKFLOW_RESEARCH.md`. Full model: `docs/WORKFLOWS.md`.
 Pre-publish corrective pass: `specs/spec14pt2.md` (F1 / F2 crash-safety closure) — **CLOSED**,
 see §"spec14pt2 closure" below.
@@ -11,14 +11,15 @@ orchestration meaning; the runtime owns scheduling, persistence, retries, per-in
 leases, fencing, crash recovery and physical execution. No application script body, no
 mutable workflow blob, no application-owned state machine.
 
-Test totals: **1455** across the repo, all green at `0.14.0-alpha.4` (server 609 incl.
+Test totals: **1460** across the repo, all green at `0.14.0-alpha.5` (server 614 incl.
 `workflow-engine` (9), `workflow-store` (memory + SQLite parity incl. the F2 durable-journal
 contract + concurrent-transition race, 3), `workflows-server` (5), `workflow-conformance`
 (13 fixtures + suite + 2 negative controls), **`workflow-crash-matrix` (7 real-OS-process
 scenarios — spec14pt2)**, **`workflow-compat` (10 — spec14pt3 F3/F1/F2 in-process)**,
 **`workflow-mixed-build` (6 real-OS-process — spec14pt3 F3)**, **`workflow-ir-totality` (8 —
-spec14pt4 F2 + spec14pt5 admission-surface)**, `persistence` (+2 F1 idempotency-record
-cases); agent-api 98 incl.
+spec14pt4 F2 + spec14pt5 admission-surface)**, `workflows-server` (10 incl. the 5 spec14pt6
+cancellation-authorization cases), `persistence` (+2 F1 idempotency-record cases); agent-api
+98 incl.
 `analyzeWorkflow` + workflow validation (6) + the spec14pt3/pt4 malformed-step matrix; core
 279 incl. the `WORKFLOW_*` validation codes + workflow semantic-identity). `npm run build`,
 `npm test`, `release:pack` / `verify` / `consumer-test` / `probe` and the documentation
@@ -50,8 +51,8 @@ semantic-variant refusal tests takes ~57 s at 25).
 | 14 conformance v8 | ✅ | `axiom.conformance.v8` — `workflow-conformance.ts`, `scripts/workflow-conformance.mjs` (13 fixtures + manifest), public runner, 2 negative controls. |
 | 15 topology / crash suite | ✅ | in-process fencing/CAS + concurrent-transition race, **plus** the spec14pt2 real-OS-process `workflow-crash-matrix`: F1 SIGKILL ×50, F2 Case A SIGKILL ×50, Case B wait-vs-event race ×50 (deterministic before/after classification, no lost event), Case C duplicate + across-restart replay, 2- & 8-authority claim races (exactly one logical transition), SIGSTOP stale-owner (fenced write refused, zero stale commits). |
 | 16 historical regression | ✅ | 0.12 / 0.12.1 / 0.13.1 suites (575 server, incl. live-query and distributed-authority cross-process) re-run green. |
-| 17 docs / release prep | ✅ | `docs/WORKFLOWS.md`, `AGENT_REFERENCE` §DURABLE WORKFLOWS, `AUTHORITY.md` / `DISTRIBUTED_AUTHORITY.md` compatibility sections, `VALIDATION.md`, anti-patterns #72–#80, README + facade doc-map rows, `CLAUDE.md` entries. Version bump to `0.14.0-alpha.4` across every manifest / doc line / `llms.txt` / `package-lock.json`. |
-| 18 publish `0.14.0-alpha.4` | ⏳ | post this session — `release:pack` / `verify` / `consumer-test` / `probe` are the gate (§143). |
+| 17 docs / release prep | ✅ | `docs/WORKFLOWS.md`, `AGENT_REFERENCE` §DURABLE WORKFLOWS, `AUTHORITY.md` / `DISTRIBUTED_AUTHORITY.md` compatibility sections, `VALIDATION.md`, anti-patterns #72–#80, README + facade doc-map rows, `CLAUDE.md` entries. Version bump to `0.14.0-alpha.5` across every manifest / doc line / `llms.txt` / `package-lock.json`. |
+| 18 publish `0.14.0-alpha.5` | ⏳ | post this session — `release:pack` / `verify` / `consumer-test` / `probe` are the gate (§143). |
 | 19 blind Phase 22 | ⏳ | focused F3 external rerun first (§119, §120), then resume §125 mandatory areas; freeze only on `D1 / E1 / S1`. |
 
 ## Answers to §251 (model)
@@ -192,10 +193,10 @@ honours the configured coordination `leaseDurationMs` (previously a fixed 15 s).
 
 ## spec14pt3 closure — Phase 22 F3 (release blocker) + F1 / F2 hardening
 
-Phase 22 against published `0.14.0-alpha.4` returned `D1 / E1 / S3` with **F3**: a
+Phase 22 against published `0.14.0-alpha.5` returned `D1 / E1 / S3` with **F3**: a
 semantically incompatible authority build silently continued an in-flight workflow instance
 under changed `WorkflowDef` semantics (25/25 real-process trials). `specs/spec14pt3.md` is
-the corrective pass; all three findings are **CLOSED**. Corrective release: **`0.14.0-alpha.4`**.
+the corrective pass; all three findings are **CLOSED**. Corrective release: **`0.14.0-alpha.5`**.
 Server IR stays **`axiom.server.v8`**; conformance stays **`axiom.conformance.v8`** (no new
 vocabulary, no fixture edits). The 0.14 workflow model is unchanged (§4, §50, §51).
 
@@ -387,13 +388,57 @@ object, `true`, `false`, string, `null`} → `createAxiomServer` **and**
 count = 0`; (b) `ir.workflows` ∈ {absent, `[]`} → server constructs and starts normally,
 `inspectWorkflows()` is `[]`. spec14pt2/pt3/pt4 regressions re-run green.
 
+## spec14pt6 closure — Phase 22 F4 cancellation authorization (`0.14.0-alpha.5`)
+
+The final Phase 22 finding: `server.cancelWorkflow(instanceId, credential)` **accepted** a
+credential but never enforced it — a principal `c2` who knew `c1`'s `instanceId` could cancel
+`c1`'s workflow. The engine's `cancelWorkflow` didn't even take the `credential` argument the
+server forwarded.
+
+**Fix (uses existing Axiom authorization machinery, no workflow-specific security model):**
+`cancelWorkflow(instanceId, credential)` now, after the not-found and terminal-idempotent
+checks and **before** any lease claim or transition, resolves the credential through the
+engine's `resolvePrincipal` and requires `fingerprint === record.principalFingerprint` — the
+same `principalFingerprint` the instance was durably stamped with at start (spec14 §257:
+instance access is keyed by principal fingerprint). A mismatch returns
+`{ error: { code: 'AUTHORIZATION_DENIED', … } }` — the canonical code `authorize()` uses —
+with **no** `instanceRevision` advance, no history, no ownership claim, no wake. The check
+resolves identically on any authority (durable `principalFingerprint` + deterministic
+`resolvePrincipal`), so it is topology-independent (failover-safe). Cancellation of an
+already-terminal instance stays idempotent for any caller (existing behaviour, unchanged —
+nothing mutates). Authorized cancellation is byte-for-byte the prior path: idempotent,
+fenced, compat-gated.
+
+### F4 report Q&A
+
+| Question | Answer |
+| --- | --- |
+| What was the gap? | `AxiomServer.cancelWorkflow` forwarded `credential` to `workflowEngine.cancelWorkflow`, whose implementation was `async function cancelWorkflow(instanceId)` — the argument was dropped, so cancellation was effectively unauthenticated. |
+| Authorization rule? | The caller's resolved principal fingerprint must equal the instance's `principalFingerprint` (set at start). No new vocabulary, no `WorkflowDef` authorization field; reuses `resolvePrincipal` + the durable fingerprint. Not hardcoded `caller == startPrincipal` in a bespoke sense — it *is* the canonical instance-access rule from spec14 §257. |
+| Where does the decision happen? | In `cancelWorkflow`, before `withOwnership` (the lease claim) and before `store.transition`. |
+| Error mechanism? | `AUTHORIZATION_DENIED` — a member of `SERVER_DIAGNOSTIC_CODES`, the same code `authorize()` emits for a denied `ActionDef`. No new ad-hoc code, no native exception. |
+| Unauthorized-call side effects? | None: verified by test — `instanceRevision` unchanged, `status` unchanged (`waiting`), no `cancelled` history entry, workflow continues to completion on the next matching event. |
+| Failover? | A second authority that never started the instance returns the same `AUTHORIZATION_DENIED` for `c2` and the same success for `c1` — the fingerprint is durable and `resolvePrincipal` is deterministic. |
+| Preserved? | Idempotent cancellation, fenced transitions, terminal-state immutability, crash safety, mixed-build compat gate (runs after the auth check), principal preservation — all unchanged. Server IR `axiom.server.v8`, conformance `axiom.conformance.v8`, `semanticFingerprint` untouched (auth is runtime, not graph). |
+
+### Tests added (+5; repo 1455 → 1460)
+
+`server/test/workflows-server.test.ts` +5: owner cancels its own workflow → `cancelled`;
+cross-principal (and anonymous) cancel → `AUTHORIZATION_DENIED`, `instanceRevision` /
+`status` / history unchanged; after a refused cancel the workflow completes normally on the
+matching event; the auth result is identical from a second authority over a shared store
+(failover); cancelling an already-`completed` instance stays idempotent for any caller.
+spec14pt2/pt3/pt4/pt5 regressions + workflow conformance v8 re-run green.
+
 ## Blind Phase 22
 
-Focused F1 / F2 external rerun pending — requires the published `0.14.0-alpha.4` packages
+Focused F4 external rerun pending — requires the published `0.14.0-alpha.5` packages
 (`release:pack` / `verify` / `consumer-test` / `probe` are the gate). F1 externally closed at
-alpha.3, F3 at alpha.2 — only small smoke controls are needed there (that code is untouched).
-The essential F2 reproduction: tamper `ir.workflows = 123` then `= {}`, call
-`createAxiomServer`, expect `WorkflowIRError` / `WORKFLOW_INVALID_IR`, `native TypeError = 0`.
-After a green focused F1 / F2 rerun, resume the original Phase 22 spec from the previously
-de-scoped §125 sections against the published set. Required eventual verdict `D1 / E1 / S1`;
+alpha.3, F2 at alpha.4, F3 at alpha.2 — only small smoke controls are needed there (that
+code is untouched). The essential F4 reproduction: `c1` starts `W`, `c2` calls
+`cancelWorkflow(W, credential_c2)` → `AUTHORIZATION_DENIED`, `workflow mutation on refusal =
+0`, `topology-dependent auth = 0`; plus a cancellation smoke (idempotency, terminal
+immutability, fencing). If green, **F1 / F2 / F3 / F4 all CLOSED → Phase 22 resumes** the
+previously de-scoped §125 sections against the published set. Required eventual verdict
+`D1 / E1 / S1`;
 the 0.14 semantic model is **not** frozen before that external result.

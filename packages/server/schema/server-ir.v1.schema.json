@@ -4,7 +4,7 @@
   "title": "Axiom Server IR v1",
   "description": "The normative structure of an `axiom.server.v1` document. Structure only: what a conforming runtime must *do* with it is the semantic contract, and the conformance fixtures are the executable statement of that.",
   "contract": "axiom.server.v1",
-  "release": "0.14.0-alpha.4",
+  "release": "0.14.0-alpha.5",
   "type": "object",
   "required": [
     "contract",

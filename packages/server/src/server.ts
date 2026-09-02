@@ -401,7 +401,12 @@ export interface AxiomServer {
     credential?: unknown;
     idempotencyKey?: string;
   }): Promise<{ instanceId: string; status: string } | { error: { code: string; message: string } }>;
-  /** Cancel a workflow instance (spec14 §75). Idempotent; not a rollback. */
+  /**
+   * Cancel a workflow instance (spec14 §75). Idempotent; not a rollback. **Authorized**
+   * (spec14pt6): `credential` is resolved and its principal fingerprint must match the one
+   * the instance was started under, or the call is refused `AUTHORIZATION_DENIED` with no
+   * mutation. Cancellation of an already-terminal instance stays idempotent for any caller.
+   */
   cancelWorkflow(
     instanceId: string,
     credential?: unknown,

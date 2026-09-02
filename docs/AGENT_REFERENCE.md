@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.14.0-alpha.4. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.14.0-alpha.5. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -1173,9 +1173,13 @@ Retryable vs terminal is structured, never message-string parsing. Attempt count
 executor.
 
 Cancellation: `server.cancelWorkflow(instanceId, credential)` — idempotent, a fenced durable
-transition to `cancelled`. **Not** rollback (committed actions / dispatched effects stand;
-no auto-compensation). A later timer/event does not transition a terminal instance. Terminal
-states are durable and irreversible; a stale authority cannot resurrect one.
+transition to `cancelled`. **Authorized**: `credential` is resolved and its principal
+fingerprint must match the one the instance was started under, else `AUTHORIZATION_DENIED`
+with **no** mutation (no `instanceRevision`, no history, no wake); resolves the same on any
+authority. Already-terminal cancellation stays idempotent for any caller. **Not** rollback
+(committed actions / dispatched effects stand; no auto-compensation). A later timer/event
+does not transition a terminal instance. Terminal states are durable and irreversible; a
+stale authority cannot resurrect one.
 
 Multi-authority: leaderless. Any compatible authority advances any eligible instance;
 per-instance lease+fence (reused 0.12 `CoordinationProvider`); stale owner refused. Startup

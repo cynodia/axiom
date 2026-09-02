@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.14.0-alpha.4. Validation is authoring-time structural checking. It is not the same
+Axiom 0.14.0-alpha.5. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
