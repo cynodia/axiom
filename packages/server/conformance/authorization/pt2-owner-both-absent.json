@@ -1,12 +1,12 @@
 {
   "conformance": "axiom.conformance.v9",
-  "name": "workflow-inspection",
+  "name": "pt2-owner-both-absent",
   "covers": [
-    "workflow inspection",
-    "cross-principal",
-    "anonymous"
+    "deny",
+    "owner",
+    "resource-owner condition"
   ],
-  "description": "A declared instanceAccessPolicy gates getWorkflow; an unauthorized caller is answered exactly like a missing instance (no existence leak).",
+  "description": "spec15pt2 F1 C1 — RESOURCE.ownerId == PRINCIPAL.id with both fields absent ⇒ DENY; a concrete owner match ⇒ ALLOW.",
   "providerRows": {
     "entity_doc": [
       {
@@ -69,41 +69,35 @@
   },
   "steps": [
     {
-      "do": "start-workflow",
-      "workflow": "wf_guarded",
-      "as": "g",
-      "credential": "admin",
-      "arguments": {
-        "input_tag": "k"
-      },
-      "expect": {
-        "decision": "ALLOW"
-      }
-    },
-    {
-      "do": "inspect-workflow",
-      "instance": "g",
-      "credential": "manager",
-      "expect": {
-        "visible": true
-      }
-    },
-    {
-      "do": "inspect-workflow",
-      "instance": "g",
+      "do": "invoke",
+      "action": "action_owner",
       "credential": "admin",
       "expect": {
-        "visible": false
+        "decision": "DENY",
+        "reason": "policy-denied"
       }
     },
     {
-      "do": "inspect-workflow",
-      "instance": "g",
+      "do": "invoke",
+      "action": "action_owner",
+      "credential": "norole",
       "expect": {
-        "visible": false
+        "decision": "DENY",
+        "reason": "policy-denied"
+      }
+    },
+    {
+      "do": "invoke",
+      "action": "action_owner",
+      "expect": {
+        "decision": "DENY",
+        "reason": "policy-denied"
       }
     }
   ],
+  "expectFinalState": {
+    "state_count": 0
+  },
   "serverIR": {
     "contract": "axiom.server.v9",
     "id": "authz-conformance",

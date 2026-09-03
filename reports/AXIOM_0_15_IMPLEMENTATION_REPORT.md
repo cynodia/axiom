@@ -19,13 +19,75 @@ Spec: `specs/spec15.md` — **Authorization Completeness**. Design note:
 | **H** | `axiom.conformance.v9` — `conformance/authorization/` (10 fixtures), `runAuthorizationConformanceFixture` / `Suite`, verified over memory + SQLite | ✅ landed |
 | **I** | The internal adversarial matrix (forbidden counters), topology-independence 1/2/8 authorities on shared SQLite, cross-principal race + contention, failover parity | ✅ landed |
 
-**All nine phases are landed** at `0.15.0-alpha.1`. External blind adversarial validation
-(spec15 §134-§137) precedes the 0.15 semantic freeze and is not part of this checkout.
+**All nine phases A–I are landed.** `0.15.0-alpha.1` cut the milestone; `0.15.0-alpha.2`
+(spec15pt2) is a corrective pass — see **spec15pt2** below. External blind adversarial
+validation (spec15 §134-§137) precedes the 0.15 semantic freeze and is not part of this
+checkout.
 
-**Version bumped to `0.15.0-alpha.1`.** Enforcement Phases C–F are landed — every
-`AuthorizationPolicyDef` reference the graph vocabulary defines is enforced — so the
-milestone's first pre-release is cut. G–I (analysis, conformance tier, adversarial soak)
-harden it before the milestone freezes; they add no graph/IR vocabulary.
+## spec15pt2 — corrective pass (`0.15.0-alpha.2`)
+
+The blind campaign for `alpha.1` found one release-blocking authorization defect (F1) and
+two hardening defects (F2, F3). All three are closed here; no new graph/IR vocabulary,
+Server IR stays `axiom.server.v9`.
+
+### F1 — absent-value fail-open (release-blocking)
+
+`PRINCIPAL.role != "banned"` (and `NOT(... == "banned")`, `RESOURCE.ownerId == PRINCIPAL.id`
+with both absent) evaluated to ALLOW for an anonymous / attribute-less principal, because
+the shared `runtime.evaluate` reduced a missing scope field to `undefined` and
+`undefined != "banned"` is `true`.
+
+- **`packages/core/src/authorization.ts`** — `evaluateAuthorizationPolicyAllow(allow, {
+  principal, resource, operation })`, a **dedicated three-valued** policy evaluator:
+  `concrete` / `unknown` (a missing PRINCIPAL / RESOURCE field, tracked by provenance —
+  `field(ref(PRINCIPAL|RESOURCE), F)` where the object lacks `F`) / `error`. `eq` / `neq` /
+  `lt…` touching `unknown` ⇒ `unknown`; `not unknown` ⇒ `unknown`; `FALSE and _` ⇒ `FALSE`,
+  `TRUE or _` ⇒ `TRUE`, otherwise any `unknown` with no decisive concrete ⇒ `unknown`; a
+  `call` with any `unknown` arg ⇒ `unknown`. Maps to the existing `{ ok, value }`:
+  `concrete(true)` ⇒ `{ ok: true, value: true }` (the only ALLOW), anything else ⇒
+  `{ ok: true, value: false }` or `{ ok: false }`. `literal(true)` is a genuine constant
+  (explicit public still admits anonymous); a `literal(undefined)` is concrete, not
+  absence (spec15pt2 §63). Ordinary `Expression` semantics are untouched (spec15pt2 §4);
+  `ActionDef.authorization` still runs through `runtime.evaluate` unchanged (§32).
+- **`packages/server/src/server.ts`** — `evaluatePolicy(policyId, operation, resource,
+  principal)` now calls the core evaluator instead of hydrating `PRINCIPAL` / `OPERATION` /
+  `RESOURCE` states and `runtime.evaluate`. One evaluator, every surface (§33).
+- **§35 — authority compatibility.** `alpha.1` and `alpha.2` evaluate the same policy
+  differently on an identical graph. `AuthorityCompatibilityKey` gains an optional
+  `authorizationRuntime` field (`'axiom.authz.v2'`, `authority-identity.ts`), stamped only
+  when the IR carries authorization vocabulary; `compareAuthorityCompatibility` treats
+  present-vs-absent as a mismatch. A mixed `alpha.1` / `alpha.2` cluster over an
+  authorization-bearing graph is fail-closed incompatible; a graph with no policy rolls the
+  upgrade unaffected. `semanticFingerprint` / `SEMANTIC_FINGERPRINT_VERSION` unchanged (§38).
+
+### F2 — validation totality
+
+`authorizationPolicyProblems` (core) now runs a **total structural check** on the `allow`
+tree before the scope / determinism walk: every node a plain object with a `kind` in
+`EXPRESSION_KINDS` and its per-kind required children present and valid, else
+`AUTHORIZATION_INVALID_POLICY`. `{ a: 1 }`, `{ kind: 'literal' }`, `{ kind: 'nonsense' }`,
+a `binary` missing an operand, a `call` with a bogus argument — all rejected by
+`validateGraph` / `compileToServerIR`, never a later native exception (spec15pt2 §39-§41).
+
+### F3 — `authenticate()` exception boundary
+
+`server.ts` gains one `tryAuthenticate(credential)` boundary; every credential-resolution
+site (`invoke`, `runQuery`, live open, live re-evaluation, the workflow engine's
+`resolvePrincipal` hook) routes through it. A throwing `host.authenticate` fails **closed**
+— never anonymous (§30, §107) — with a structured `AUTHORIZATION_DENIED`
+(`reason: 'authentication-error'`, `operation: 'authentication'`), zero mutation, zero
+workflow revision, and no exception detail (token / stack) crossing the boundary
+(spec15pt2 §42-§47). The workflow engine's `resolvePrincipal` contract gains an optional
+`authError` flag so `startWorkflow` creates no instance and `cancel` / `inspect` deny.
+
+### spec15pt2 tests
+
+| File | Covers |
+| --- | --- |
+| `packages/core/test/authorization.test.ts` (+10) | C1–C5, deny-list `neq` / `not`, OR/AND composition, `call` over absence, `literal(undefined)` is concrete, missing scope object, three-valued totality, F2 malformed corpus |
+| `packages/server/test/authorization-pt2.test.ts` (7) | F1 end-to-end on action / query / workflow start / instance access / live open / live re-eval (concrete allows, absent + anonymous deny); `literal(true)` still admits anonymous; F3 throwing `authenticate` fails closed secret-free on every surface with zero mutation |
+| `packages/server/test/authorization-identity.test.ts` (+1) | `authorizationRuntime` discriminates `alpha.1` (stored key, no field) from `alpha.2`; `alpha.2`↔`alpha.2` and presentation-only stay compatible; non-authz graph unaffected (§35, §76-§78) |
+| `packages/server/conformance/authorization/` (+2 fixtures) | `pt2-deny-list-absent-value`, `pt2-owner-both-absent` — over memory **and** SQLite (§53, §54) |
 
 ## What landed
 

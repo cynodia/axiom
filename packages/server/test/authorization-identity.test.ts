@@ -130,3 +130,34 @@ test('spec15 §69: the authorization policy round-trips through Server IR serial
   assert.equal(serverIrSemanticFingerprint(roundTripped), serverIrSemanticFingerprint(original));
   assert.deepEqual(roundTripped.authorizationPolicies, original.authorizationPolicies);
 });
+
+test('spec15pt2 §35/§76-§78: the authorization-evaluator version discriminates alpha.1 from alpha.2', () => {
+  // alpha.2 stamps `authorizationRuntime` on an authorization-bearing IR; a graph with no
+  // policy does not carry it, so a non-authz cluster rolls the upgrade unaffected (§35).
+  const authz = serverIrCompatibilityKey(ir({ policy: true }));
+  const plain = serverIrCompatibilityKey(ir({}));
+  assert.equal(typeof (authz as { authorizationRuntime?: string }).authorizationRuntime, 'string');
+  assert.equal((plain as { authorizationRuntime?: string }).authorizationRuntime, undefined);
+
+  // A stored alpha.1 key (same graph, no discriminator) is fail-closed incompatible with
+  // this alpha.2 authority — the two evaluate the same policy differently (§76).
+  const alpha1Stored = {
+    schemaVersion: authz.schemaVersion,
+    schemaFingerprint: authz.schemaFingerprint,
+    serverContract: authz.serverContract,
+    semanticFingerprint: authz.semanticFingerprint,
+  } as typeof authz;
+  const cmp = compareAuthorityCompatibility(authz, alpha1Stored);
+  assert.equal(cmp.compatible, false);
+  assert.ok(cmp.mismatches.includes('authorizationRuntime'));
+
+  // Two alpha.2 authorities on the same graph stay compatible (§77); a presentation-only
+  // difference stays compatible (§78).
+  assert.equal(compareAuthorityCompatibility(authz, serverIrCompatibilityKey(ir({ policy: true }))).compatible, true);
+  assert.equal(
+    compareAuthorityCompatibility(authz, serverIrCompatibilityKey(ir({ policy: true, description: 'x' }))).compatible,
+    true,
+  );
+  // A non-authz graph is compatible across the (missing) discriminator on both sides.
+  assert.equal(compareAuthorityCompatibility(plain, serverIrCompatibilityKey(ir({}))).compatible, true);
+});

@@ -316,10 +316,10 @@ turn it into a working browser application whose generated JavaScript nobody rea
   untouched. New tests: `server/test/workflows-server.test.ts` (+5 — owner cancels,
   cross-principal / anonymous refused with zero mutation, continue-after-refusal, failover
   parity, terminal idempotency).
-* `specs/spec15.md` — the **0.15 authorization completeness release** (`0.15.0-alpha.1`; a
-  9-phase milestone A–I — **all internal phases A–I are landed**; external blind adversarial
-  validation precedes the 0.15 semantic freeze). *Whether a principal may perform a
-  semantic operation* is part of
+* `specs/spec15.md` — the **0.15 authorization completeness release** (a 9-phase milestone
+  A–I — **all internal phases A–I are landed**; `0.15.0-alpha.2` after the spec15pt2
+  corrective pass; external blind adversarial validation precedes the 0.15 semantic
+  freeze). *Whether a principal may perform a semantic operation* is part of
   the graph's executable meaning. **One** authorization language: `AuthorizationPolicyDef`
   (`packages/core/src/authorization.ts`, graph node kind `authorization-policy`) — a single
   boolean `allow` `Expression`, closed scope `PRINCIPAL` / `RESOURCE` / `OPERATION`
@@ -415,6 +415,35 @@ turn it into a working browser application whose generated JavaScript nobody rea
   `server/test/authorization-adversarial.test.ts`,
   `server/test/authorization-distributed.test.ts`. Report:
   `AXIOM_0_15_IMPLEMENTATION_REPORT.md`. Full model: `docs/AUTHORIZATION.md`.
+* `specs/spec15pt2.md` — the **0.15pt2 corrective pass** (`0.15.0-alpha.2`), closing the
+  three findings from the alpha.1 blind campaign. **F1** (release-blocking) —
+  authorization **absent-value safety**: `PRINCIPAL.role != "banned"` /
+  `NOT(PRINCIPAL.role == "banned")` / `RESOURCE.ownerId == PRINCIPAL.id` no longer ALLOW an
+  anonymous / attribute-less caller. A **dedicated three-valued** policy evaluator in
+  `core/authorization.ts` — `evaluateAuthorizationPolicyAllow(allow, { principal, resource,
+  operation })`: `concrete` / `unknown` (a missing PRINCIPAL/RESOURCE field, by provenance)
+  / `error`; `eq`/`neq`/`not`/comparison touching `unknown` ⇒ `unknown`; `FALSE and _` ⇒
+  FALSE, `TRUE or _` ⇒ TRUE, else any `unknown` ⇒ `unknown`; only `concrete(true)` ⇒
+  ALLOW. `literal(true)` stays constant (explicit public still admits anonymous). Ordinary
+  `Expression` semantics and `ActionDef.authorization` are untouched (§4, §32).
+  `server.ts` `evaluatePolicy(...)` calls it instead of `runtime.evaluate` — one evaluator,
+  every surface (§33). **§35** — `AuthorityCompatibilityKey` gains optional
+  `authorizationRuntime` (`'axiom.authz.v2'`, `authority-identity.ts`), stamped only for an
+  authorization-bearing IR; `compareAuthorityCompatibility` counts present-vs-absent a
+  mismatch, so a mixed alpha.1/alpha.2 cluster over an authz graph is fail-closed
+  incompatible while a non-authz graph rolls unaffected. `semanticFingerprint` /
+  `SEMANTIC_FINGERPRINT_VERSION` unchanged. **F2** — `authorizationPolicyProblems` (core)
+  runs a total structural check on the `allow` tree (`kind` ∈ `EXPRESSION_KINDS`, required
+  children present) before the scope walk → `AUTHORIZATION_INVALID_POLICY`, never a later
+  native exception. **F3** — one `tryAuthenticate` boundary in `server.ts`; a throwing
+  `host.authenticate` fails closed (never anonymous) with `AUTHORIZATION_DENIED`
+  (`reason: 'authentication-error'`), zero mutation / revision, no token or stack disclosed;
+  the workflow engine's `resolvePrincipal` hook returns `authError` so `startWorkflow`
+  creates no instance. **No new graph/IR vocabulary**; Server IR `axiom.server.v9`,
+  conformance `axiom.conformance.v9` (+2 fixtures: `pt2-deny-list-absent-value`,
+  `pt2-owner-both-absent`, memory + SQLite). New tests:
+  `core/test/authorization.test.ts` (+10), `server/test/authorization-pt2.test.ts`,
+  `server/test/authorization-identity.test.ts` (+1).
 
 Together, spec2–spec14 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is

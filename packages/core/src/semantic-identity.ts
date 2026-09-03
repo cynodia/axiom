@@ -173,6 +173,15 @@ export interface AuthorityCompatibilityKey {
   schemaFingerprint: string;
   serverContract: string;
   semanticFingerprint: string;
+  /**
+   * spec15pt2 §35 — the runtime authorization-evaluator semantics version. `0.15.0-alpha.1`
+   * and `0.15.0-alpha.2` evaluate the *same* Server IR authorization policy differently
+   * (absent-value safety, F1), yet the graph — and therefore `semanticFingerprint` — is
+   * identical. This discriminator, present only when the IR carries authorization
+   * vocabulary, keeps the two builds from silently co-participating in one authority domain.
+   * Absent on a graph with no authorization policy (its evaluation is unchanged).
+   */
+  authorizationRuntime?: string;
 }
 
 export function authorityCompatibilityKey(
@@ -183,6 +192,7 @@ export function authorityCompatibilityKey(
     schemaFingerprint: parts.schemaFingerprint,
     serverContract: parts.serverContract,
     semanticFingerprint: parts.semanticFingerprint,
+    ...(parts.authorizationRuntime !== undefined ? { authorizationRuntime: parts.authorizationRuntime } : {}),
   };
 }
 
@@ -211,7 +221,10 @@ export function compareAuthorityCompatibility(
     'schemaFingerprint',
     'serverContract',
     'semanticFingerprint',
+    'authorizationRuntime',
   ];
-  const mismatches = fields.filter((field) => a[field] !== b[field]);
+  // `authorizationRuntime` absent on both sides (a non-authorization graph) is a match;
+  // present-vs-absent (alpha.1 stored key vs alpha.2) is a mismatch (spec15pt2 §35, §76).
+  const mismatches = fields.filter((field) => (a[field] ?? null) !== (b[field] ?? null));
   return { compatible: mismatches.length === 0, mismatches };
 }

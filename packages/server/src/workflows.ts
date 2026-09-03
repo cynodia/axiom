@@ -170,7 +170,15 @@ export interface WorkflowEngineOptions {
   /** The authority's compatibility key string — bound into every instance (spec14 §113, §211). */
   compatibilityFingerprint: string;
   /** Resolve a credential to a canonical principal record + its fingerprint (spec14 §22). */
-  resolvePrincipal: (credential: unknown) => Promise<{ principal: unknown; fingerprint: string }>;
+  /**
+   * Resolve a credential to a canonical principal + fingerprint. `authError: true` signals
+   * that the host's `authenticate` threw (spec15pt2 F3) — the engine then fails the
+   * operation closed (no instance, no transition, no inspection) rather than proceeding
+   * under a bogus principal.
+   */
+  resolvePrincipal: (
+    credential: unknown,
+  ) => Promise<{ principal: unknown; fingerprint: string; authError?: boolean }>;
   /**
    * spec15 Phase E — evaluate an `AuthorizationPolicyDef` by id for a workflow operation
    * (`workflow.start` / `.inspect` / `.history` / `.cancel`), in the one closed policy scope
@@ -868,7 +876,8 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
     credential: unknown,
   ): Promise<{ ok: boolean; reason: string }> {
     const policyId = byId.get(record.workflowId)?.instanceAccessPolicy;
-    const { principal, fingerprint } = await options.resolvePrincipal(credential);
+    const { principal, fingerprint, authError } = await options.resolvePrincipal(credential);
+    if (authError) return { ok: false, reason: 'authentication-error' };
     if (policyId && options.authorizePolicy) {
       const d = options.authorizePolicy(String(policyId), 'workflow.cancel', instanceResource(record), principal);
       return { ok: d.ok, reason: d.reason ?? 'policy-denied' };
@@ -892,7 +901,8 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
   ): Promise<boolean> {
     const policyId = byId.get(record.workflowId)?.instanceAccessPolicy;
     if (!policyId || !options.authorizePolicy) return true;
-    const { principal } = await options.resolvePrincipal(credential);
+    const { principal, authError } = await options.resolvePrincipal(credential);
+    if (authError) return false; // a throwing authenticate discloses nothing (spec15pt2 §46)
     return options.authorizePolicy(String(policyId), operation, instanceResource(record), principal).ok;
   }
 
@@ -903,7 +913,11 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
     if (!workflow) {
       return { error: { code: WF_DIAGNOSTIC.UNKNOWN_WORKFLOW, message: `No workflow ${request.workflowId}` } };
     }
-    const { principal, fingerprint } = await options.resolvePrincipal(request.credential);
+    const { principal, fingerprint, authError } = await options.resolvePrincipal(request.credential);
+    // spec15pt2 F3 §45 — a throwing authenticate creates no instance and no revision.
+    if (authError) {
+      return { error: { code: WF_DIAGNOSTIC.UNAUTHORIZED, message: `The caller could not be authenticated` } };
+    }
 
     // spec15 §100 — `workflow.start`. Being able to discover a `WorkflowDef` is not being
     // able to start it, and this is decided independently of the ActionDef authorization a

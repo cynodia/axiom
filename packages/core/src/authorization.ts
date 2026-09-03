@@ -27,6 +27,7 @@
  */
 
 import { OPERATION, PRINCIPAL, RESOURCE } from './authority.js';
+import { EXPRESSION_KINDS } from './expressions.js';
 import type { Expression } from './expressions.js';
 import type { NodeId } from './ids.js';
 import type { NodeBase } from './nodes.js';
@@ -176,6 +177,74 @@ export interface AuthorizationPolicyProblem {
  * §37). Cross-node reference resolution (does an `authorizationPolicy` id point at a real
  * policy) is `validateGraph`'s job, not this function's.
  */
+/**
+ * spec15pt2 §39-§41 (F2) — a **total** structural check on an `allow` expression tree.
+ * Every node must be a plain object whose `kind` is a real `EXPRESSION_KINDS` member and
+ * whose per-kind required children are present and themselves structurally valid. Returns a
+ * short reason on the first problem, `null` when the tree is well-formed. Never throws.
+ */
+function malformedExpressionReason(expression: unknown, seen: Set<object> = new Set()): string | null {
+  if (!isPlainObject(expression)) return 'a policy expression node is not an object';
+  if (seen.has(expression)) return 'a policy expression contains a cycle';
+  seen.add(expression);
+  const kind = (expression as { kind?: unknown }).kind;
+  if (typeof kind !== 'string' || !(EXPRESSION_KINDS as readonly string[]).includes(kind)) {
+    return `unknown expression kind ${JSON.stringify(kind)}`;
+  }
+  const child = (name: string): string | null => malformedExpressionReason((expression as Record<string, unknown>)[name], seen);
+  const list = (name: string): string | null => {
+    const arr = (expression as Record<string, unknown>)[name];
+    if (!Array.isArray(arr)) return `${kind}.${name} is not an array`;
+    for (const entry of arr) {
+      const r = malformedExpressionReason(entry, seen);
+      if (r) return r;
+    }
+    return null;
+  };
+  switch (kind) {
+    case 'literal':
+      return 'value' in (expression as object) ? null : 'literal has no value';
+    case 'ref':
+      return typeof (expression as { targetId?: unknown }).targetId === 'string' ? null : 'ref has no targetId';
+    case 'field':
+      return (typeof (expression as { fieldId?: unknown }).fieldId === 'string' ? null : 'field has no fieldId') ?? child('source');
+    case 'unary':
+      return (typeof (expression as { operator?: unknown }).operator === 'string' ? null : 'unary has no operator') ?? child('operand');
+    case 'binary':
+      return (typeof (expression as { operator?: unknown }).operator === 'string' ? null : 'binary has no operator') ?? child('left') ?? child('right');
+    case 'call':
+      return (typeof (expression as { function?: unknown }).function === 'string' ? null : 'call has no function') ?? list('arguments');
+    case 'conditional':
+      return child('condition') ?? child('whenTrue') ?? child('whenFalse');
+    case 'object': {
+      const entries = (expression as { entries?: unknown }).entries;
+      if (!Array.isArray(entries)) return 'object has no entries array';
+      for (const e of entries) {
+        if (!isPlainObject(e) || typeof e.fieldId !== 'string') return 'an object entry is malformed';
+        const r = malformedExpressionReason(e.value, seen);
+        if (r) return r;
+      }
+      return null;
+    }
+    case 'filter':
+    case 'find':
+    case 'every':
+    case 'some':
+      return child('source') ?? child('predicate');
+    case 'map':
+      return child('source') ?? child('projection');
+    case 'sort':
+    case 'group':
+      return child('source') ?? child('by');
+    case 'flatten':
+      return child('source');
+    case 'expression-ref':
+      return typeof (expression as { targetId?: unknown }).targetId === 'string' ? null : 'expression-ref has no targetId';
+    default:
+      return `unsupported expression kind ${kind}`;
+  }
+}
+
 export function authorizationPolicyProblems(policy: unknown): AuthorizationPolicyProblem[] {
   const problems: AuthorizationPolicyProblem[] = [];
   const pid = isPlainObject(policy) ? String(policy.id ?? '<unknown>') : '<unknown>';
@@ -188,6 +257,12 @@ export function authorizationPolicyProblems(policy: unknown): AuthorizationPolic
       message: `Authorization policy ${pid} has no boolean 'allow' expression`,
     });
     return problems;
+  }
+  // spec15pt2 F2 — a malformed `allow` tree is rejected structurally here, before compile,
+  // rather than surviving to a native exception at evaluation.
+  const malformed = malformedExpressionReason(policy.allow);
+  if (malformed) {
+    return [{ code: 'AUTHORIZATION_INVALID_POLICY', message: `Authorization policy ${pid} has a malformed 'allow' expression: ${malformed}` }];
   }
   const refs = new Set<string>();
   const nondeterministic = new Set<string>();
@@ -341,6 +416,238 @@ export function decideAuthorization(input: AuthorizationCheckInput): Authorizati
     if (!permitted) return { decision: 'DENY', reason: 'legacy-denied' };
   }
   return { decision: 'ALLOW', reason: 'allowed' };
+}
+
+// ------------------------------------- three-valued policy evaluation (spec15pt2 F1)
+
+/**
+ * The closed scope an `AuthorizationPolicyDef.allow` expression is evaluated against. Each
+ * field is a plain record or `null` (anonymous / no resource); a `field` read of a key that
+ * is not present is **security-scope absence**, not an ordinary `undefined` (spec15pt2 §5-§7).
+ */
+export interface AuthorizationPolicyScope {
+  principal: Record<string, unknown> | null | undefined;
+  resource: Record<string, unknown> | null | undefined;
+  operation: string;
+}
+
+/** `concrete` value | `unknown` (a missing PRINCIPAL/RESOURCE field) | `error`. */
+type AuthzValue = { t: 'c'; v: unknown } | { t: 'u' } | { t: 'e' };
+const U: AuthzValue = { t: 'u' };
+const E: AuthzValue = { t: 'e' };
+const C = (v: unknown): AuthzValue => ({ t: 'c', v });
+
+function asBool(v: unknown): boolean {
+  return v === true ? true : v === false ? false : Boolean(v);
+}
+function deepEq(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  try {
+    return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  } catch {
+    return false;
+  }
+}
+/** Whether an expression tree reads only through `field` / `ref` rooted at PRINCIPAL / RESOURCE. */
+function isSecurityRooted(expression: unknown): boolean {
+  if (!isPlainObject(expression)) return false;
+  if (expression.kind === 'ref') {
+    const t = String(expression.targetId);
+    return t === AUTHZ_PRINCIPAL_SCOPE || t === AUTHZ_RESOURCE_SCOPE;
+  }
+  if (expression.kind === 'field') return isSecurityRooted(expression.source);
+  return false;
+}
+
+function evalAuthz(expression: unknown, scope: AuthorizationPolicyScope, seen: Set<object>): AuthzValue {
+  if (!isPlainObject(expression) || seen.has(expression)) return E;
+  seen.add(expression);
+  switch (expression.kind) {
+    case 'literal':
+      return C(expression.value);
+    case 'ref': {
+      const t = String(expression.targetId);
+      if (t === AUTHZ_PRINCIPAL_SCOPE) return C(scope.principal ?? null);
+      if (t === AUTHZ_RESOURCE_SCOPE) return C(scope.resource ?? null);
+      if (t === AUTHZ_OPERATION_SCOPE) return C(scope.operation);
+      return E; // out of the closed scope — validation rejects it; be total
+    }
+    case 'field': {
+      const src = evalAuthz(expression.source, scope, seen);
+      if (src.t === 'e') return E;
+      if (src.t === 'u') return U;
+      const key = String(expression.fieldId);
+      const rooted = isSecurityRooted(expression.source);
+      const obj = src.v;
+      if (obj === null || obj === undefined || typeof obj !== 'object') {
+        return rooted ? U : C(null);
+      }
+      const present = Object.prototype.hasOwnProperty.call(obj, key) && (obj as Record<string, unknown>)[key] !== undefined;
+      if (!present) return rooted ? U : C(null);
+      return C((obj as Record<string, unknown>)[key]);
+    }
+    case 'unary': {
+      const operand = evalAuthz(expression.operand, scope, seen);
+      if (operand.t !== 'c') return operand; // NOT unknown ⇒ unknown; NOT error ⇒ error (§9, §12)
+      return expression.operator === 'not' ? C(!asBool(operand.v)) : C(-Number(operand.v));
+    }
+    case 'binary': {
+      const op = String(expression.operator);
+      if (op === 'and') {
+        const l = evalAuthz(expression.left, scope, seen);
+        if (l.t === 'c' && !asBool(l.v)) return C(false); // FALSE AND _ ⇒ FALSE (short-circuit-independent)
+        const r = evalAuthz(expression.right, scope, seen);
+        if (l.t === 'e' || r.t === 'e') return E;
+        if (r.t === 'c' && !asBool(r.v)) return C(false);
+        if (l.t === 'c' && r.t === 'c') return C(true); // both concrete-true
+        return U;
+      }
+      if (op === 'or') {
+        const l = evalAuthz(expression.left, scope, seen);
+        if (l.t === 'c' && asBool(l.v)) return C(true); // TRUE OR _ ⇒ TRUE
+        const r = evalAuthz(expression.right, scope, seen);
+        if (l.t === 'e' || r.t === 'e') return E;
+        if (r.t === 'c' && asBool(r.v)) return C(true);
+        if (l.t === 'c' && r.t === 'c') return C(false); // both concrete-false
+        return U;
+      }
+      const l = evalAuthz(expression.left, scope, seen);
+      const r = evalAuthz(expression.right, scope, seen);
+      if (l.t === 'e' || r.t === 'e') return E;
+      if (l.t === 'u' || r.t === 'u') return U; // any comparison touching absence ⇒ non-satisfied (§8)
+      const a = l.v as never;
+      const b = r.v as never;
+      switch (op) {
+        case 'eq':
+          return C(deepEq(a, b));
+        case 'neq':
+          return C(!deepEq(a, b));
+        case 'lt':
+          return C((a as number) < (b as number));
+        case 'lte':
+          return C((a as number) <= (b as number));
+        case 'gt':
+          return C((a as number) > (b as number));
+        case 'gte':
+          return C((a as number) >= (b as number));
+        case 'add':
+          return C((a as number) + (b as number));
+        case 'subtract':
+          return C((a as number) - (b as number));
+        case 'multiply':
+          return C((a as number) * (b as number));
+        case 'divide':
+          return C((a as number) / (b as number));
+        default:
+          return E;
+      }
+    }
+    case 'conditional': {
+      const c = evalAuthz(expression.condition, scope, seen);
+      if (c.t !== 'c') return c;
+      return asBool(c.v) ? evalAuthz(expression.whenTrue, scope, seen) : evalAuthz(expression.whenFalse, scope, seen);
+    }
+    case 'object': {
+      const out: Record<string, unknown> = {};
+      for (const entry of (expression.entries as Array<{ fieldId: unknown; value: unknown }>) ?? []) {
+        const v = evalAuthz(entry.value, scope, seen);
+        if (v.t === 'e') return E;
+        if (v.t === 'u') return U;
+        out[String(entry.fieldId)] = v.v;
+      }
+      return C(out);
+    }
+    case 'call': {
+      const args: unknown[] = [];
+      for (const argument of (expression.arguments as unknown[]) ?? []) {
+        const v = evalAuthz(argument, scope, seen);
+        if (v.t === 'e') return E;
+        if (v.t === 'u') return U; // conservative: any absent input ⇒ non-satisfied (spec15pt2 §57, §85)
+        args.push(v.v);
+      }
+      return applyPolicyBuiltin(String(expression.function), args);
+    }
+    default:
+      return E;
+  }
+}
+
+function applyPolicyBuiltin(fn: string, args: unknown[]): AuthzValue {
+  switch (fn) {
+    case 'required':
+      return C(args[0] !== null && args[0] !== undefined);
+    case 'is-empty':
+      return C(args[0] === null || args[0] === undefined || args[0] === '' || (Array.isArray(args[0]) && args[0].length === 0));
+    case 'non-empty':
+      return C(!(args[0] === null || args[0] === undefined || args[0] === '' || (Array.isArray(args[0]) && args[0].length === 0)));
+    case 'length':
+      return C(Array.isArray(args[0]) || typeof args[0] === 'string' ? (args[0] as { length: number }).length : 0);
+    case 'contains':
+      return C(
+        typeof args[0] === 'string'
+          ? args[0].includes(String(args[1]))
+          : Array.isArray(args[0])
+            ? args[0].some((x) => deepEq(x, args[1]))
+            : false,
+      );
+    case 'one-of':
+      return C(args.slice(1).some((x) => deepEq(x, args[0])));
+    case 'concat':
+      return C(args.map((x) => (x === null || x === undefined ? '' : String(x))).join(''));
+    case 'to-string':
+      return C(args[0] === null || args[0] === undefined ? '' : String(args[0]));
+    case 'lowercase':
+      return C(String(args[0] ?? '').toLowerCase());
+    case 'trim':
+      return C(String(args[0] ?? '').trim());
+    case 'substring-before': {
+      const s = String(args[0] ?? '');
+      const i = s.indexOf(String(args[1] ?? ''));
+      return C(i < 0 ? '' : s.slice(0, i));
+    }
+    case 'substring-after': {
+      const s = String(args[0] ?? '');
+      const needle = String(args[1] ?? '');
+      const i = s.indexOf(needle);
+      return C(i < 0 ? '' : s.slice(i + needle.length));
+    }
+    case 'coalesce':
+      return C(args.find((x) => x !== null && x !== undefined) ?? null);
+    default:
+      return E; // an unknown / non-deterministic builtin fails closed
+  }
+}
+
+/**
+ * spec15pt2 F1 — the **canonical** three-valued `AuthorizationPolicyDef.allow` evaluator,
+ * used by every policy-bearing surface (spec15pt2 §33). Returns the `{ ok, value }` shape
+ * `decideAuthorization` already consumes:
+ *
+ * - `allow` reduces to **exactly `true`** (with every required security input present) ⇒
+ *   `{ ok: true, value: true }` — the only ALLOW;
+ * - `allow` reduces to any other concrete value ⇒ `{ ok: true, value: false }`;
+ * - the truth of `allow` depends on a **missing PRINCIPAL / RESOURCE field**
+ *   (`AbsentSecurityValue`) ⇒ `{ ok: true, value: false }` — absence never creates authority
+ *   through `eq` / `neq` / `not` / `or` (spec15pt2 §8-§12);
+ * - an evaluation error (malformed node reaching the runtime, unsupported builtin) ⇒
+ *   `{ ok: false }`.
+ *
+ * A constant `literal(true)` is `{ ok: true, value: true }` regardless of principal — an
+ * explicitly public policy still admits an anonymous caller (spec15pt2 §13, §14).
+ */
+export function evaluateAuthorizationPolicyAllow(
+  allow: unknown,
+  scope: AuthorizationPolicyScope,
+): AuthorizationCheckPart {
+  let result: AuthzValue;
+  try {
+    result = evalAuthz(allow, scope, new Set());
+  } catch {
+    return { ok: false };
+  }
+  if (result.t === 'e') return { ok: false };
+  if (result.t === 'u') return { ok: true, value: false };
+  return { ok: true, value: result.v };
 }
 
 /**

@@ -2,7 +2,7 @@
   "conformance": "axiom.conformance.v9",
   "baseContract": "axiom.server.v9",
   "protocol": "axiom.protocol.v1",
-  "release": "0.15.0-alpha.1",
+  "release": "0.15.0-alpha.2",
   "description": "Portable authorization conformance fixtures (spec15 §71-§73). Each file carries a compiled axiom.server.v9 Server IR, the principal records each credential resolves to, provider seed rows, and a deterministic driver script — every step carrying the decision the fixture author computed independently (ALLOW/DENY, and for a query the exact authorized row set). Running one needs only runAuthorizationConformanceFixture from @cynodia/axiom-server and the semantics in docs/AUTHORIZATION.md. Full mixed-build semantic-fingerprint divergence and real-process crash boundaries are the spec15 Phase I suite.",
   "fixtures": [
     {
@@ -87,6 +87,23 @@
         "allow",
         "deny",
         "query filtering"
+      ]
+    },
+    {
+      "name": "pt2-deny-list-absent-value",
+      "covers": [
+        "deny",
+        "role/claim condition",
+        "action invocation",
+        "allow"
+      ]
+    },
+    {
+      "name": "pt2-owner-both-absent",
+      "covers": [
+        "deny",
+        "owner",
+        "resource-owner condition"
       ]
     }
   ]

@@ -30,9 +30,19 @@ import {
   canonicalJSON,
   canonicalWorkflowForFingerprint,
   compatibilityKeyString,
+  usesAuthorizationVocabulary,
   type AuthorityCompatibilityKey,
   type ServerIR,
 } from './deps.js';
+
+/**
+ * spec15pt2 §35 — the authorization-evaluator semantics version stamped into an
+ * authority's compatibility key when the Server IR carries authorization vocabulary.
+ * `alpha.1` did not stamp this field; `alpha.2` (three-valued absent-value-safe evaluator)
+ * does, so a mixed `alpha.1`/`alpha.2` cluster over one authorization-bearing graph is
+ * fail-closed incompatible.
+ */
+export const AUTHORIZATION_RUNTIME_VERSION = 'axiom.authz.v2';
 
 type ExecutableKind = (typeof EXECUTABLE_KINDS)[number];
 
@@ -148,6 +158,9 @@ export function serverIrCompatibilityKey(ir: ServerIR): AuthorityCompatibilityKe
     schemaFingerprint: ir.schemaFingerprint ?? '',
     serverContract: String(ir.contract),
     semanticFingerprint: serverIrSemanticFingerprint(ir),
+    // Only an authorization-bearing IR gets the evaluator-version discriminator, so a graph
+    // with no policy rolls alpha.1 → alpha.2 unaffected (spec15pt2 §35).
+    ...(usesAuthorizationVocabulary(ir as never) ? { authorizationRuntime: AUTHORIZATION_RUNTIME_VERSION } : {}),
   });
 }
 

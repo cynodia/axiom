@@ -2,7 +2,7 @@
   "conformance": "axiom.conformance.v4",
   "baseContract": "axiom.server.v6",
   "protocol": "axiom.protocol.v1",
-  "release": "0.10.0-alpha.1",
+  "release": "0.15.0-alpha.2",
   "description": "Portable query conformance fixtures (spec 0.10 §89-91). Each file carries a compiled axiom.server.v6 Server IR, a dataset of provider rows, the principals, and a query/invoke step sequence with the exact results required. Running one needs only a DataProvider and the semantics in docs/QUERIES.md and docs/AUTHORITY.md.",
   "fixtures": [
     {

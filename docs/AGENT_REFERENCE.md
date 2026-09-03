@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.15.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.15.0-alpha.2. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -1262,7 +1262,13 @@ reference is now enforced; `AUTHORIZATION_ENFORCEMENT_UNAVAILABLE` /
 
 One authorization language. An `AuthorizationPolicyDef` (graph node kind
 `authorization-policy`) is a single boolean `allow` `Expression`. Exactly `true` ⇒ ALLOW;
-`false`, an absent policy, or **any** evaluation error ⇒ DENY (fail closed). Closed
+`false`, an absent policy, or **any** evaluation error ⇒ DENY (fail closed). **A missing
+PRINCIPAL / RESOURCE field never satisfies a rule** (spec15pt2): the policy evaluator is
+three-valued (concrete / security-absence / error), so `PRINCIPAL.role != "banned"`,
+`NOT(PRINCIPAL.role == "banned")` and `RESOURCE.ownerId == PRINCIPAL.id` all DENY when the
+named field is absent or the caller is anonymous — `neq` / `not` / `or` cannot turn absence
+into authority. `literal(true)` stays a genuine constant (explicit public still admits
+anonymous). Ordinary `Expression` semantics elsewhere are unchanged. Closed
 expression scope — the three reserved ids exported from core: `ref(PRINCIPAL)`
 (`'axiom_principal'`, the id `ActionDef.authorization` already uses), `ref(RESOURCE)`
 (`'axiom_resource'` — for `action.invoke`, a `{ id, kind }` descriptor), `ref(OPERATION)`

@@ -1,6 +1,6 @@
 # Authorization
 
-Axiom 0.15.0-alpha.1. The operational contract for **authorization completeness** — the 0.15
+Axiom 0.15.0-alpha.2. The operational contract for **authorization completeness** — the 0.15
 milestone (spec15). Whether a principal may perform a semantic operation is part of the
 graph's executable meaning — not a runtime concern, not UI visibility, not something that
 varies by transport, provider, process, retry path or authority topology. `axiom.server.v9`
@@ -11,9 +11,12 @@ prior contract.
 > outside portable application semantics. **Authorization** answers *may this principal
 > perform this semantic operation?* — that is what this document defines.
 
-0.15 landed in nine phases (A–I). This document describes the **model** (stable) and marks
-which phase delivered each surface. External adversarial validation precedes the semantic
-freeze (spec15 §134).
+0.15 landed in nine phases (A–I); `0.15.0-alpha.2` (spec15pt2) is a corrective pass —
+authorization **absent-value safety** (a missing PRINCIPAL / RESOURCE field never grants
+authority), `validateGraph` totality over a malformed `allow` tree, and a fail-closed
+`host.authenticate` exception boundary. This document describes the **model** (stable) and
+marks which phase delivered each surface. External adversarial validation precedes the
+semantic freeze (spec15 §134).
 
 | Phase | Delivers | State |
 | --- | --- | --- |
@@ -67,6 +70,16 @@ graph.addNode<AuthorizationPolicyDef>({
 - **ALLOW / DENY, fail closed.** `allow` evaluating to exactly `true` is **ALLOW**. `false`,
   an absent policy field, or *any evaluation error* is **DENY** — the safe direction for a
   failed access check is always refusal (spec15 §8, §123).
+- **A missing PRINCIPAL / RESOURCE field never satisfies a rule** (spec15pt2 F1). The policy
+  evaluator is three-valued — a concrete value, **security-scope absence** (a field the
+  scope object does not carry), or an evaluation error. A comparison, `not`, `neq` or `or`
+  whose truth would depend on absence is *not satisfied*, so `PRINCIPAL.role != "banned"` /
+  `NOT(PRINCIPAL.role == "banned")` / `RESOURCE.ownerId == PRINCIPAL.id` all **DENY** when
+  the named field is absent or the caller is anonymous. This is authorization-evaluation
+  semantics only; ordinary `Expression` equality/nullish behaviour elsewhere is unchanged
+  (spec15pt2 §4). An `OR` branch that is *concretely* true still allows even if the other
+  branch is absent-dependent. `literal(true)` is a genuine constant — an explicitly public
+  policy still admits an anonymous caller.
 - **Referenced by id.** A protected surface points at a policy:
   - `ActionDef.authorizationPolicy` — `action.invoke`
   - `QueryDef.authorizationPolicy` — `query.read` (distinct from `readPolicyId`, which
@@ -121,6 +134,14 @@ architecture, preserved). Therefore:
 A graph with **no** authorization vocabulary compiles to the byte-identical v1–v8 document
 it always did and its fingerprint is unchanged (spec15 §39, §132).
 
+**Evaluator version.** `0.15.0-alpha.1` and `0.15.0-alpha.2` evaluate the *same* policy
+differently (absent-value safety, spec15pt2 F1), yet the graph — and its
+`semanticFingerprint` — is identical. So the `AuthorityCompatibilityKey` carries an
+`authorizationRuntime` discriminator, present only when the IR uses authorization
+vocabulary: a mixed `alpha.1` / `alpha.2` cluster over an authorization-bearing graph is
+fail-closed **incompatible** (spec15pt2 §35), while a graph with no policy rolls the
+upgrade unaffected.
+
 ---
 
 ## Public-API authorization inventory (Phase A)
@@ -166,7 +187,9 @@ machine `reason` —
 `policy-denied` (the policy is not exactly `true`), `policy-error` (the policy threw — an
 evaluation error is DENY, never ALLOW, spec15 §123), `legacy-denied` / `legacy-error` (the
 legacy `authorization` expression), or (for workflow instance ops with no policy declared)
-`owner-mismatch` — plus `actionId` / `queryId` where applicable. A denied `query` operation
+`owner-mismatch`, or (spec15pt2 F3, when `host.authenticate` itself threw)
+`authentication-error` with `operation: 'authentication'` — plus `actionId` / `queryId`
+where applicable. A denied `query` operation
 inside an action surfaces as `QUERY_OPERATION_FAILED` with `details.code =
 'AUTHORIZATION_DENIED'` and rolls the action transaction back. A denied `workflow.inspect` /
 `workflow.history` is answered like a missing instance (`undefined` / `[]`), never

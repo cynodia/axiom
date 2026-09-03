@@ -15,6 +15,7 @@ import {
   SERVER_IR_CONTRACTS,
   allowedInvocationSources,
   decideAuthorization,
+  evaluateAuthorizationPolicyAllow,
   optionalType,
   entityType,
   primitiveType,
@@ -895,11 +896,38 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     return identity ? principal[identity] : undefined;
   }
 
-  async function resolvePrincipal(request: InvokeRequest): Promise<PrincipalRecord | null> {
+  /**
+   * spec15pt2 F3 — the **one** credential-resolution boundary. `host.authenticate` is an
+   * ingress trust boundary; if it throws, the request fails **closed** — never anonymous
+   * (spec15pt2 §30, §42, §107) — and the exception (which may carry a token or a stack)
+   * never crosses the semantic boundary. `{ ok: false }` maps at every call site to an
+   * `AUTHORIZATION_DENIED` refusal with zero mutation and zero disclosure.
+   */
+  async function tryAuthenticate(
+    credential: unknown,
+  ): Promise<{ ok: true; principal: PrincipalRecord | null } | { ok: false }> {
     if (!host.authenticate) {
-      return null;
+      return { ok: true, principal: null };
     }
-    return (await host.authenticate(request.credential ?? null)) ?? null;
+    try {
+      return { ok: true, principal: (await host.authenticate((credential ?? null) as never)) ?? null };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  /** The canonical structured refusal when credential resolution failed (spec15pt2 §43, §44). */
+  function authenticationRefused(details: Record<string, unknown> = {}): RuntimeDiagnostic {
+    return diagnostic(SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_DENIED, 'The caller could not be authenticated', {
+      operation: 'authentication',
+      reason: 'authentication-error',
+      ...details,
+    });
+  }
+
+  async function resolvePrincipal(request: InvokeRequest): Promise<PrincipalRecord | null | 'auth-error'> {
+    const resolved = await tryAuthenticate(request.credential ?? null);
+    return resolved.ok ? resolved.principal : 'auth-error';
   }
 
   /** Untrusted input, checked against the declared parameter types. */
@@ -995,9 +1023,12 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       return null;
     }
 
-    // `PRINCIPAL` is already hydrated by `invokeCore`; `evaluatePolicy` binds `OPERATION` /
-    // `RESOURCE` for the check.
-    const policyPart = evaluatePolicy(policyId, 'action.invoke', { id: String(action.id), kind: 'action' });
+    const policyPart = evaluatePolicy(
+      policyId,
+      'action.invoke',
+      { id: String(action.id), kind: 'action' },
+      context.principal as Record<string, unknown> | null,
+    );
     const legacyPart = legacy ? evalToPart(runtime.evaluate(legacy)) : undefined;
 
     const { decision, reason } = decideAuthorization({
@@ -1023,25 +1054,34 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   }
 
   /**
-   * Evaluate one `AuthorizationPolicyDef` for a canonical operation and its resource, in the
-   * one closed scope (`PRINCIPAL` / `OPERATION` / `RESOURCE`). Returns the `{ ok, value }`
-   * part `decideAuthorization` consumes, or `undefined` when there is no policy to run.
-   * Fail-closed: a policy id that resolves to nothing (only possible in a hand-tampered IR —
-   * `validateGraph` rejects a dangling `authorizationPolicy`) yields `{ ok: false }`. The
-   * caller must have hydrated `PRINCIPAL` first.
+   * The **one** `AuthorizationPolicyDef` evaluator every policy-bearing surface uses
+   * (spec15 §33, §96). The closed scope is `{ principal, resource, operation }`; policy
+   * `allow` is run by `core`'s three-valued `evaluateAuthorizationPolicyAllow` (spec15pt2
+   * F1) — a missing PRINCIPAL / RESOURCE field is *security-scope absence*, never an
+   * ordinary `undefined`, so `neq` / `not` / `or` cannot turn absence into authority.
+   * Returns the `{ ok, value }` part `decideAuthorization` consumes, or `undefined` when
+   * there is no policy. Fail-closed: a policy id that resolves to nothing (only possible in
+   * a hand-tampered IR — `validateGraph` rejects a dangling `authorizationPolicy`) yields
+   * `{ ok: false }`.
    */
   function evaluatePolicy(
     policyId: NodeId | undefined,
     operation: AuthorizationOperation,
     resource: unknown,
+    principal: Record<string, unknown> | null,
   ): { ok: boolean; value?: unknown } | undefined {
     if (policyId === undefined) {
       return undefined;
     }
-    runtime.hydrateState(OPERATION, operation);
-    runtime.hydrateState(RESOURCE, (resource ?? null) as never);
     const policy = authorizationPolicies.get(String(policyId));
-    return policy ? evalToPart(runtime.evaluate(policy.allow)) : { ok: false };
+    if (!policy) {
+      return { ok: false };
+    }
+    return evaluateAuthorizationPolicyAllow(policy.allow, {
+      principal: principal ?? null,
+      resource: (resource ?? null) as Record<string, unknown> | null,
+      operation,
+    });
   }
 
   /**
@@ -1061,8 +1101,12 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     if (policyId === undefined) {
       return null;
     }
-    runtime.hydrateState(PRINCIPAL, principal);
-    const part = evaluatePolicy(policyId, 'query.read', { id: String(query.id), kind: 'query' });
+    const part = evaluatePolicy(
+      policyId,
+      'query.read',
+      { id: String(query.id), kind: 'query' },
+      principal as Record<string, unknown> | null,
+    );
     const { decision, reason } = decideAuthorization({ ...(part ? { policy: part } : {}) });
     if (decision === 'ALLOW') {
       return null;
@@ -1230,8 +1274,12 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     // Who is calling is established before anything is answered, because the idempotency
     // record is scoped to them. Authenticating first discloses nothing: it is the same work
     // whether or not the action turns out to exist.
+    const resolved = await resolvePrincipal(request);
+    if (resolved === 'auth-error') {
+      return refusal([authenticationRefused({ actionId: request.actionId })], request.requestId);
+    }
     const context: ExecutionContext = {
-      principal: await resolvePrincipal(request),
+      principal: resolved,
       source: 'client',
       ...(request.credential !== undefined ? { credential: request.credential } : {}),
       ...(request.requestId ? { requestId: request.requestId } : {}),
@@ -1359,9 +1407,17 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       };
     }
 
-    const principal = ((host.authenticate
-      ? await host.authenticate(request.credential ?? null)
-      : null) ?? null) as Record<string, LiteralValue> | null;
+    const authed = await tryAuthenticate(request.credential ?? null);
+    if (!authed.ok) {
+      return {
+        kind: 'query-result',
+        protocol: PROTOCOL_VERSION,
+        ok: false,
+        diagnostics: [disclosable(authenticationRefused({ queryId: query.id }))],
+        revision: storeRevision,
+      };
+    }
+    const principal = authed.principal as Record<string, LiteralValue> | null;
 
     // spec15 §16 — `query.read` is decided before the provider is touched and before the
     // result cache is consulted (the cache key is principal-fingerprinted, so a denied
@@ -1599,8 +1655,11 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       }
     }
 
-    const principal = ((host.authenticate ? await host.authenticate(credential as never) : null) ??
-      null) as Record<string, LiteralValue> | null;
+    const authedOpen = await tryAuthenticate(credential);
+    if (!authedOpen.ok) {
+      return { ok: false, code: SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_DENIED, message: 'The caller could not be authenticated' };
+    }
+    const principal = authedOpen.principal as Record<string, LiteralValue> | null;
 
     // spec15 §16 — `query.read` gates a live query at open, identically to a one-shot query.
     // Re-authorization *during* an active subscription (a principal losing a role) is spec15
@@ -1640,9 +1699,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       // that removes a caller's access to a row surfaces as an ordinary `remove` delta
       // within the live-query revision contract (spec15 §79); the reverse is an `insert`
       // (§80).
-      const livePrincipal = ((host.authenticate
-        ? await host.authenticate(credential as never)
-        : null) ?? null) as Record<string, LiteralValue> | null;
+      const authedLive = await tryAuthenticate(credential);
+      if (!authedLive.ok) {
+        // spec15pt2 F3 — a throwing authenticate on re-evaluation stops the stream exactly
+        // as a revocation does; the exception itself never crosses the boundary.
+        const error = new Error('The caller could not be authenticated') as Error & { code?: string };
+        error.code = SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_DENIED;
+        throw error;
+      }
+      const livePrincipal = authedLive.principal as Record<string, LiteralValue> | null;
       const liveDenied = authorizeQueryRead(query, livePrincipal);
       if (liveDenied) {
         const error = new Error(liveDenied.message) as Error & { code?: string };
@@ -1901,16 +1966,21 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         instanceId,
         ...(coordination ? { coordination, leaseMs: coordinationConfig.leaseDurationMs } : {}),
         resolvePrincipal: async (credential) => {
-          const principal = (host.authenticate ? await host.authenticate(credential as never) : null) ?? null;
-          return { principal, fingerprint: await fingerprint(principal ?? 'anon') };
+          const authed = await tryAuthenticate(credential);
+          if (!authed.ok) return { principal: null, fingerprint: 'auth-error', authError: true };
+          return { principal: authed.principal, fingerprint: await fingerprint(authed.principal ?? 'anon') };
         },
         // spec15 Phase E — the workflow engine decides `workflow.start` / `.inspect` /
         // `.history` / `.cancel` through the *same* policy evaluator as an action, in the one
         // closed scope. The engine owns the owner-fingerprint default (no policy declared);
         // this only runs a declared `AuthorizationPolicyDef`.
         authorizePolicy: (policyId, operation, resource, principal) => {
-          runtime.hydrateState(PRINCIPAL, (principal ?? null) as never);
-          const part = evaluatePolicy(nodeId(policyId), operation as AuthorizationOperation, resource);
+          const part = evaluatePolicy(
+            nodeId(policyId),
+            operation as AuthorizationOperation,
+            resource,
+            (principal ?? null) as Record<string, unknown> | null,
+          );
           const { decision, reason } = decideAuthorization({ ...(part ? { policy: part } : {}) });
           return { ok: decision === 'ALLOW', reason };
         },

@@ -125,6 +125,7 @@ export {
   isWorkflowStep,
   workflowStructuralProblems,
   canonicalWorkflowForFingerprint,
+  usesAuthorizationVocabulary,
 } from '@cynodia/axiom-core';
 export {
   BLOB_CHECKSUM_FIELD,

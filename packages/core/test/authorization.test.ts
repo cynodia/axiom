@@ -10,7 +10,9 @@ import {
   authorizationPolicyExpressions,
   authorizationPolicyProblems,
   binary,
+  call,
   decideAuthorization,
+  evaluateAuthorizationPolicyAllow,
   field,
   fieldId,
   literal,
@@ -18,6 +20,7 @@ import {
   primitiveType,
   ref,
   stateLocation,
+  unary,
   usesAuthorizationVocabulary,
   validateGraph,
 } from '@cynodia/axiom-core';
@@ -191,4 +194,111 @@ test('spec15 §37: authorizationPolicyProblems is total over any malformed value
     assert.doesNotThrow(() => authorizationPolicyExpressions(bad));
   }
   assert.deepEqual(authorizationPolicyProblems(ownerPolicy()), []);
+});
+
+// ------------------------------------------------- spec15pt2 F1 — absent-value safety
+
+/** Shorthand: evaluate an `allow` expression against a scope and return ALLOW/DENY. */
+function decide(allow: unknown, scope: { principal?: Record<string, unknown> | null; resource?: Record<string, unknown> | null; operation?: string }): 'ALLOW' | 'DENY' {
+  const part = evaluateAuthorizationPolicyAllow(allow, {
+    principal: scope.principal ?? null,
+    resource: scope.resource ?? null,
+    operation: scope.operation ?? 'action.invoke',
+  });
+  return decideAuthorization({ policy: part }).decision;
+}
+
+const P_ROLE = fieldId('field_p_role');
+const P_ID2 = fieldId('field_p_id');
+const P_TEN = fieldId('field_p_tenant');
+const R_OWNER = fieldId('field_r_owner');
+const R_TEN = fieldId('field_r_tenant');
+const pRole = () => field(ref(PRINCIPAL), P_ROLE);
+
+test('spec15pt2 C1: RESOURCE.ownerId == PRINCIPAL.id with both absent ⇒ DENY', () => {
+  const allow = binary('eq', field(ref(RESOURCE), R_OWNER), field(ref(PRINCIPAL), P_ID2));
+  assert.equal(decide(allow, { principal: {}, resource: { id: 'x', kind: 'query' } }), 'DENY');
+  assert.equal(decide(allow, { principal: null, resource: null }), 'DENY');
+  // concrete match still allows
+  assert.equal(decide(allow, { principal: { [P_ID2]: 'u1' }, resource: { [R_OWNER]: 'u1' } }), 'ALLOW');
+  // concrete non-match denies
+  assert.equal(decide(allow, { principal: { [P_ID2]: 'u1' }, resource: { [R_OWNER]: 'u2' } }), 'DENY');
+});
+
+test('spec15pt2 C2/§10: PRINCIPAL.role != "banned" with role absent ⇒ DENY', () => {
+  const allow = binary('neq', pRole(), literal('banned'));
+  assert.equal(decide(allow, { principal: { [P_ROLE]: 'user' } }), 'ALLOW');
+  assert.equal(decide(allow, { principal: { [P_ROLE]: 'banned' } }), 'DENY');
+  assert.equal(decide(allow, { principal: {} }), 'DENY', 'role absent');
+  assert.equal(decide(allow, { principal: null }), 'DENY', 'anonymous');
+});
+
+test('spec15pt2 C3/§9: NOT(PRINCIPAL.role == "banned") with role absent ⇒ DENY', () => {
+  const allow = unary('not', binary('eq', pRole(), literal('banned')));
+  assert.equal(decide(allow, { principal: { [P_ROLE]: 'user' } }), 'ALLOW');
+  assert.equal(decide(allow, { principal: { [P_ROLE]: 'banned' } }), 'DENY');
+  assert.equal(decide(allow, { principal: {} }), 'DENY');
+  assert.equal(decide(allow, { principal: null }), 'DENY');
+});
+
+test('spec15pt2 C5/§13-§14: constant and operation-only policies are unaffected by absence', () => {
+  assert.equal(decide(literal(true), { principal: null }), 'ALLOW', 'explicit public allows anonymous');
+  assert.equal(decide(literal(false), { principal: { [P_ROLE]: 'admin' } }), 'DENY');
+  const opOnly = binary('eq', ref(OPERATION), literal('workflow.inspect'));
+  assert.equal(decide(opOnly, { principal: null, operation: 'workflow.inspect' }), 'ALLOW', 'anonymous is not a blanket deny');
+  assert.equal(decide(opOnly, { principal: null, operation: 'action.invoke' }), 'DENY');
+});
+
+test('spec15pt2 §11: absence composes through OR and AND', () => {
+  const A = binary('eq', field(ref(RESOURCE), R_OWNER), field(ref(PRINCIPAL), P_ID2));
+  const B = binary('eq', field(ref(RESOURCE), R_TEN), field(ref(PRINCIPAL), P_TEN));
+  const or = binary('or', A, B);
+  assert.equal(decide(or, { principal: {}, resource: {} }), 'DENY', 'both branches absent-dependent');
+  // one branch concretely true ⇒ ALLOW even though the other is absent-dependent
+  assert.equal(decide(or, { principal: { [P_TEN]: 't1' }, resource: { [R_TEN]: 't1' } }), 'ALLOW');
+  const and = binary('and', A, B);
+  assert.equal(decide(and, { principal: { [P_ID2]: 'u1', [P_TEN]: 't1' }, resource: { [R_OWNER]: 'u1' } }), 'DENY', 'true AND absent ⇒ DENY');
+  assert.equal(decide(and, { principal: { [P_ID2]: 'x' }, resource: { [R_OWNER]: 'y' } }), 'DENY', 'false AND absent ⇒ DENY');
+});
+
+test('spec15pt2 §57: a builtin call over an absent security field is non-satisfied', () => {
+  const allow = call('one-of', pRole(), literal('admin'), literal('editor'));
+  assert.equal(decide(allow, { principal: { [P_ROLE]: 'admin' } }), 'ALLOW');
+  assert.equal(decide(allow, { principal: {} }), 'DENY');
+});
+
+test('spec15pt2 §63: a literal undefined is concrete, not security-absence', () => {
+  // eq(literal(undefined), literal(undefined)) is a concrete comparison (true), so a genuinely
+  // constant policy is unaffected — absence tracking is about *field provenance*, not undefined.
+  assert.equal(decide(binary("eq", literal(undefined as never), literal(undefined as never)), {}), 'ALLOW');
+});
+
+test('spec15pt2 §64/§65: a missing scope object and a missing nested field both deny', () => {
+  const allow = binary('eq', pRole(), literal('admin'));
+  assert.equal(decide(allow, { principal: undefined }), 'DENY', 'no principal object');
+  assert.equal(decide(allow, { principal: { [P_ROLE]: undefined } }), 'DENY', 'field present but undefined');
+});
+
+test('spec15pt2 §66: evaluateAuthorizationPolicyAllow is total and fails closed on a malformed tree', () => {
+  for (const bad of [null, 42, { kind: 'nonsense' }, { kind: 'binary' }, { kind: 'field' }]) {
+    const part = evaluateAuthorizationPolicyAllow(bad, { principal: {}, resource: {}, operation: 'action.invoke' });
+    assert.equal(decideAuthorization({ policy: part }).decision, 'DENY', `${JSON.stringify(bad)} ⇒ DENY`);
+  }
+});
+
+test('spec15pt2 F2/§79: validateGraph rejects a malformed AuthorizationPolicyDef.allow', () => {
+  const corpus: unknown[] = [
+    { a: 1 },
+    { kind: 'literal' },
+    { kind: 'nonsense' },
+    { kind: 'binary', operator: 'eq', left: { kind: 'literal', value: 1 } }, // missing right
+    { kind: 'field', source: { kind: 'ref' } }, // ref has no targetId, field has no fieldId
+    { kind: 'call', arguments: [{ kind: 'bogus' }] },
+  ];
+  for (const allow of corpus) {
+    const g = base();
+    g.addNode({ id: nodeId('pol_bad'), kind: 'authorization-policy', allow } as never);
+    const codes = validateGraph(g).errors.map((e) => e.code);
+    assert.ok(codes.includes('AUTHORIZATION_INVALID_POLICY'), `${JSON.stringify(allow)} → codes ${codes.join(',')}`);
+  }
 });

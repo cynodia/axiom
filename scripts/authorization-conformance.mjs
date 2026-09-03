@@ -25,6 +25,7 @@ const F_TENANT = fieldId('field_user_tenant');
 const E_DOC = nodeId('entity_doc');
 const F_DID = fieldId('field_doc_id');
 const F_DTENANT = fieldId('field_doc_tenant');
+const F_DOWNER = fieldId('field_doc_owner');
 const E_NOTE = nodeId('entity_note');
 const F_NID = fieldId('field_note_id');
 
@@ -37,12 +38,16 @@ const POL_ANALYST = nodeId('policy_analyst');
 const POL_MANAGER = nodeId('policy_manager');
 const POL_OP = nodeId('policy_op');
 const POL_DENY = nodeId('policy_deny');
+const POL_DENYLIST = nodeId('policy_denylist'); // PRINCIPAL.role != 'banned'
+const POL_OWNER = nodeId('policy_owner'); // RESOURCE.ownerId == PRINCIPAL.id
 const RP_TENANT = nodeId('readpolicy_tenant');
 
 const A_PUBLIC = nodeId('action_public');
 const A_ADMIN = nodeId('action_admin');
 const A_OP = nodeId('action_op');
 const A_DENY = nodeId('action_deny');
+const A_DENYLIST = nodeId('action_denylist');
+const A_OWNER = nodeId('action_owner');
 const A_STEP = nodeId('action_step');
 
 const Q_DOCS = nodeId('query_docs');
@@ -71,6 +76,7 @@ function buildGraph() {
     fields: [
       { id: F_DID, valueType: primitiveType('string'), required: true },
       { id: F_DTENANT, valueType: primitiveType('string'), required: true },
+      { id: F_DOWNER, valueType: primitiveType('string'), required: false },
     ],
   });
   g.addNode({
@@ -86,6 +92,8 @@ function buildGraph() {
   g.addNode({ id: POL_MANAGER, kind: 'authorization-policy', allow: binary('eq', field(ref(PRINCIPAL), F_ROLE), literal('manager')) });
   g.addNode({ id: POL_OP, kind: 'authorization-policy', allow: binary('eq', ref(OPERATION), literal('action.invoke')) });
   g.addNode({ id: POL_DENY, kind: 'authorization-policy', allow: literal(false) });
+  g.addNode({ id: POL_DENYLIST, kind: 'authorization-policy', allow: binary('neq', field(ref(PRINCIPAL), F_ROLE), literal('banned')) });
+  g.addNode({ id: POL_OWNER, kind: 'authorization-policy', allow: binary('eq', field(ref(RESOURCE), F_DOWNER), field(ref(PRINCIPAL), F_UID)) });
   g.addNode({
     id: RP_TENANT, kind: 'read-policy', entityId: E_DOC, rowScopeId: PROW,
     predicate: binary('eq', field(ref(PROW), F_DTENANT), field(ref(PRINCIPAL), F_TENANT)),
@@ -96,6 +104,8 @@ function buildGraph() {
   g.addNode({ id: A_ADMIN, kind: 'action', authorizationPolicy: POL_ADMIN, operations: bump() });
   g.addNode({ id: A_OP, kind: 'action', authorizationPolicy: POL_OP, operations: bump() });
   g.addNode({ id: A_DENY, kind: 'action', authorizationPolicy: POL_DENY, operations: bump() });
+  g.addNode({ id: A_DENYLIST, kind: 'action', authorizationPolicy: POL_DENYLIST, operations: bump() });
+  g.addNode({ id: A_OWNER, kind: 'action', authorizationPolicy: POL_OWNER, operations: bump() });
   g.addNode({ id: A_STEP, kind: 'action', invocation: { allowedSources: ['system'] }, operations: bump() });
 
   g.addNode({
@@ -141,6 +151,8 @@ const principals = {
   analyst2: { field_user_id: 'u-an2', field_user_role: 'analyst', field_user_tenant: 't2' },
   manager: { field_user_id: 'u-mgr', field_user_role: 'manager', field_user_tenant: 't1' },
   nobody: { field_user_id: 'u-nob', field_user_role: 'viewer', field_user_tenant: 't1' },
+  banned: { field_user_id: 'u-ban', field_user_role: 'banned', field_user_tenant: 't1' },
+  norole: { field_user_id: 'u-nr', field_user_tenant: 't1' },
 };
 const providerRows = {
   [E_DOC]: [
@@ -248,6 +260,29 @@ const fixtures = [
       { do: 'resume-live-query', from: 'lq', query: String(Q_DOCS), credential: 'analyst', expect: { decision: 'ALLOW' } },
       { do: 'resume-live-query', from: 'lq', query: String(Q_DOCS), credential: 'nobody', expect: { decision: 'DENY' } },
     ],
+  },
+  {
+    name: 'pt2-deny-list-absent-value', covers: ['deny', 'role/claim condition', 'action invocation', 'allow'],
+    description: 'spec15pt2 F1 — PRINCIPAL.role != "banned": a concrete non-banned role ALLOWs; role = "banned", role absent, and anonymous all DENY (neq over a missing security field never grants authority).',
+    providerRows, principals,
+    steps: [
+      { do: 'invoke', action: String(A_DENYLIST), credential: 'admin', expect: { decision: 'ALLOW' } },
+      { do: 'invoke', action: String(A_DENYLIST), credential: 'banned', expect: { decision: 'DENY', reason: 'policy-denied' } },
+      { do: 'invoke', action: String(A_DENYLIST), credential: 'norole', expect: { decision: 'DENY', reason: 'policy-denied' } },
+      { do: 'invoke', action: String(A_DENYLIST), expect: { decision: 'DENY', reason: 'policy-denied' } },
+    ],
+    expectFinalState: { [String(S_COUNT)]: 1 },
+  },
+  {
+    name: 'pt2-owner-both-absent', covers: ['deny', 'owner', 'resource-owner condition'],
+    description: 'spec15pt2 F1 C1 — RESOURCE.ownerId == PRINCIPAL.id with both fields absent ⇒ DENY; a concrete owner match ⇒ ALLOW.',
+    providerRows, principals,
+    steps: [
+      { do: 'invoke', action: String(A_OWNER), credential: 'admin', expect: { decision: 'DENY', reason: 'policy-denied' } },
+      { do: 'invoke', action: String(A_OWNER), credential: 'norole', expect: { decision: 'DENY', reason: 'policy-denied' } },
+      { do: 'invoke', action: String(A_OWNER), expect: { decision: 'DENY', reason: 'policy-denied' } },
+    ],
+    expectFinalState: { [String(S_COUNT)]: 0 },
   },
 ];
 

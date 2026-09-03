@@ -11,7 +11,7 @@
     "contract": "axiom.server.v3",
     "id": "conformance-late-query",
     "name": "Conformance late query",
-    "version": "0.8.2",
+    "version": "0.15.0",
     "entities": [],
     "fields": {},
     "states": [

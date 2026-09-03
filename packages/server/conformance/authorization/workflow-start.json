@@ -57,6 +57,15 @@
       "field_user_id": "u-nob",
       "field_user_role": "viewer",
       "field_user_tenant": "t1"
+    },
+    "banned": {
+      "field_user_id": "u-ban",
+      "field_user_role": "banned",
+      "field_user_tenant": "t1"
+    },
+    "norole": {
+      "field_user_id": "u-nr",
+      "field_user_tenant": "t1"
     }
   },
   "steps": [
@@ -89,7 +98,7 @@
     "contract": "axiom.server.v9",
     "id": "authz-conformance",
     "name": "Authorization Conformance",
-    "version": "0.15.0-alpha.1",
+    "version": "0.15.0-alpha.2",
     "entities": [
       {
         "id": "entity_user",
@@ -142,6 +151,14 @@
               "primitive": "string"
             },
             "required": true
+          },
+          {
+            "id": "field_doc_owner",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": false
           }
         ]
       },
@@ -229,6 +246,17 @@
             "primitive": "string"
           },
           "required": true
+        }
+      },
+      "field_doc_owner": {
+        "entityId": "entity_doc",
+        "field": {
+          "id": "field_doc_owner",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": false
         }
       },
       "field_note_id": {
@@ -354,6 +382,62 @@
         "id": "action_deny",
         "kind": "action",
         "authorizationPolicy": "policy_deny",
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_denylist": {
+        "id": "action_denylist",
+        "kind": "action",
+        "authorizationPolicy": "policy_denylist",
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_owner": {
+        "id": "action_owner",
+        "kind": "action",
+        "authorizationPolicy": "policy_owner",
         "operations": [
           {
             "kind": "set",
@@ -588,6 +672,50 @@
         "allow": {
           "kind": "literal",
           "value": false
+        }
+      },
+      {
+        "id": "policy_denylist",
+        "kind": "authorization-policy",
+        "allow": {
+          "kind": "binary",
+          "operator": "neq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "banned"
+          }
+        }
+      },
+      {
+        "id": "policy_owner",
+        "kind": "authorization-policy",
+        "allow": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_resource"
+            },
+            "fieldId": "field_doc_owner"
+          },
+          "right": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_user_id"
+          }
         }
       }
     ],

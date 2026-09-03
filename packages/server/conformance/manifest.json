@@ -2,7 +2,7 @@
   "conformance": "axiom.conformance.v1",
   "baseContract": "axiom.server.v1",
   "protocol": "axiom.protocol.v1",
-  "release": "0.8.2-alpha.1",
+  "release": "0.15.0-alpha.2",
   "description": "Portable conformance fixtures for the Axiom Server IR. Each entry is a self-contained JSON document: the Server IR, the state to start from, the principals, the invocations to perform and the results required. Running them needs no part of this implementation. \"conformance\" above is the fixture-FORMAT version (axiom.conformance.v1/v2); each fixture entry's own \"contract\" is the Server IR contract THAT fixture requires — the two are independent axes and neither implies the other.",
   "areas": [
     "action guards",

@@ -1,12 +1,13 @@
 {
   "conformance": "axiom.conformance.v9",
-  "name": "workflow-inspection",
+  "name": "pt2-deny-list-absent-value",
   "covers": [
-    "workflow inspection",
-    "cross-principal",
-    "anonymous"
+    "deny",
+    "role/claim condition",
+    "action invocation",
+    "allow"
   ],
-  "description": "A declared instanceAccessPolicy gates getWorkflow; an unauthorized caller is answered exactly like a missing instance (no existence leak).",
+  "description": "spec15pt2 F1 — PRINCIPAL.role != \"banned\": a concrete non-banned role ALLOWs; role = \"banned\", role absent, and anonymous all DENY (neq over a missing security field never grants authority).",
   "providerRows": {
     "entity_doc": [
       {
@@ -69,41 +70,43 @@
   },
   "steps": [
     {
-      "do": "start-workflow",
-      "workflow": "wf_guarded",
-      "as": "g",
+      "do": "invoke",
+      "action": "action_denylist",
       "credential": "admin",
-      "arguments": {
-        "input_tag": "k"
-      },
       "expect": {
         "decision": "ALLOW"
       }
     },
     {
-      "do": "inspect-workflow",
-      "instance": "g",
-      "credential": "manager",
+      "do": "invoke",
+      "action": "action_denylist",
+      "credential": "banned",
       "expect": {
-        "visible": true
+        "decision": "DENY",
+        "reason": "policy-denied"
       }
     },
     {
-      "do": "inspect-workflow",
-      "instance": "g",
-      "credential": "admin",
+      "do": "invoke",
+      "action": "action_denylist",
+      "credential": "norole",
       "expect": {
-        "visible": false
+        "decision": "DENY",
+        "reason": "policy-denied"
       }
     },
     {
-      "do": "inspect-workflow",
-      "instance": "g",
+      "do": "invoke",
+      "action": "action_denylist",
       "expect": {
-        "visible": false
+        "decision": "DENY",
+        "reason": "policy-denied"
       }
     }
   ],
+  "expectFinalState": {
+    "state_count": 1
+  },
   "serverIR": {
     "contract": "axiom.server.v9",
     "id": "authz-conformance",
