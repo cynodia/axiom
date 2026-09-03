@@ -226,6 +226,12 @@ export interface QueryDef extends NodeBase {
   pagination?: QueryPagination;
   /** The `ReadPolicyDef` whose predicate is AND-ed into `filter` before execution. */
   readPolicyId?: NodeId;
+  /**
+   * The `AuthorizationPolicyDef` id governing `query.read` — whether this principal may run
+   * the query at all (spec15), distinct from `readPolicyId` which filters *which rows* the
+   * result contains. Absent ⇒ the query's pre-0.15 contract is preserved (spec15 §9).
+   */
+  authorizationPolicy?: NodeId;
 }
 
 export function queryPaginationStrategy(query: QueryDef): QueryPaginationStrategy {

@@ -75,16 +75,16 @@ function sortedList(list: unknown): unknown[] {
  * {@link EXECUTABLE_KINDS} so this projection and the graph-level `semanticFingerprint`
  * cannot disagree about what is executable (spec14pt3 §5, §6, §189).
  *
- * `since: 'v8'` marks a slice added after `axiom.server.v1..v7` were frozen: it contributes
- * to the fingerprint **only when non-empty**, exactly as `core`'s `semanticProjection` skips
- * an empty kind — so every pre-workflow (non-`WorkflowDef`) graph's authority fingerprint is
- * byte-identical to what it was before this correction (spec14pt3 §35, §38, §103). The 13
- * pre-v8 slices stay unconditionally present (an empty array included) to keep *their*
- * frozen bytes unchanged.
+ * `since` marks a slice added after `axiom.server.v1..v7` were frozen (`'v8'` = workflows,
+ * `'v9'` = authorization policies): it contributes to the fingerprint **only when
+ * non-empty**, exactly as `core`'s `semanticProjection` skips an empty kind — so every graph
+ * that does not use that vocabulary keeps a byte-identical authority fingerprint (spec14pt3
+ * §35, §38, §103; spec15 §39, §132). The 13 pre-v8 slices stay unconditionally present (an
+ * empty array included) to keep *their* frozen bytes unchanged.
  */
 const SERVER_IR_EXECUTABLE_SLICES: Record<
   ExecutableKind,
-  { field: keyof ServerIR; shape: 'record' | 'list'; since?: 'v8' }
+  { field: keyof ServerIR; shape: 'record' | 'list'; since?: 'v8' | 'v9' }
 > = {
   action: { field: 'actions', shape: 'record' },
   integration: { field: 'integrations', shape: 'list' },
@@ -100,6 +100,7 @@ const SERVER_IR_EXECUTABLE_SLICES: Record<
   storage: { field: 'storages', shape: 'list' },
   relationship: { field: 'relationships', shape: 'list' },
   workflow: { field: 'workflows', shape: 'list', since: 'v8' },
+  'authorization-policy': { field: 'authorizationPolicies', shape: 'list', since: 'v9' },
 };
 
 /**
@@ -128,7 +129,7 @@ export function serverIrSemanticProjection(ir: ServerIR): Record<string, unknown
       slice.shape === 'record'
         ? sortedRecord(raw as Record<string, unknown> | undefined)
         : sortedList(raw as ReadonlyArray<{ id: unknown }> | undefined);
-    if (slice.since === 'v8' && projected.length === 0) continue;
+    if (slice.since !== undefined && projected.length === 0) continue;
     projection[slice.field as string] = projected;
   }
   return projection;

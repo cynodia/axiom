@@ -36,7 +36,7 @@ non-numeric collections, and obviously incompatible assignments.
 
 ## Codes
 
-121 codes, exported as `VALIDATION_CODES`. Every one is reachable.
+125 codes, exported as `VALIDATION_CODES`. Every one is reachable.
 
 ### Ids and references
 
@@ -228,6 +228,20 @@ permanently `running` workflow.
 | `WORKFLOW_NO_TERMINAL` | A reachable step from which no control-flow path can reach `complete` or `fail` (and which is not an intentional unbounded `wait-event`). |
 | `WORKFLOW_EXPRESSION_SCOPE` | A workflow expression references an id outside the workflow expression scope: `ref(<input id>)`, `ref(<binding id>)`, `ref('EVENT')` (only inside a `wait-event` `where` / `bind`), `ref('PRINCIPAL')`. Not a `StateDef`, not a `QueryDef`. |
 | `WORKFLOW_NONDETERMINISTIC` | A workflow expression calls `now` / `uuid` / `random`. Workflow decisions must be deterministic and replayable. |
+
+### Authorization (0.15)
+
+Full model: [`AUTHORIZATION.md`](AUTHORIZATION.md). Whether a principal may perform a
+semantic operation is executable meaning; a malformed `AuthorizationPolicyDef` is rejected
+by `validateGraph` before it can be compiled to `axiom.server.v9` or executed, always as a
+structured diagnostic, never a native exception (spec15 §36, §37).
+
+| Code | Raised when |
+| --- | --- |
+| `AUTHORIZATION_INVALID_POLICY` | An `AuthorizationPolicyDef` that is not an object, or has no boolean `allow` expression. |
+| `AUTHORIZATION_INVALID_SCOPE` | An `AuthorizationPolicyDef.allow` expression references an id outside the closed policy scope: `ref('PRINCIPAL')`, `ref('RESOURCE')`, `ref('OPERATION')`. Not a `StateDef`, not a `QueryDef`, no ambient runtime state. |
+| `AUTHORIZATION_NONDETERMINISTIC` | An `AuthorizationPolicyDef.allow` expression calls `now` / `uuid` / `random`. An authorization decision must be deterministic for the same semantic inputs. |
+| `AUTHORIZATION_UNKNOWN_POLICY` | An `authorizationPolicy` (action / query), `startPolicy` or `instanceAccessPolicy` (workflow) id that does not resolve to an `authorization-policy` node. |
 
 ### UI and routing
 

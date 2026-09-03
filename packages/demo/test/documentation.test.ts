@@ -281,6 +281,9 @@ test('every validation code is documented, and every documented code exists', ()
     // Axiom diagnostic codes — the provider reconciles them to MIGRATION_IN_PROGRESS /
     // MIGRATION_FAILED (spec11.2 §26).
     'SQLITE_BUSY', 'SQLITE_LOCKED',
+    // Authorization completeness (0.15): exported vocabulary and closed-scope ref ids, not codes.
+    'AUTHORIZATION_OPERATIONS', 'AUTHORIZATION_SCOPE_IDS', 'AUTHORIZATION_DEFAULT',
+    'AUTHORIZATION_NONDETERMINISTIC_BUILTINS', 'RESOURCE', 'OPERATION',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });

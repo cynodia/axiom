@@ -244,6 +244,13 @@ export interface ActionDef extends NodeBase {
    * claiming to. `requiresConfirmation` is UX and is not an authorization mechanism.
    */
   authorization?: Expression;
+  /**
+   * The `AuthorizationPolicyDef` id governing `action.invoke` (spec15). The canonical 0.15
+   * form of `authorization` above: one policy language, one evaluator. If both are present
+   * the effective decision is their conjunction (ALLOW iff both ALLOW). Absent + no legacy
+   * `authorization` ⇒ the action's pre-0.15 public contract is preserved (spec15 §9).
+   */
+  authorizationPolicy?: NodeId;
   /** What the confirmation says, when a plain message is not enough. */
   confirmation?: ConfirmationPresentation;
   /** Restricts which invocation sources may reach this action. Absent means both. */

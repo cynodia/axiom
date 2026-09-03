@@ -228,4 +228,16 @@ export const VALIDATION_CODES = {
   migrationTransformImpure: 'MIGRATION_TRANSFORM_IMPURE',
   /** A `transform-field` whose declared `toType` does not match the field's type in the target schema, or an `add-field` `populate` whose value cannot satisfy the field (spec11 §77). */
   migrationTransformTypeMismatch: 'MIGRATION_TRANSFORM_TYPE_MISMATCH',
+
+  // Authorization completeness (0.15). `validateGraph` rejects a malformed or inconsistent
+  // authorization policy before it can be compiled or executed; every failure is structured,
+  // never a native exception (spec15 §36, §37, §38).
+  /** An `AuthorizationPolicyDef` with no boolean `allow` expression, or a non-object policy value. */
+  authorizationInvalidPolicy: 'AUTHORIZATION_INVALID_POLICY',
+  /** An `AuthorizationPolicyDef.allow` expression references an id outside the policy scope (`PRINCIPAL` / `RESOURCE` / `OPERATION`). */
+  authorizationInvalidScope: 'AUTHORIZATION_INVALID_SCOPE',
+  /** An `authorizationPolicy` / `startPolicy` / `instanceAccessPolicy` id that does not resolve to an `authorization-policy` node. */
+  authorizationUnknownPolicy: 'AUTHORIZATION_UNKNOWN_POLICY',
+  /** An `AuthorizationPolicyDef.allow` expression calls `now` / `uuid` / `random` — authorization must be deterministic (spec15 §34). */
+  authorizationNondeterministic: 'AUTHORIZATION_NONDETERMINISTIC',
 } as const;

@@ -38,6 +38,12 @@ import type { ApplicationGraph } from './graph.js';
  * - `StorageDef` — `readAuthorization` / `uploadAuthorization` expressions, `retry`.
  * - `RelationshipDef` — endpoints and cardinality (also in the schema fingerprint; repeated
  *   here so a semantic-only comparison is self-contained).
+ * - `AuthorizationPolicyDef` — the `allow` expression (spec15). Whether a principal may
+ *   perform a semantic operation is executable meaning: a policy edited from ALLOW to DENY
+ *   moves the fingerprint and makes a mixed-build authority incompatible (spec15 §6, §45,
+ *   §46). The `authorizationPolicy` / `startPolicy` / `instanceAccessPolicy` id an action /
+ *   query / workflow references is a field of those already-projected nodes, so a re-pointed
+ *   reference moves the fingerprint too.
  * - `WorkflowDef` — `inputs`, `bindings`, `entry`, and every step's kind, control-flow edges
  *   and step-specific executable semantics (the `ActionDef` / `EventDef` a step targets, an
  *   `action` step's argument expressions / `retry` policy, a `wait-event` step's correlation
@@ -87,6 +93,7 @@ export const EXECUTABLE_KINDS = [
   'storage',
   'relationship',
   'workflow',
+  'authorization-policy',
 ] as const;
 
 export type ExecutableKind = (typeof EXECUTABLE_KINDS)[number];

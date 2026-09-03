@@ -316,6 +316,39 @@ turn it into a working browser application whose generated JavaScript nobody rea
   untouched. New tests: `server/test/workflows-server.test.ts` (+5 — owner cancels,
   cross-principal / anonymous refused with zero mutation, continue-after-refusal, failover
   parity, terminal idempotency).
+* `specs/spec15.md` — the **0.15 authorization completeness release** (a 9-phase milestone
+  A–I; **this checkout has landed Phase A + Phase B foundation only, no version bump** —
+  `0.15.0-alpha.1` lands with enforcement, Phases C–F). *Whether a principal may perform a
+  semantic operation* is part of the graph's executable meaning. **One** authorization
+  language: `AuthorizationPolicyDef` (`packages/core/src/authorization.ts`, graph node kind
+  `authorization-policy`) — a single boolean `allow` `Expression`, closed scope
+  `PRINCIPAL` / `RESOURCE` / `OPERATION` (never `StateDef` / `QueryDef` /
+  `now`·`uuid`·`random`); exactly `true` ⇒ ALLOW, `false` / absent / **any eval error** ⇒
+  DENY (fail closed). Referenced by id from `ActionDef.authorizationPolicy` (`action.invoke`;
+  conjunction with the legacy `ActionDef.authorization` expression), `QueryDef
+  .authorizationPolicy` (`query.read`, distinct from `readPolicyId` row filtering),
+  `WorkflowDef.startPolicy` (`workflow.start`) and `WorkflowDef.instanceAccessPolicy`
+  (inspect / history / cancel; absent ⇒ 0.14 owner-fingerprint). `AUTHORIZATION_OPERATIONS`
+  is the canonical operation-id vocabulary. **Phase A** — the public-API authorization
+  inventory (`docs/AUTHORIZATION.md`, `reports/AXIOM_0_15_AUTHORIZATION_RESEARCH.md`).
+  **Phase B** — `validateGraph` totality (`authorizationPolicyProblems` /
+  `authorizationPolicyExpressions` total over `unknown`) with `AUTHORIZATION_INVALID_POLICY`
+  / `_INVALID_SCOPE` / `_NONDETERMINISTIC` / `_UNKNOWN_POLICY`; `'authorization-policy'`
+  joins `EXECUTABLE_KINDS` so the **single** projection (`serverIrSemanticProjection` via
+  `SERVER_IR_EXECUTABLE_SLICES`, `since: 'v9'`, emitted only when non-empty) picks it up —
+  `semanticFingerprint` + `AuthorityCompatibilityKey` move on an ALLOW→DENY edit, not on a
+  `name`/`description` edit, and a graph with no authorization vocabulary is byte-identical
+  to its prior v1–v8 document. **Server IR `axiom.server.v9`** (`usesAuthorizationVocabulary`
+  derives it; `server-ir.v9.schema.json` generated). **No enforcement is wired** —
+  `createAxiomServer` fails closed with `AUTHORIZATION_ENFORCEMENT_UNAVAILABLE` on any IR
+  carrying authorization vocabulary rather than running a declared policy as a no-op
+  (spec4 §4). Later phases: C (action/mutation/state), D (query + row unification with
+  `ReadPolicyDef`), E (workflow instance access), F (live-query / subscription / revocation,
+  `AUTHORIZATION_DENIED`), G (`AgentAPI.analyzeAuthorization`), H (`axiom.conformance.v9`),
+  I (adversarial / mixed-build / real-process). New tests:
+  `core/test/authorization.test.ts`, `core/test/semantic-identity.test.ts` (+4 spec15),
+  `server/test/authorization-identity.test.ts`. Report:
+  `AXIOM_0_15_IMPLEMENTATION_REPORT.md`. Full model: `docs/AUTHORIZATION.md`.
 
 Together, spec2–spec14 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is

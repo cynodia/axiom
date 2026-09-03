@@ -42,6 +42,8 @@ import {
   workflowStepSuccessors,
 } from './workflows.js';
 import type { WorkflowBinding, WorkflowDef, WorkflowRetryPolicy, WorkflowStepType } from './workflows.js';
+import { authorizationPolicyProblems } from './authorization.js';
+import type { AuthorizationPolicyDef } from './authorization.js';
 import type { RelationshipDef } from './relationships.js';
 import { relationshipIsToOne } from './relationships.js';
 import type { ReadPolicyDef } from './read-policy.js';
@@ -276,6 +278,9 @@ function validateNode(node: AnyNode, context: Context): void {
     case 'workflow':
       validateWorkflow(node, context);
       return;
+    case 'authorization-policy':
+      validateAuthorizationPolicyNode(node, context);
+      return;
     case 'migration':
       // A `MigrationDef` is validated by the graph-level `validateMigrations` pass, which
       // needs every migration and `graph.schemaVersion` at once — chain contiguity and
@@ -375,6 +380,7 @@ function validateAction(action: ActionDef, context: Context): void {
   if (action.authorization) {
     validateExpression(action.authorization, action.id, context, new Set());
   }
+  requireAuthorizationPolicy(action.authorizationPolicy, action.id, context);
   if (action.invocation?.allowedSources && action.invocation.allowedSources.length === 0) {
     context.errors.push({
       code: VALIDATION_CODES.invalidInvocationSource,
@@ -1035,6 +1041,36 @@ function validateStorage(storage: StorageDef, context: Context): void {
  * its row scope does not collide. Whether the predicate may read `PRINCIPAL` is the
  * authority boundary's job, checked in `validate-authority.ts`.
  */
+/**
+ * spec15 — an `AuthorizationPolicyDef`. Total over any input: a malformed policy produces a
+ * structured `AUTHORIZATION_*` diagnostic, never a native exception (spec15 §36, §37).
+ * `authorizationPolicyProblems` (core) covers structure + closed scope + determinism; the
+ * cross-node ref check (does an `authorizationPolicy` id point here) is on the referencing
+ * node's validator.
+ */
+function validateAuthorizationPolicyNode(policy: AuthorizationPolicyDef, context: Context): void {
+  for (const problem of authorizationPolicyProblems(policy)) {
+    context.errors.push({
+      code: problem.code,
+      message: problem.message,
+      nodeId: (policy as { id?: NodeId })?.id,
+    });
+  }
+}
+
+/** Resolve an `authorizationPolicy` / `startPolicy` / `instanceAccessPolicy` id, if present. */
+function requireAuthorizationPolicy(id: unknown, ownerId: NodeId, context: Context): void {
+  if (id === undefined || id === null) return;
+  const node = typeof id === 'string' ? context.nodes.get(id as NodeId) : undefined;
+  if (!node || node.kind !== 'authorization-policy') {
+    context.errors.push({
+      code: VALIDATION_CODES.authorizationUnknownPolicy,
+      message: `${ownerId} references authorization policy ${String(id)}, which is not an authorization-policy node`,
+      nodeId: ownerId,
+    });
+  }
+}
+
 function validateReadPolicy(policy: ReadPolicyDef, context: Context): void {
   requireKind(policy.entityId, 'entity', policy.id, context, VALIDATION_CODES.unknownQueryEntity);
   const entity = context.nodes.get(policy.entityId);
@@ -1112,6 +1148,8 @@ function policyRowScope(
  * diagnostic — never a thrown `TypeError` on a malformed step.
  */
 function validateWorkflow(workflow: WorkflowDef, context: Context): void {
+  requireAuthorizationPolicy((workflow as { startPolicy?: unknown }).startPolicy, workflow.id, context);
+  requireAuthorizationPolicy((workflow as { instanceAccessPolicy?: unknown }).instanceAccessPolicy, workflow.id, context);
   const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
   const stepIds = new Set<string>();
   for (const step of steps) {
@@ -1452,6 +1490,7 @@ function fieldTypeOf(fieldId: FieldId, context: Context): TypeRef | undefined {
  */
 function validateQuery(query: QueryDef, context: Context): void {
   requireKind(query.source, 'entity', query.id, context, VALIDATION_CODES.unknownQueryEntity);
+  requireAuthorizationPolicy((query as { authorizationPolicy?: unknown }).authorizationPolicy, query.id, context);
   const source = context.nodes.get(query.source);
   const sourceEntity = source?.kind === 'entity' ? source : undefined;
 

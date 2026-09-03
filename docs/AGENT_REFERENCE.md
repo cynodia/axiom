@@ -731,7 +731,8 @@ Portable artifacts, for a runtime written in another language:
 @cynodia/axiom-server/schema/server-ir.v5.schema.json JSON Schema for axiom.server.v5
 @cynodia/axiom-server/schema/server-ir.v6.schema.json JSON Schema for axiom.server.v6
 @cynodia/axiom-server/schema/server-ir.v7.schema.json JSON Schema for axiom.server.v7
-@cynodia/axiom-server/schema/server-ir.v8.schema.json JSON Schema for axiom.server.v8 (latest)
+@cynodia/axiom-server/schema/server-ir.v8.schema.json JSON Schema for axiom.server.v8
+@cynodia/axiom-server/schema/server-ir.v9.schema.json JSON Schema for axiom.server.v9 (latest)
 @cynodia/axiom-server/schema/protocol.v1.schema.json  JSON Schema for the protocol
 @cynodia/axiom-server/conformance/queries/<name>.json one query conformance fixture (axiom.conformance.v4)
 @cynodia/axiom-server/conformance/migrations/<name>.json one migration conformance fixture (axiom.conformance.v5)
@@ -1230,6 +1231,38 @@ Diagnostics (validation): `WORKFLOW_ENTRY_NOT_FOUND` `WORKFLOW_STEP_NOT_FOUND`
 `WORKFLOW_DUPLICATE_BINDING` `WORKFLOW_INVALID_RETRY_POLICY` `WORKFLOW_INVALID_TIMER`
 `WORKFLOW_UNREACHABLE_STEP` `WORKFLOW_NO_TERMINAL` `WORKFLOW_EXPRESSION_SCOPE`
 `WORKFLOW_NONDETERMINISTIC`.
+
+## AUTHORIZATION
+
+Full model: [`AUTHORIZATION.md`](AUTHORIZATION.md). **0.15 is phased.** Phase B (this build)
+adds the vocabulary, `validateGraph` totality, the single semantic projection and
+`axiom.server.v9`; **enforcement is not wired** — `createAxiomServer` fails closed with
+`AUTHORIZATION_ENFORCEMENT_UNAVAILABLE` on any IR that carries authorization vocabulary,
+rather than running a declared policy as a no-op (spec4 §4).
+
+One authorization language. An `AuthorizationPolicyDef` (graph node kind
+`authorization-policy`) is a single boolean `allow` `Expression`. Exactly `true` ⇒ ALLOW;
+`false`, an absent policy, or **any** evaluation error ⇒ DENY (fail closed). Closed
+expression scope: `ref('PRINCIPAL')`, `ref('RESOURCE')`, `ref('OPERATION')` only — **not** a
+`StateDef` (`AUTHORIZATION_INVALID_SCOPE`), **not** a `QueryDef`, **not**
+`now`/`uuid`/`random` (`AUTHORIZATION_NONDETERMINISTIC`). Referenced by id:
+`ActionDef.authorizationPolicy` (`action.invoke`), `QueryDef.authorizationPolicy`
+(`query.read`, distinct from `readPolicyId` row filtering), `WorkflowDef.startPolicy`
+(`workflow.start`), `WorkflowDef.instanceAccessPolicy` (`workflow.inspect`/`.history`/
+`.cancel`). Legacy `ActionDef.authorization` (an `Expression`) and `ReadPolicyDef` coexist;
+the effective decision when both a policy and a legacy expression are present is their
+conjunction. Canonical operation ids: `AUTHORIZATION_OPERATIONS`.
+
+`AuthorizationPolicyDef` is in `EXECUTABLE_KINDS` — editing `allow` from ALLOW to DENY moves
+`semanticFingerprint` and the `AuthorityCompatibilityKey`; a `name`/`description` change
+does not; a graph with **no** authorization vocabulary compiles to the byte-identical v1–v8
+document it always did. Totality: every validate/compile/analyze surface is total over a
+`null` / non-object policy / non-plain `allow` — structured diagnostic, never a native
+`TypeError`.
+
+Diagnostics (validation): `AUTHORIZATION_INVALID_POLICY` `AUTHORIZATION_INVALID_SCOPE`
+`AUTHORIZATION_NONDETERMINISTIC` `AUTHORIZATION_UNKNOWN_POLICY`. Runtime refusal (from Phase
+C): `AUTHORIZATION_DENIED` — terminal, not retryable, carries no secret.
 
 ## Metadata classes
 

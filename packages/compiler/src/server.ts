@@ -17,6 +17,7 @@ import {
   usesMigrationVocabulary,
   usesQueryVocabulary,
   usesWorkflowVocabulary,
+  usesAuthorizationVocabulary,
   usesV4Semantics,
   validateGraph,
 } from '@cynodia/axiom-core';
@@ -43,6 +44,7 @@ import type {
   TransitionConstraintDef,
   TriggerDef,
   WorkflowDef,
+  AuthorizationPolicyDef,
 } from '@cynodia/axiom-core';
 import { GraphValidationError } from './normalize.js';
 import type { CompileOptions } from './normalize.js';
@@ -82,6 +84,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
   const queries: QueryDef[] = [];
   const relationships: RelationshipDef[] = [];
   const readPolicies: ReadPolicyDef[] = [];
+  const authorizationPolicies: AuthorizationPolicyDef[] = [];
   const migrations: MigrationDef[] = [];
   const workflows: WorkflowDef[] = [];
   for (const node of nodes) {
@@ -114,6 +117,12 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
       relationships.push(node);
     } else if (node.kind === 'read-policy') {
       readPolicies.push(node);
+    } else if (node.kind === 'authorization-policy') {
+      // An authorization policy is authority-side by construction: the decision is made on
+      // the authority with the server-computed principal; a client never receives the rule
+      // and can never satisfy it by claiming to (spec15 §3, §65). Authoring markers stripped
+      // like any other trust-boundary payload.
+      authorizationPolicies.push(stripAuthoringMetadata(node));
     } else if (node.kind === 'workflow') {
       // A workflow is authority-side by construction: only the authoritative runtime owns
       // durable orchestration state, leases and fencing (spec14 §87). It never reaches a
@@ -217,6 +226,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     ...(queries.length > 0 ? { queries } : {}),
     ...(relationships.length > 0 ? { relationships } : {}),
     ...(readPolicies.length > 0 ? { readPolicies } : {}),
+    ...(authorizationPolicies.length > 0 ? { authorizationPolicies } : {}),
     ...(workflows.length > 0 ? { workflows } : {}),
   };
 
@@ -252,6 +262,7 @@ export function compileToServerIR(graph: ApplicationGraph, options: CompileOptio
     usesQueryVocabulary(document) ? 'axiom.server.v6' : 'axiom.server.v1',
     usesMigrationVocabulary(document) ? 'axiom.server.v7' : 'axiom.server.v1',
     usesWorkflowVocabulary(document) ? 'axiom.server.v8' : 'axiom.server.v1',
+    usesAuthorizationVocabulary(document) ? 'axiom.server.v9' : 'axiom.server.v1',
   ];
   const contract = contractCandidates.reduce(maxContract);
 

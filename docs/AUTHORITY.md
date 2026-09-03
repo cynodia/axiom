@@ -504,6 +504,7 @@ does for a local failure.
 | `LIVE_QUERY_CURSOR_INVALID` | An `axiom.live-query-cursor.v1` was tampered with, unsigned, or minted for a different query / principal / arguments / read policy. Fail-closed: continuing from it is refused and nothing is disclosed (spec13 §33-§35). |
 | `LIVE_QUERY_CURSOR_INCOMPATIBLE` | A live-query cursor was minted by an authority whose schema fingerprint, semantic fingerprint or server contract differs from this one's — the same fail-closed compatibility check the distributed work store applies. A presentation-only graph change does *not* trigger this (spec13 §79-§82). |
 | `LIVE_QUERY_EVALUATION_FAILED` | Re-evaluating the live query against the `DataProvider` after a committed change failed. Delivered as a `{ kind: 'error' }` message on the live stream; the last delivered result stands and the consumer may reconnect (spec13 §132). |
+| `AUTHORIZATION_ENFORCEMENT_UNAVAILABLE` | The Server IR declares `axiom.server.v9` authorization vocabulary (an `AuthorizationPolicyDef`), which this build validates and fingerprints but does not yet **enforce** — spec15 is landing in phases. `createAxiomServer` fails closed rather than running a declared policy as a silent no-op (spec4 §4, spec15 §128). Removed once enforcement ships. |
 | `SCHEMA_MIGRATION_REQUIRED` | Persisted canonical data is at an older semantic schema than the graph requires; a migration must run before the authority will serve traffic (spec11 §12). |
 | `SCHEMA_INCOMPATIBLE` | Persisted data cannot be reconciled with the graph — a stored schema version ahead of the graph's, or no migration path to it. |
 | `MIGRATION_IN_PROGRESS` | A migration is already running: a migration lock is held with a valid lease, by this instance or another (spec11 §66). |
@@ -691,6 +692,7 @@ page plus the conformance fixtures.
 | `axiom.server.v6` | `QueryDef`, `RelationshipDef` and `ReadPolicyDef`, the `query` operation kind, and the `provider-record` location — the semantic data-access & query layer over large authoritative datasets | 0.10.0 |
 | `axiom.server.v7` | `MigrationDef` and the closed migration-operation vocabulary, plus the top-level `schemaVersion` and `schemaFingerprint` fields — semantic schema evolution over persisted canonical data | 0.11.0 |
 | `axiom.server.v8` | `WorkflowDef` and the closed workflow-step vocabulary (`action`, `wait-event`, `timer`, `branch`, `complete`, `fail`) — durable, portable long-running orchestration | 0.14.0 |
+| `axiom.server.v9` | `AuthorizationPolicyDef` (one boolean `allow` expression over the closed scope `PRINCIPAL` / `RESOURCE` / `OPERATION`) and the `authorizationPolicy` / `startPolicy` / `instanceAccessPolicy` references from actions, queries and workflows — the canonical authorization model. See [`AUTHORIZATION.md`](AUTHORIZATION.md) | 0.15.0 |
 
 `SERVER_IR_CONTRACTS` enumerates all eight, and is the single source of truth this table is
 tested against — `packages/demo/test/documentation.test.ts` fails if a contract in

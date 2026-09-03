@@ -530,6 +530,7 @@ the published package — no repository access is needed to obtain the contract.
 | **Running N authority processes at once: ownership, leases, fencing, delivery guarantees, version skew** | [`docs/DISTRIBUTED_AUTHORITY.md`](docs/DISTRIBUTED_AUTHORITY.md) |
 | **Observing a `QueryDef` result over time: deltas, reconnect, cursor, backpressure, transport** | [`docs/LIVE_QUERIES.md`](docs/LIVE_QUERIES.md) |
 | **Durable workflows: steps, bindings, event waits, timers, retries, cancellation, crash recovery** | [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) |
+| **May this principal perform this operation: `AuthorizationPolicyDef`, closed scope, ALLOW/DENY, fail closed** | [`docs/AUTHORIZATION.md`](docs/AUTHORIZATION.md) |
 | Runtime API, startup lifecycle and diagnostic codes | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
 | Machine queries and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 | Validation codes and what rejects a graph | [`docs/VALIDATION.md`](docs/VALIDATION.md) |

@@ -20,6 +20,7 @@ import {
   usesExternalIOVocabulary,
   usesIntegrationVocabulary,
   usesInvocationVocabulary,
+  usesAuthorizationVocabulary,
   usesV4Semantics,
   validateValueAgainstType,
   nodeId,
@@ -227,6 +228,13 @@ export const SERVER_DIAGNOSTIC_CODES = {
   LIVE_QUERY_CURSOR_INCOMPATIBLE: 'LIVE_QUERY_CURSOR_INCOMPATIBLE',
   /** Re-evaluating a live query against the provider failed (spec13 §132). */
   LIVE_QUERY_EVALUATION_FAILED: 'LIVE_QUERY_EVALUATION_FAILED',
+  /**
+   * The IR carries 0.15 authorization vocabulary (`axiom.server.v9`) but this build cannot
+   * yet **enforce** it — spec15 is landing in phases and enforcement (Phase C onward) is not
+   * in this build. Rather than run a policy as a silent no-op, `createAxiomServer` fails
+   * closed (spec4 §4, spec15 §128). Removed once enforcement ships.
+   */
+  AUTHORIZATION_ENFORCEMENT_UNAVAILABLE: 'AUTHORIZATION_ENFORCEMENT_UNAVAILABLE',
 
   // Schema evolution & semantic migrations (spec11 §76). Defined in `migration.ts` and
   // spread in here so a migration failure crossing the boundary is one of this vocabulary.
@@ -584,6 +592,16 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
   const workflowsContainer: unknown = options.ir.workflows;
   if (workflowsContainer !== undefined && !Array.isArray(workflowsContainer)) {
     throw new WorkflowIRError([{ code: 'WORKFLOW_INVALID_IR', message: 'workflows is not an array' }]);
+  }
+
+  // spec15 Phase B — the authorization model's vocabulary exists (`axiom.server.v9`), is
+  // validated and fingerprinted, but its *enforcement* lands in Phase C+. A declared policy
+  // that the runtime cannot enforce must fail closed, never run as a silent no-op
+  // (spec4 §4, spec15 §128). Removed when enforcement ships.
+  if (usesAuthorizationVocabulary(options.ir as never)) {
+    throw new Error(
+      `${SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_ENFORCEMENT_UNAVAILABLE}: this Server IR declares axiom.server.v9 authorization vocabulary, which this build validates and fingerprints but does not yet enforce (spec15 Phase C+). Refusing rather than running a policy as a no-op.`,
+    );
   }
 
   // A document may not claim a contract older than the vocabulary it uses. Executing it
@@ -2953,6 +2971,9 @@ function understatedContract(ir: ServerIR): ServerIRContract | undefined {
     usesIntegrationVocabulary(ir) ? 'axiom.server.v3' : 'axiom.server.v1',
     usesV4Semantics(ir) ? 'axiom.server.v4' : 'axiom.server.v1',
     usesExternalIOVocabulary(ir) ? 'axiom.server.v5' : 'axiom.server.v1',
+    // spec15 — a document that carries authorization vocabulary but labels itself older
+    // would let an older runtime accept it and skip enforcement (spec15 §46, §66).
+    usesAuthorizationVocabulary(ir as never) ? 'axiom.server.v9' : 'axiom.server.v1',
   ];
   const required = candidates.reduce(maxContract);
   const order = SERVER_IR_CONTRACTS as readonly string[];

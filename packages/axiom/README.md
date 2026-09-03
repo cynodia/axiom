@@ -194,6 +194,7 @@ focused document when the reference is not specific enough for the question at h
 | Running N authority processes at once: ownership, leases, fencing, delivery guarantees, version skew | [`docs/DISTRIBUTED_AUTHORITY.md`](docs/DISTRIBUTED_AUTHORITY.md) |
 | Observing a `QueryDef` result over time: live deltas, reconnect, cursor, backpressure, transport | [`docs/LIVE_QUERIES.md`](docs/LIVE_QUERIES.md) |
 | Durable workflows: steps, bindings, event waits, timers, retries, cancellation, crash recovery | [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) |
+| May this principal perform this operation: `AuthorizationPolicyDef`, closed scope, ALLOW/DENY, fail closed | [`docs/AUTHORIZATION.md`](docs/AUTHORIZATION.md) |
 | Machine queries, mutation impact and graph transformations | [`docs/AGENT_API.md`](docs/AGENT_API.md) |
 
 `docs/AGENT_REFERENCE.md` plus the `.d.ts` declarations are intended to be sufficient on

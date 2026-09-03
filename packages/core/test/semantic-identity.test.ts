@@ -234,3 +234,64 @@ test('spec14pt3: construction order does not affect the workflow fingerprint', (
   const shuffled = workflowGraph((w) => { w.steps = [...w.steps].reverse(); });
   assert.equal(semanticFingerprint(forward), semanticFingerprint(shuffled), 'steps are keyed by id, not position');
 });
+
+// ------------------------------------------------------------- spec15: AuthorizationPolicyDef
+
+import type { AuthorizationPolicyDef } from '@cynodia/axiom-core';
+import { binary as bin, field as fld, fieldId as fid, ref as rf } from '@cynodia/axiom-core';
+
+const POL = nodeId('policy_x');
+const F_R_OWNER = fid('field_r_owner');
+const F_P_ID = fid('field_p_id');
+
+function authzGraph(mut: (p: AuthorizationPolicyDef) => void = () => {}): ApplicationGraph {
+  const g = baseGraph();
+  const policy: AuthorizationPolicyDef = {
+    id: POL,
+    kind: 'authorization-policy',
+    name: 'Owner may act',
+    allow: bin('eq', fld(rf('RESOURCE' as never), F_R_OWNER), fld(rf('PRINCIPAL' as never), F_P_ID)),
+  };
+  mut(policy);
+  g.addNode<AuthorizationPolicyDef>(policy);
+  // reference it from the action so a re-pointed ref is also exercised
+  const action = g.getNode(A_APPROVE) as ActionDef;
+  (action as { authorizationPolicy?: string }).authorizationPolicy = String(POL);
+  g.updateNode(action);
+  return g;
+}
+
+test('spec15 §45: a policy ALLOW→DENY change moves the semantic fingerprint', () => {
+  const base = semanticFingerprint(authzGraph());
+  assert.equal(base, semanticFingerprint(authzGraph()), 'deterministic');
+  // flip the rule to a constant deny
+  const denied = semanticFingerprint(authzGraph((p) => { p.allow = { kind: 'literal', value: false }; }));
+  assert.notEqual(denied, base, 'authorization meaning is executable meaning');
+});
+
+test('spec15 §45: a policy presentation-only change does NOT move the fingerprint', () => {
+  const base = semanticFingerprint(authzGraph());
+  assert.equal(
+    semanticFingerprint(authzGraph((p) => { p.name = 'Renamed policy'; (p as { description?: string }).description = 'docs'; })),
+    base,
+  );
+});
+
+test('spec15: a graph with no authorization vocabulary has an unchanged fingerprint', () => {
+  // baseGraph() carries no policy and no authorizationPolicy ref.
+  const a = semanticFingerprint(baseGraph());
+  const b = semanticFingerprint(baseGraph());
+  assert.equal(a, b);
+  // adding an *unreferenced* policy still changes it (it is executable graph content)…
+  assert.notEqual(semanticFingerprint(authzGraph()), a);
+});
+
+test('spec15: re-pointing an action.authorizationPolicy moves the fingerprint', () => {
+  const withPolicy = authzGraph();
+  const base = semanticFingerprint(withPolicy);
+  const cleared = authzGraph();
+  const action = cleared.getNode(A_APPROVE) as ActionDef;
+  delete (action as { authorizationPolicy?: string }).authorizationPolicy;
+  cleared.updateNode(action);
+  assert.notEqual(semanticFingerprint(cleared), base, 'the authorizationPolicy reference is semantic');
+});

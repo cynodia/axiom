@@ -21,6 +21,7 @@ import type { RelationshipDef } from './relationships.js';
 import type { ReadPolicyDef } from './read-policy.js';
 import type { MigrationDef } from './migration.js';
 import type { WorkflowDef } from './workflows.js';
+import type { AuthorizationPolicyDef } from './authorization.js';
 
 export type SemanticNodeKind =
   | 'entity'
@@ -40,7 +41,8 @@ export type SemanticNodeKind =
   | 'relationship'
   | 'read-policy'
   | 'migration'
-  | 'workflow';
+  | 'workflow'
+  | 'authorization-policy';
 
 /** Every semantic node kind, enumerated so tests can walk them. */
 export const SEMANTIC_NODE_KINDS: readonly SemanticNodeKind[] = [
@@ -62,6 +64,7 @@ export const SEMANTIC_NODE_KINDS: readonly SemanticNodeKind[] = [
   'read-policy',
   'migration',
   'workflow',
+  'authorization-policy',
 ];
 
 export type NodeKind = SemanticNodeKind | UINodeKind;
@@ -85,6 +88,7 @@ export type AnyNode =
   | ReadPolicyDef
   | MigrationDef
   | WorkflowDef
+  | AuthorizationPolicyDef
   | UINode;
 
 export type NodeOfKind<K extends NodeKind> = Extract<AnyNode, { kind: K }>;

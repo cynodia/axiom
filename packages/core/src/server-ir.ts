@@ -23,6 +23,8 @@ import type { MigrationDef } from './migration.js';
 import { migrationExpressions } from './migration.js';
 import type { WorkflowDef } from './workflows.js';
 import { workflowExpressions } from './workflows.js';
+import type { AuthorizationPolicyDef } from './authorization.js';
+import { authorizationPolicyExpressions } from './authorization.js';
 
 /**
  * The contracts a Server IR may declare. A runtime that does not recognize the value MUST
@@ -48,6 +50,7 @@ export const SERVER_IR_CONTRACTS = [
   'axiom.server.v6',
   'axiom.server.v7',
   'axiom.server.v8',
+  'axiom.server.v9',
 ] as const;
 
 export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
@@ -56,7 +59,7 @@ export type ServerIRContract = (typeof SERVER_IR_CONTRACTS)[number];
 export const SERVER_IR_CONTRACT: ServerIRContract = 'axiom.server.v1';
 
 /** The newest contract this implementation produces and executes. */
-export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v8';
+export const SERVER_IR_LATEST_CONTRACT: ServerIRContract = 'axiom.server.v9';
 
 /** Operation kinds no contract before `axiom.server.v5` contains. */
 export const SERVER_IR_V5_OPERATION_KINDS: readonly string[] = [
@@ -211,6 +214,42 @@ export function usesWorkflowVocabulary(ir: { workflows?: readonly unknown[] }): 
 }
 
 /**
+ * Whether a document uses 0.15 authorization vocabulary — any `AuthorizationPolicyDef`, or
+ * any `authorizationPolicy` / `startPolicy` / `instanceAccessPolicy` reference on an action,
+ * query or workflow. Any of it present requires `axiom.server.v9`; a document with none is
+ * byte-identical to the v1–v8 document it always was (spec15 §70). Total over a tampered IR.
+ */
+export function usesAuthorizationVocabulary(ir: {
+  authorizationPolicies?: readonly unknown[];
+  actions?: Record<string, { authorizationPolicy?: unknown }>;
+  queries?: readonly { authorizationPolicy?: unknown }[];
+  workflows?: readonly { startPolicy?: unknown; instanceAccessPolicy?: unknown }[];
+}): boolean {
+  if (Array.isArray(ir.authorizationPolicies) && ir.authorizationPolicies.length > 0) return true;
+  for (const action of Object.values(ir.actions ?? {})) {
+    if (action && typeof action === 'object' && (action as { authorizationPolicy?: unknown }).authorizationPolicy !== undefined) {
+      return true;
+    }
+  }
+  for (const query of Array.isArray(ir.queries) ? ir.queries : []) {
+    if (query && typeof query === 'object' && (query as { authorizationPolicy?: unknown }).authorizationPolicy !== undefined) {
+      return true;
+    }
+  }
+  for (const workflow of Array.isArray(ir.workflows) ? ir.workflows : []) {
+    if (
+      workflow &&
+      typeof workflow === 'object' &&
+      ((workflow as { startPolicy?: unknown }).startPolicy !== undefined ||
+        (workflow as { instanceAccessPolicy?: unknown }).instanceAccessPolicy !== undefined)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Whether a document uses 0.10's semantic data-access vocabulary — a `QueryDef`, a
  * `RelationshipDef`, a `ReadPolicyDef`, or a `query` operation inside an action. A v5
  * runtime knows none of it: it would accept a document that promises demand-driven,
@@ -254,6 +293,7 @@ export function serverIRExpressions(ir: {
   storages?: readonly StorageDef[];
   queries?: readonly QueryDef[];
   readPolicies?: readonly ReadPolicyDef[];
+  authorizationPolicies?: readonly AuthorizationPolicyDef[];
   migrations?: readonly MigrationDef[];
   workflows?: readonly WorkflowDef[];
 }): Expression[] {
@@ -297,6 +337,10 @@ export function serverIRExpressions(ir: {
   }
   for (const policy of ir.readPolicies ?? []) {
     found.push(policy.predicate);
+  }
+  const authorizationPolicies = (ir as { authorizationPolicies?: unknown }).authorizationPolicies;
+  for (const policy of Array.isArray(authorizationPolicies) ? (authorizationPolicies as unknown[]) : []) {
+    found.push(...authorizationPolicyExpressions(policy));
   }
   for (const migration of ir.migrations ?? []) {
     found.push(...migrationExpressions(migration));
@@ -450,6 +494,14 @@ export interface ServerIR {
    * cannot satisfy one by claiming to.
    */
   readPolicies?: ReadPolicyDef[];
+  /**
+   * Canonical authorization policies (spec15, `axiom.server.v9`). Each is a boolean `allow`
+   * expression over the closed scope `PRINCIPAL` / `RESOURCE` / `OPERATION`; a surface points
+   * at one by id (`ActionDef.authorizationPolicy`, `QueryDef.authorizationPolicy`,
+   * `WorkflowDef.startPolicy` / `instanceAccessPolicy`). Portable plain data — no callback,
+   * no host object. Present only in an `axiom.server.v9` document.
+   */
+  authorizationPolicies?: AuthorizationPolicyDef[];
   /**
    * Semantic migrations between consecutive schema versions (spec11 §14). Present only in an
    * `axiom.server.v7` document. Portable plain data — a closed operation vocabulary and

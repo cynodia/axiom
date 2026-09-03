@@ -144,6 +144,21 @@ export interface WorkflowDef extends NodeBase {
   bindings?: WorkflowBinding[];
   entry: NodeId;
   steps: WorkflowStep[];
+  /**
+   * The `AuthorizationPolicyDef` id governing `workflow.start` (spec15 §100). Ability to
+   * discover a `WorkflowDef` is not ability to start it. Absent ⇒ any principal may start
+   * it (its pre-0.15 contract), separate from each action step's own authorization, which
+   * is always re-evaluated (spec15 §10, §101).
+   */
+  startPolicy?: NodeId;
+  /**
+   * The `AuthorizationPolicyDef` id governing `workflow.inspect` / `workflow.history` /
+   * `workflow.cancel` on a *running instance* (spec15 §13-§15). Absent ⇒ the 0.14
+   * owner-fingerprint rule (the caller's principal fingerprint must equal the instance's).
+   * A policy may broaden this, but only explicitly — a role like `admin` never bypasses
+   * owner-only unless the policy says so (spec15 §14, §74).
+   */
+  instanceAccessPolicy?: NodeId;
 }
 
 // ---------------------------------------------------------------------------- accessors
