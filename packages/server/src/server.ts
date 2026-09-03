@@ -9,11 +9,15 @@ import {
   EFFECT_OPERATION_ID_FIELD,
   EFFECT_RESULT_FIELD,
   EFFECT_RETRYABLE_FIELD,
+  OPERATION,
   PRINCIPAL,
+  RESOURCE,
   SERVER_IR_CONTRACTS,
   allowedInvocationSources,
+  decideAuthorization,
   optionalType,
   entityType,
+  primitiveType,
   maxContract,
   requiredServerContract,
   serverIRExpressions,
@@ -21,6 +25,7 @@ import {
   usesIntegrationVocabulary,
   usesInvocationVocabulary,
   usesAuthorizationVocabulary,
+  usesUnenforcedAuthorizationVocabulary,
   usesV4Semantics,
   validateValueAgainstType,
   nodeId,
@@ -28,6 +33,8 @@ import {
 import type {
   ActionDef,
   ApplicationIR,
+  AuthorizationOperation,
+  AuthorizationPolicyDef,
   EntityDef,
   EventDef,
   Expression,
@@ -411,20 +418,28 @@ export interface AxiomServer {
   }): Promise<{ instanceId: string; status: string } | { error: { code: string; message: string } }>;
   /**
    * Cancel a workflow instance (spec14 §75). Idempotent; not a rollback. **Authorized**
-   * (spec14pt6): `credential` is resolved and its principal fingerprint must match the one
-   * the instance was started under, or the call is refused `AUTHORIZATION_DENIED` with no
-   * mutation. Cancellation of an already-terminal instance stays idempotent for any caller.
+   * (spec14pt6 + spec15 §14): a declared `WorkflowDef.instanceAccessPolicy` decides
+   * `workflow.cancel`; with none, `credential`'s principal fingerprint must match the one the
+   * instance was started under. Either way an unauthorized call is refused
+   * `AUTHORIZATION_DENIED` with no mutation. Cancellation of an already-terminal instance
+   * stays idempotent for any caller (spec15 §110).
    */
   cancelWorkflow(
     instanceId: string,
     credential?: unknown,
   ): Promise<{ ok: true; status: string } | { error: { code: string; message: string } }>;
-  /** The semantic status of one workflow instance (spec14 §136, §137) — no secrets. */
-  getWorkflow(instanceId: string): Promise<WorkflowInspection | undefined>;
-  /** Bounded listing of the workflow instances this authority can see (spec14 §136). */
-  inspectWorkflows(limit?: number): Promise<WorkflowInspection[]>;
-  /** The durable semantic transition history of one instance (spec14 §142, §144). */
-  workflowHistory(instanceId: string): Promise<Array<Record<string, unknown>>>;
+  /**
+   * The semantic status of one workflow instance (spec14 §136, §137) — no secrets. An
+   * operator-inspection API: with no `WorkflowDef.instanceAccessPolicy` it is an explicit
+   * trust boundary (not reachable through the principal-facing protocol, spec15 §112-§113).
+   * When a policy **is** declared it decides `workflow.inspect`, and an unauthorized caller
+   * is answered exactly like a missing instance — `undefined`, no existence leak (spec15 §39).
+   */
+  getWorkflow(instanceId: string, credential?: unknown): Promise<WorkflowInspection | undefined>;
+  /** Bounded listing of the workflow instances this authority can see (spec14 §136). Same trust boundary as `getWorkflow`; a declared policy filters the list. */
+  inspectWorkflows(limit?: number, credential?: unknown): Promise<WorkflowInspection[]>;
+  /** The durable semantic transition history of one instance (spec14 §142, §144). Same trust boundary as `getWorkflow`; a declared policy decides `workflow.history` (unauthorized ⇒ `[]`). */
+  workflowHistory(instanceId: string, credential?: unknown): Promise<Array<Record<string, unknown>>>;
   /** Every mutation this authority has applied, with its outcome. */
   mutationLog(): MutationLogEntry[];
   /**
@@ -552,8 +567,14 @@ const DISCLOSABLE_DETAIL_KEYS: readonly string[] = [
   'entityId',
   'failureMode',
   'identity',
+  // spec15 — an authorization refusal names the canonical operation and a non-secret
+  // machine reason (`policy-denied` / `policy-error` / `legacy-denied` / `legacy-error`).
+  // Neither carries a state value or a claim.
+  'operation',
   'preconditionIndex',
   'principal',
+  'queryId',
+  'reason',
   'severity',
   'source',
   'stateId',
@@ -594,13 +615,17 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     throw new WorkflowIRError([{ code: 'WORKFLOW_INVALID_IR', message: 'workflows is not an array' }]);
   }
 
-  // spec15 Phase B — the authorization model's vocabulary exists (`axiom.server.v9`), is
-  // validated and fingerprinted, but its *enforcement* lands in Phase C+. A declared policy
-  // that the runtime cannot enforce must fail closed, never run as a silent no-op
-  // (spec4 §4, spec15 §128). Removed when enforcement ships.
-  if (usesAuthorizationVocabulary(options.ir as never)) {
+  // spec15 Phases C–E — every `AuthorizationPolicyDef` reference the graph vocabulary
+  // defines is now enforced: `ActionDef.authorizationPolicy` (`authorize()`, every
+  // `invokeCore` path), `QueryDef.authorizationPolicy` (`authorizeQueryRead()`, one-shot /
+  // `query` operation / live-query open), `WorkflowDef.startPolicy` /
+  // `instanceAccessPolicy` (the workflow engine, `workflow.start` / `.inspect` / `.history`
+  // / `.cancel`). `usesUnenforcedAuthorizationVocabulary` is therefore `false` for every
+  // valid IR; the gate is kept as the fail-closed extension point for any later phase that
+  // introduces authorization vocabulary ahead of its enforcement (spec4 §4, spec15 §128).
+  if (usesUnenforcedAuthorizationVocabulary(options.ir)) {
     throw new Error(
-      `${SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_ENFORCEMENT_UNAVAILABLE}: this Server IR declares axiom.server.v9 authorization vocabulary, which this build validates and fingerprints but does not yet enforce (spec15 Phase C+). Refusing rather than running a policy as a no-op.`,
+      `${SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_ENFORCEMENT_UNAVAILABLE}: this Server IR declares authorization vocabulary this build validates and fingerprints but does not yet enforce. Refusing rather than running a policy as a no-op.`,
     );
   }
 
@@ -629,6 +654,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
   const entities = new Map<NodeId, EntityDef>(ir.entities.map((entity) => [entity.id, entity]));
   const statesById = new Map<NodeId, StateDef>(ir.states.map((state) => [state.id, state]));
+  // spec15 Phase C — the authorization policies this authority resolves `authorizationPolicy`
+  // references against. Resolved from this authority's own IR; a caller's claim about a
+  // policy is never consulted.
+  const authorizationPolicies = new Map<string, AuthorizationPolicyDef>(
+    (Array.isArray(ir.authorizationPolicies) ? ir.authorizationPolicies : []).map((policy) => [
+      String((policy as { id?: unknown }).id),
+      policy as AuthorizationPolicyDef,
+    ]),
+  );
   /** Persistable state: derived values are recomputed, never stored. */
   const durableStateIds = ir.states.filter((state) => !state.derivation).map((state) => state.id);
 
@@ -941,29 +975,112 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
     );
   }
 
-  /** Authorization, evaluated here and nowhere else. */
+  /**
+   * Authorization for an `action.invoke`, evaluated here and nowhere else — so a direct
+   * call, a workflow action step, a scheduler- or event-triggered action, a retry and a
+   * failover reconciliation all get the identical contract (spec15 §10, §96). Re-evaluated
+   * on every invocation against *current* policy: a workflow started while permitted is
+   * denied at a later step if policy has since changed (spec15 §11), and being started by an
+   * authorized principal grants a workflow no standing authority of its own (spec15 §101).
+   *
+   * The `AuthorizationPolicyDef.allow` policy (0.15) and the legacy `ActionDef.authorization`
+   * expression (pre-0.15) are conjoined by `decideAuthorization`; either failing to evaluate,
+   * or a policy that is not exactly `true`, is DENY — an evaluation error never allows
+   * (spec15 §8, §123).
+   */
   function authorize(action: ActionDef, context: ExecutionContext): RuntimeDiagnostic | null {
-    if (!action.authorization) {
+    const policyId = (action as { authorizationPolicy?: NodeId }).authorizationPolicy;
+    const legacy = action.authorization;
+    if (policyId === undefined && !legacy) {
       return null;
     }
-    const outcome = runtime.evaluate(action.authorization);
-    if (!outcome.ok) {
-      // A rule that cannot be evaluated denies, exactly as an unevaluable constraint is
-      // counted as violated.
-      return diagnostic(
-        SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_DENIED,
-        `Authorization for ${action.name ?? action.id} could not be evaluated`,
-        { actionId: action.id, cause: outcome.diagnostic.code },
-      );
+
+    // `PRINCIPAL` is already hydrated by `invokeCore`; `evaluatePolicy` binds `OPERATION` /
+    // `RESOURCE` for the check.
+    const policyPart = evaluatePolicy(policyId, 'action.invoke', { id: String(action.id), kind: 'action' });
+    const legacyPart = legacy ? evalToPart(runtime.evaluate(legacy)) : undefined;
+
+    const { decision, reason } = decideAuthorization({
+      ...(policyPart ? { policy: policyPart } : {}),
+      ...(legacyPart ? { legacy: legacyPart } : {}),
+    });
+    if (decision === 'ALLOW') {
+      return null;
     }
-    const permitted = Array.isArray(outcome.value) ? outcome.value.length > 0 : Boolean(outcome.value);
-    return permitted
-      ? null
-      : diagnostic(
-          SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_DENIED,
-          `The caller may not invoke ${action.name ?? action.id}`,
-          { actionId: action.id, principal: principalIdentity(context.principal) },
-        );
+    const evaluable = reason !== 'policy-error' && reason !== 'legacy-error';
+    return diagnostic(
+      SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_DENIED,
+      evaluable
+        ? `The caller may not invoke ${action.name ?? action.id}`
+        : `Authorization for ${action.name ?? action.id} could not be evaluated`,
+      {
+        actionId: action.id,
+        operation: 'action.invoke',
+        reason,
+        principal: principalIdentity(context.principal),
+      },
+    );
+  }
+
+  /**
+   * Evaluate one `AuthorizationPolicyDef` for a canonical operation and its resource, in the
+   * one closed scope (`PRINCIPAL` / `OPERATION` / `RESOURCE`). Returns the `{ ok, value }`
+   * part `decideAuthorization` consumes, or `undefined` when there is no policy to run.
+   * Fail-closed: a policy id that resolves to nothing (only possible in a hand-tampered IR —
+   * `validateGraph` rejects a dangling `authorizationPolicy`) yields `{ ok: false }`. The
+   * caller must have hydrated `PRINCIPAL` first.
+   */
+  function evaluatePolicy(
+    policyId: NodeId | undefined,
+    operation: AuthorizationOperation,
+    resource: unknown,
+  ): { ok: boolean; value?: unknown } | undefined {
+    if (policyId === undefined) {
+      return undefined;
+    }
+    runtime.hydrateState(OPERATION, operation);
+    runtime.hydrateState(RESOURCE, (resource ?? null) as never);
+    const policy = authorizationPolicies.get(String(policyId));
+    return policy ? evalToPart(runtime.evaluate(policy.allow)) : { ok: false };
+  }
+
+  /**
+   * `query.read` — spec15 Phase D. Whether the effective principal may run this `QueryDef`
+   * at all, decided by the same evaluator as an action and *before* any provider call, so a
+   * one-shot query, a `query` operation inside an action and a live-query open all refuse
+   * identically (spec15 §16, §54, §96). Row-level filtering stays `ReadPolicyDef`'s job,
+   * AND-ed into the effective filter so the authorized dataset is what `filter`/`sort`/
+   * `limit` see (spec15 §17, §18). No policy ⇒ the query's pre-0.15 (public / read-policy)
+   * contract is unchanged.
+   */
+  function authorizeQueryRead(
+    query: QueryDef,
+    principal: Record<string, LiteralValue> | null,
+  ): RuntimeDiagnostic | null {
+    const policyId = (query as { authorizationPolicy?: NodeId }).authorizationPolicy;
+    if (policyId === undefined) {
+      return null;
+    }
+    runtime.hydrateState(PRINCIPAL, principal);
+    const part = evaluatePolicy(policyId, 'query.read', { id: String(query.id), kind: 'query' });
+    const { decision, reason } = decideAuthorization({ ...(part ? { policy: part } : {}) });
+    if (decision === 'ALLOW') {
+      return null;
+    }
+    return diagnostic(
+      SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_DENIED,
+      reason === 'policy-error'
+        ? `Authorization for query ${query.name ?? query.id} could not be evaluated`
+        : `The caller may not read query ${query.name ?? query.id}`,
+      { queryId: query.id, operation: 'query.read', reason, principal: principalIdentity(principal) },
+    );
+  }
+
+  /** Normalize a `runtime.evaluate` outcome to the `{ ok, value }` shape `decideAuthorization` takes. */
+  function evalToPart(
+    outcome: { ok: true; value: unknown } | { ok: false; diagnostic: RuntimeDiagnostic },
+  ): { ok: boolean; value?: unknown } {
+    return outcome.ok ? { ok: true, value: outcome.value } : { ok: false };
   }
 
   /** Observable states the authority recomputes rather than stores. */
@@ -1246,6 +1363,20 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       ? await host.authenticate(request.credential ?? null)
       : null) ?? null) as Record<string, LiteralValue> | null;
 
+    // spec15 §16 — `query.read` is decided before the provider is touched and before the
+    // result cache is consulted (the cache key is principal-fingerprinted, so a denied
+    // caller could never receive another principal's cached page anyway).
+    const readDenied = authorizeQueryRead(query, principal);
+    if (readDenied) {
+      return {
+        kind: 'query-result',
+        protocol: PROTOCOL_VERSION,
+        ok: false,
+        diagnostics: [disclosable(readDenied)],
+        revision: storeRevision,
+      };
+    }
+
     const strategy = queryPaginationStrategy(query);
     const cap = Math.min(queryMaxPageSize(query), provider.capabilities.maxPageSize);
     const requestedSize = request.pageSize ?? queryDefaultPageSize(query);
@@ -1470,6 +1601,19 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
     const principal = ((host.authenticate ? await host.authenticate(credential as never) : null) ??
       null) as Record<string, LiteralValue> | null;
+
+    // spec15 §16 — `query.read` gates a live query at open, identically to a one-shot query.
+    // Re-authorization *during* an active subscription (a principal losing a role) is spec15
+    // Phase F; here the decision is made once, before the subscription exists.
+    const readDenied = authorizeQueryRead(query, principal);
+    if (readDenied) {
+      return {
+        ok: false,
+        code: SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_DENIED,
+        message: readDenied.message,
+      };
+    }
+
     const policy = policyForQuery(query, readPolicies);
     const sourceIdentityFieldId = entities.get(query.source)?.identityFieldId;
     const identityFieldId = sourceIdentityFieldId ? String(sourceIdentityFieldId) : undefined;
@@ -1487,13 +1631,31 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
 
     const reevaluate = async (): Promise<LiveEvaluation> => {
       await ensureStateCoherent();
+      // spec15 §19, §58, §59 — authorization must remain valid for continued observation, not
+      // only at open. Re-resolve the caller from the retained credential and re-check
+      // `query.read` on every re-evaluation: a revoked principal (auth infra now returns
+      // nothing) or one a policy edit now denies stops the stream — the engine emits a
+      // `{ kind: 'error', code: AUTHORIZATION_DENIED }` and serves no further data. The
+      // *current* principal also drives row filtering (`ReadPolicyDef`), so a claim change
+      // that removes a caller's access to a row surfaces as an ordinary `remove` delta
+      // within the live-query revision contract (spec15 §79); the reverse is an `insert`
+      // (§80).
+      const livePrincipal = ((host.authenticate
+        ? await host.authenticate(credential as never)
+        : null) ?? null) as Record<string, LiteralValue> | null;
+      const liveDenied = authorizeQueryRead(query, livePrincipal);
+      if (liveDenied) {
+        const error = new Error(liveDenied.message) as Error & { code?: string };
+        error.code = SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_DENIED;
+        throw error;
+      }
       const providerQuery = buildProviderQuery({
         query,
         policy,
         relationships,
         ...(sourceIdentityFieldId ? { sourceIdentityFieldId } : {}),
         arguments: resolvedArgs,
-        principal,
+        principal: livePrincipal,
         pageSize: resultCap,
         strategy: queryPaginationStrategy(query),
       });
@@ -1557,6 +1719,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         resolvedArgs[key] = args[key] as LiteralValue;
       }
     }
+
+    // spec15 §54 — a `query` operation inside an action is `query.read` under the running
+    // action's caller (`activePrincipal`, bound by `invokeCore`). A denial fails the
+    // operation, which fails the action transaction — no partial read reaches the scope.
+    const readDenied = authorizeQueryRead(query, activePrincipal);
+    if (readDenied) {
+      return { ok: false, code: SERVER_DIAGNOSTIC_CODES.AUTHORIZATION_DENIED, message: readDenied.message };
+    }
+
     const policy = policyForQuery(query, readPolicies);
     const sourceIdentityFieldId = entities.get(query.source)?.identityFieldId;
     const providerQuery = buildProviderQuery({
@@ -1732,6 +1903,16 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         resolvePrincipal: async (credential) => {
           const principal = (host.authenticate ? await host.authenticate(credential as never) : null) ?? null;
           return { principal, fingerprint: await fingerprint(principal ?? 'anon') };
+        },
+        // spec15 Phase E — the workflow engine decides `workflow.start` / `.inspect` /
+        // `.history` / `.cancel` through the *same* policy evaluator as an action, in the one
+        // closed scope. The engine owns the owner-fingerprint default (no policy declared);
+        // this only runs a declared `AuthorizationPolicyDef`.
+        authorizePolicy: (policyId, operation, resource, principal) => {
+          runtime.hydrateState(PRINCIPAL, (principal ?? null) as never);
+          const part = evaluatePolicy(nodeId(policyId), operation as AuthorizationOperation, resource);
+          const { decision, reason } = decideAuthorization({ ...(part ? { policy: part } : {}) });
+          return { ok: decision === 'ALLOW', reason };
         },
         // A workflow ActionDef step runs as a system invocation under the workflow's bound
         // principal, with the stable logical invocation identity as its request id. A crash
@@ -2724,15 +2905,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       }
       return workflowEngine.cancelWorkflow(instanceId, credential);
     },
-    async getWorkflow(instanceId) {
-      return workflowEngine?.getWorkflow(instanceId);
+    async getWorkflow(instanceId, credential) {
+      return workflowEngine?.getWorkflow(instanceId, credential);
     },
-    async inspectWorkflows(limit) {
-      return workflowEngine ? workflowEngine.listWorkflows(limit) : [];
+    async inspectWorkflows(limit, credential) {
+      return workflowEngine ? workflowEngine.listWorkflows(limit, credential) : [];
     },
-    async workflowHistory(instanceId) {
+    async workflowHistory(instanceId, credential) {
       return workflowEngine
-        ? ((await workflowEngine.workflowHistory(instanceId)) as unknown as Array<Record<string, unknown>>)
+        ? ((await workflowEngine.workflowHistory(instanceId, credential)) as unknown as Array<Record<string, unknown>>)
         : [];
     },
 
@@ -2750,7 +2931,17 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         }
         // spec13 §10, §11 (model A): reconcile, capture R, evaluate at R, register from R —
         // all inside this serialized turn, so no local commit interleaves.
-        const initial = await ctx.value.spec.reevaluate();
+        let initial: Awaited<ReturnType<typeof ctx.value.spec.reevaluate>>;
+        try {
+          initial = await ctx.value.spec.reevaluate();
+        } catch (error) {
+          return {
+            error: {
+              code: (error as { code?: string })?.code ?? SERVER_DIAGNOSTIC_CODES.LIVE_QUERY_EVALUATION_FAILED,
+              message: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
         return liveEngine.register(newSubscriptionId(), ctx.value.spec, initial);
       });
     },
@@ -2773,7 +2964,17 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         }
         // This authority has no materialized result for `payload.sub` — re-evaluate fresh at
         // the current coherent revision and hand the client a `reset` (spec13 §37, §38, §108).
-        const current = await ctx.value.spec.reevaluate();
+        let current: Awaited<ReturnType<typeof ctx.value.spec.reevaluate>>;
+        try {
+          current = await ctx.value.spec.reevaluate();
+        } catch (error) {
+          return {
+            error: {
+              code: (error as { code?: string })?.code ?? SERVER_DIAGNOSTIC_CODES.LIVE_QUERY_EVALUATION_FAILED,
+              message: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
         return liveEngine.resume(payload.sub, ctx.value.spec, current);
       });
     },
@@ -3064,6 +3265,24 @@ function buildRuntime(
     };
     states.push(principalState);
     nodes[PRINCIPAL] = principalState;
+  }
+
+  // spec15 Phase C — the closed authorization-policy scope. `ref(OPERATION)` resolves to the
+  // canonical operation string; `ref(RESOURCE)` to the semantic object the decision is about
+  // (for `action.invoke`, a stable `{ id, kind }` descriptor — there is no per-record
+  // target). Ephemeral, never persisted, never observable; the declared `valueType` is only
+  // for scope resolution and the runtime never type-checks the hydrated value.
+  for (const scopeId of [OPERATION, RESOURCE] as const) {
+    const scopeState: StateDef = {
+      id: scopeId,
+      kind: 'state',
+      name: scopeId === OPERATION ? 'operation' : 'resource',
+      valueType: optionalType(primitiveType('string')),
+      ephemeral: true,
+      initialValue: null,
+    };
+    states.push(scopeState);
+    nodes[scopeId] = scopeState;
   }
 
   const applicationIR: ApplicationIR = {

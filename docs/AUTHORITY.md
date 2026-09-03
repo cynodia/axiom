@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.14.0-alpha.5. How an application crosses the trust boundary.
+Axiom 0.15.0-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -467,7 +467,7 @@ does for a local failure.
 | --- | --- |
 | `UNKNOWN_SERVER_ACTION` | The request named an action this authority does not execute. |
 | `ARGUMENT_TYPE_MISMATCH` | An argument did not conform to its declared parameter type, or is not a parameter at all. |
-| `AUTHORIZATION_DENIED` | The caller may not invoke this action, or the rule could not be evaluated. |
+| `AUTHORIZATION_DENIED` | The caller may not invoke this action / read this query / start or cancel this workflow, or the rule could not be evaluated. spec15 Phase C covers `ActionDef.authorizationPolicy`, Phase D `QueryDef.authorizationPolicy` (`query.read` — including a live query whose caller is revoked mid-subscription, Phase F, delivered as a live-query error message carrying this code), Phase E `WorkflowDef.startPolicy` / `instanceAccessPolicy` (`workflow.start` / `.cancel`); `details.operation` names the canonical operation and `details.reason` is a non-secret machine reason (`policy-denied` / `policy-error` / `legacy-denied` / `legacy-error` / `owner-mismatch`). A denied `workflow.inspect` / `workflow.history` returns nothing instead (no existence leak). |
 | `CONCURRENCY_CONFLICT` | Another transaction committed the same state first. Nothing was applied. |
 | `MALFORMED_REQUEST` | The request was not an Axiom semantic request, or spoke an unknown protocol. |
 | `AUTHORITY_UNREACHABLE` | The authority could not be reached, timed out, or answered with a transport error. |
@@ -504,7 +504,7 @@ does for a local failure.
 | `LIVE_QUERY_CURSOR_INVALID` | An `axiom.live-query-cursor.v1` was tampered with, unsigned, or minted for a different query / principal / arguments / read policy. Fail-closed: continuing from it is refused and nothing is disclosed (spec13 §33-§35). |
 | `LIVE_QUERY_CURSOR_INCOMPATIBLE` | A live-query cursor was minted by an authority whose schema fingerprint, semantic fingerprint or server contract differs from this one's — the same fail-closed compatibility check the distributed work store applies. A presentation-only graph change does *not* trigger this (spec13 §79-§82). |
 | `LIVE_QUERY_EVALUATION_FAILED` | Re-evaluating the live query against the `DataProvider` after a committed change failed. Delivered as a `{ kind: 'error' }` message on the live stream; the last delivered result stands and the consumer may reconnect (spec13 §132). |
-| `AUTHORIZATION_ENFORCEMENT_UNAVAILABLE` | The Server IR declares `axiom.server.v9` authorization vocabulary (an `AuthorizationPolicyDef`), which this build validates and fingerprints but does not yet **enforce** — spec15 is landing in phases. `createAxiomServer` fails closed rather than running a declared policy as a silent no-op (spec4 §4, spec15 §128). Removed once enforcement ships. |
+| `AUTHORIZATION_ENFORCEMENT_UNAVAILABLE` | The Server IR declares authorization vocabulary this build validates and fingerprints but does not yet enforce. Every `AuthorizationPolicyDef` reference the graph vocabulary defines is enforced through spec15 Phase E (`ActionDef` / `QueryDef` / `WorkflowDef`), so this is **dormant** for every valid IR — kept as the fail-closed extension point (`usesUnenforcedAuthorizationVocabulary`) for any later phase that adds authorization vocabulary ahead of its enforcement (spec4 §4, spec15 §128). |
 | `SCHEMA_MIGRATION_REQUIRED` | Persisted canonical data is at an older semantic schema than the graph requires; a migration must run before the authority will serve traffic (spec11 §12). |
 | `SCHEMA_INCOMPATIBLE` | Persisted data cannot be reconciled with the graph — a stored schema version ahead of the graph's, or no migration path to it. |
 | `MIGRATION_IN_PROGRESS` | A migration is already running: a migration lock is held with a valid lease, by this instance or another (spec11 §66). |

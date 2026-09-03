@@ -90,6 +90,7 @@ export * from './sqlite-workflow-store.js';
 export * from './workflows.js';
 export * from './workflow-conformance.js';
 export * from './live-query-conformance.js';
+export * from './authorization-conformance.js';
 export * from './triggers.js';
 export * from './server.js';
 export * from './conformance-runner.js';

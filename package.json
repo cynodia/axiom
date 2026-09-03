@@ -1,6 +1,6 @@
 {
   "name": "axiom",
-  "version": "0.14.0-alpha.5",
+  "version": "0.15.0-alpha.1",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -21,7 +21,7 @@
     "release:dist-tag:dry-run": "node scripts/dist-tag.mjs --dry-run",
     "release:publish:dry-run": "node scripts/publish.mjs --dry-run",
     "docs:sync": "node scripts/sync-docs.mjs",
-    "conformance:generate": "node scripts/conformance.mjs && node scripts/query-conformance.mjs && node scripts/migration-conformance.mjs && node scripts/live-query-conformance.mjs && node scripts/workflow-conformance.mjs",
+    "conformance:generate": "node scripts/conformance.mjs && node scripts/query-conformance.mjs && node scripts/migration-conformance.mjs && node scripts/live-query-conformance.mjs && node scripts/workflow-conformance.mjs && node scripts/authorization-conformance.mjs",
     "conformance:run": "node scripts/run-conformance.mjs",
     "schema:generate": "node scripts/schema.mjs",
     "toolkit:metrics": "node scripts/toolkit-metrics.mjs",

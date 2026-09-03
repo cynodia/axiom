@@ -1,0 +1,684 @@
+{
+  "conformance": "axiom.conformance.v9",
+  "name": "query-public-preserved",
+  "covers": [
+    "allow",
+    "query filtering"
+  ],
+  "description": "A QueryDef with no authorizationPolicy and no ReadPolicyDef keeps its pre-0.15 public contract.",
+  "providerRows": {
+    "entity_doc": [
+      {
+        "field_doc_id": "a",
+        "field_doc_tenant": "t1"
+      },
+      {
+        "field_doc_id": "b",
+        "field_doc_tenant": "t2"
+      },
+      {
+        "field_doc_id": "c",
+        "field_doc_tenant": "t1"
+      }
+    ],
+    "entity_note": [
+      {
+        "field_note_id": "n1"
+      },
+      {
+        "field_note_id": "n2"
+      }
+    ]
+  },
+  "principals": {
+    "admin": {
+      "field_user_id": "u-admin",
+      "field_user_role": "admin",
+      "field_user_tenant": "t1"
+    },
+    "analyst": {
+      "field_user_id": "u-an1",
+      "field_user_role": "analyst",
+      "field_user_tenant": "t1"
+    },
+    "analyst2": {
+      "field_user_id": "u-an2",
+      "field_user_role": "analyst",
+      "field_user_tenant": "t2"
+    },
+    "manager": {
+      "field_user_id": "u-mgr",
+      "field_user_role": "manager",
+      "field_user_tenant": "t1"
+    },
+    "nobody": {
+      "field_user_id": "u-nob",
+      "field_user_role": "viewer",
+      "field_user_tenant": "t1"
+    }
+  },
+  "steps": [
+    {
+      "do": "query",
+      "query": "query_notes",
+      "expect": {
+        "decision": "ALLOW",
+        "rowIds": [
+          "n1",
+          "n2"
+        ]
+      }
+    }
+  ],
+  "serverIR": {
+    "contract": "axiom.server.v9",
+    "id": "authz-conformance",
+    "name": "Authorization Conformance",
+    "version": "0.15.0-alpha.1",
+    "entities": [
+      {
+        "id": "entity_user",
+        "kind": "entity",
+        "identityFieldId": "field_user_id",
+        "fields": [
+          {
+            "id": "field_user_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_user_role",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_user_tenant",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "entity_doc",
+        "kind": "entity",
+        "identityFieldId": "field_doc_id",
+        "fields": [
+          {
+            "id": "field_doc_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          },
+          {
+            "id": "field_doc_tenant",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "entity_note",
+        "kind": "entity",
+        "identityFieldId": "field_note_id",
+        "fields": [
+          {
+            "id": "field_note_id",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "entity_ev",
+        "kind": "entity",
+        "fields": [
+          {
+            "id": "field_ev_tag",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ]
+      }
+    ],
+    "fields": {
+      "field_user_id": {
+        "entityId": "entity_user",
+        "field": {
+          "id": "field_user_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_user_role": {
+        "entityId": "entity_user",
+        "field": {
+          "id": "field_user_role",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_user_tenant": {
+        "entityId": "entity_user",
+        "field": {
+          "id": "field_user_tenant",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_doc_id": {
+        "entityId": "entity_doc",
+        "field": {
+          "id": "field_doc_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_doc_tenant": {
+        "entityId": "entity_doc",
+        "field": {
+          "id": "field_doc_tenant",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_note_id": {
+        "entityId": "entity_note",
+        "field": {
+          "id": "field_note_id",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      },
+      "field_ev_tag": {
+        "entityId": "entity_ev",
+        "field": {
+          "id": "field_ev_tag",
+          "valueType": {
+            "kind": "primitive",
+            "primitive": "string"
+          },
+          "required": true
+        }
+      }
+    },
+    "states": [
+      {
+        "id": "state_count",
+        "kind": "state",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "number"
+        },
+        "initialValue": 0
+      }
+    ],
+    "actions": {
+      "action_public": {
+        "id": "action_public",
+        "kind": "action",
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_admin": {
+        "id": "action_admin",
+        "kind": "action",
+        "authorizationPolicy": "policy_admin",
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_op": {
+        "id": "action_op",
+        "kind": "action",
+        "authorizationPolicy": "policy_op",
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_deny": {
+        "id": "action_deny",
+        "kind": "action",
+        "authorizationPolicy": "policy_deny",
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_step": {
+        "id": "action_step",
+        "kind": "action",
+        "invocation": {
+          "allowedSources": [
+            "system"
+          ]
+        },
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      }
+    },
+    "constraints": [],
+    "transitionConstraints": [],
+    "principalEntityId": "entity_user",
+    "observableStateIds": [
+      "state_count"
+    ],
+    "events": [
+      {
+        "id": "event_go",
+        "kind": "event",
+        "payloadType": {
+          "kind": "entity",
+          "entityId": "entity_ev"
+        }
+      }
+    ],
+    "queries": [
+      {
+        "id": "query_docs",
+        "kind": "query",
+        "source": "entity_doc",
+        "rowScopeId": "scope_row",
+        "authorizationPolicy": "policy_analyst",
+        "readPolicyId": "readpolicy_tenant",
+        "sort": [
+          {
+            "key": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_doc_id"
+            },
+            "direction": "asc"
+          }
+        ],
+        "pagination": {
+          "strategy": "offset",
+          "maxPageSize": 100
+        }
+      },
+      {
+        "id": "query_notes",
+        "kind": "query",
+        "source": "entity_note",
+        "rowScopeId": "scope_row",
+        "sort": [
+          {
+            "key": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "scope_row"
+              },
+              "fieldId": "field_note_id"
+            },
+            "direction": "asc"
+          }
+        ],
+        "pagination": {
+          "strategy": "offset",
+          "maxPageSize": 100
+        }
+      }
+    ],
+    "readPolicies": [
+      {
+        "id": "readpolicy_tenant",
+        "kind": "read-policy",
+        "entityId": "entity_doc",
+        "rowScopeId": "scope_policy_row",
+        "predicate": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "scope_policy_row"
+            },
+            "fieldId": "field_doc_tenant"
+          },
+          "right": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_user_tenant"
+          }
+        }
+      }
+    ],
+    "authorizationPolicies": [
+      {
+        "id": "policy_admin",
+        "kind": "authorization-policy",
+        "allow": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "admin"
+          }
+        }
+      },
+      {
+        "id": "policy_analyst",
+        "kind": "authorization-policy",
+        "allow": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "analyst"
+          }
+        }
+      },
+      {
+        "id": "policy_manager",
+        "kind": "authorization-policy",
+        "allow": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "manager"
+          }
+        }
+      },
+      {
+        "id": "policy_op",
+        "kind": "authorization-policy",
+        "allow": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "ref",
+            "targetId": "axiom_operation"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "action.invoke"
+          }
+        }
+      },
+      {
+        "id": "policy_deny",
+        "kind": "authorization-policy",
+        "allow": {
+          "kind": "literal",
+          "value": false
+        }
+      }
+    ],
+    "workflows": [
+      {
+        "id": "wf_guarded",
+        "kind": "workflow",
+        "startPolicy": "policy_admin",
+        "instanceAccessPolicy": "policy_manager",
+        "inputs": [
+          {
+            "id": "input_tag",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ],
+        "entry": "g_wait",
+        "steps": [
+          {
+            "type": "wait-event",
+            "id": "g_wait",
+            "event": "event_go",
+            "where": {
+              "kind": "binary",
+              "operator": "eq",
+              "left": {
+                "kind": "field",
+                "source": {
+                  "kind": "ref",
+                  "targetId": "EVENT"
+                },
+                "fieldId": "field_ev_tag"
+              },
+              "right": {
+                "kind": "ref",
+                "targetId": "input_tag"
+              }
+            },
+            "next": "g_do"
+          },
+          {
+            "type": "action",
+            "id": "g_do",
+            "action": "action_step",
+            "arguments": {},
+            "next": "g_ok"
+          },
+          {
+            "type": "complete",
+            "id": "g_ok"
+          }
+        ]
+      },
+      {
+        "id": "wf_open",
+        "kind": "workflow",
+        "inputs": [
+          {
+            "id": "input_tag",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ],
+        "entry": "o_wait",
+        "steps": [
+          {
+            "type": "wait-event",
+            "id": "o_wait",
+            "event": "event_go",
+            "where": {
+              "kind": "binary",
+              "operator": "eq",
+              "left": {
+                "kind": "field",
+                "source": {
+                  "kind": "ref",
+                  "targetId": "EVENT"
+                },
+                "fieldId": "field_ev_tag"
+              },
+              "right": {
+                "kind": "ref",
+                "targetId": "input_tag"
+              }
+            },
+            "next": "o_do"
+          },
+          {
+            "type": "action",
+            "id": "o_do",
+            "action": "action_step",
+            "arguments": {},
+            "next": "o_ok"
+          },
+          {
+            "type": "complete",
+            "id": "o_ok"
+          }
+        ]
+      }
+    ]
+  }
+}

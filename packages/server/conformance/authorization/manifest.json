@@ -1,0 +1,93 @@
+{
+  "conformance": "axiom.conformance.v9",
+  "baseContract": "axiom.server.v9",
+  "protocol": "axiom.protocol.v1",
+  "release": "0.15.0-alpha.1",
+  "description": "Portable authorization conformance fixtures (spec15 §71-§73). Each file carries a compiled axiom.server.v9 Server IR, the principal records each credential resolves to, provider seed rows, and a deterministic driver script — every step carrying the decision the fixture author computed independently (ALLOW/DENY, and for a query the exact authorized row set). Running one needs only runAuthorizationConformanceFixture from @cynodia/axiom-server and the semantics in docs/AUTHORIZATION.md. Full mixed-build semantic-fingerprint divergence and real-process crash boundaries are the spec15 Phase I suite.",
+  "fixtures": [
+    {
+      "name": "action-allow-deny-anonymous",
+      "covers": [
+        "allow",
+        "deny",
+        "anonymous",
+        "role/claim condition",
+        "action invocation"
+      ]
+    },
+    {
+      "name": "operation-scope",
+      "covers": [
+        "allow",
+        "action invocation"
+      ]
+    },
+    {
+      "name": "constant-deny-policy",
+      "covers": [
+        "deny",
+        "mixed-build policy change"
+      ]
+    },
+    {
+      "name": "query-tenant-isolation",
+      "covers": [
+        "query filtering",
+        "tenant isolation",
+        "resource-owner condition",
+        "role/claim condition",
+        "deny"
+      ]
+    },
+    {
+      "name": "query-public-preserved",
+      "covers": [
+        "allow",
+        "query filtering"
+      ]
+    },
+    {
+      "name": "workflow-start",
+      "covers": [
+        "workflow continuation",
+        "allow",
+        "deny",
+        "role/claim condition"
+      ]
+    },
+    {
+      "name": "workflow-cancellation-owner",
+      "covers": [
+        "workflow cancellation",
+        "owner",
+        "cross-principal",
+        "deny"
+      ]
+    },
+    {
+      "name": "workflow-cancellation-policy",
+      "covers": [
+        "workflow cancellation",
+        "cross-principal",
+        "role/claim condition"
+      ]
+    },
+    {
+      "name": "workflow-inspection",
+      "covers": [
+        "workflow inspection",
+        "cross-principal",
+        "anonymous"
+      ]
+    },
+    {
+      "name": "live-query-resume",
+      "covers": [
+        "live-query resume",
+        "allow",
+        "deny",
+        "query filtering"
+      ]
+    }
+  ]
+}

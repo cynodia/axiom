@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.14.0-alpha.5. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.15.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -1234,24 +1234,48 @@ Diagnostics (validation): `WORKFLOW_ENTRY_NOT_FOUND` `WORKFLOW_STEP_NOT_FOUND`
 
 ## AUTHORIZATION
 
-Full model: [`AUTHORIZATION.md`](AUTHORIZATION.md). **0.15 is phased.** Phase B (this build)
-adds the vocabulary, `validateGraph` totality, the single semantic projection and
-`axiom.server.v9`; **enforcement is not wired** — `createAxiomServer` fails closed with
-`AUTHORIZATION_ENFORCEMENT_UNAVAILABLE` on any IR that carries authorization vocabulary,
-rather than running a declared policy as a no-op (spec4 §4).
+Full model: [`AUTHORIZATION.md`](AUTHORIZATION.md). **0.15 is phased.** Phase B added the
+vocabulary, `validateGraph` totality, the single semantic projection and `axiom.server.v9`.
+**Phase C (this build) enforces `ActionDef.authorizationPolicy`** — one `authorize()`
+evaluator on every `action.invoke` path (direct call, workflow action step, scheduler- and
+event-triggered action, retry, failover), conjoined with any legacy `ActionDef.authorization`
+expression, re-evaluated on every invocation against current policy. **Phase D enforces
+`QueryDef.authorizationPolicy` (`query.read`)** — the same evaluator gates a one-shot query,
+a `query` operation inside an action and a live-query open, before any provider call;
+`ReadPolicyDef` still filters rows, AND-ed into the effective filter so `filter`/`sort`/
+`limit`/aggregate see only the authorized dataset. **Phase E** — `WorkflowDef.startPolicy`
+decides `workflow.start` (a denied start creates no instance), `instanceAccessPolicy`
+decides `workflow.cancel` / `.inspect` / `.history` when declared; with none, cancel keeps
+the spec14pt6 owner-fingerprint baseline and `getWorkflow` / `inspectWorkflows` /
+`workflowHistory` stay operator-inspection APIs (an explicit trust boundary, not on the
+protocol). Unauthorized inspection ⇒ `undefined` / `[]` (no existence leak); terminal
+cancel stays idempotent for any caller. **Phase F** — a live query re-checks `query.read`
+against the **re-resolved** caller on every re-evaluation, so a revoked principal stops the
+stream (`{ kind: 'error', code: 'AUTHORIZATION_DENIED' }`); the current caller drives row
+filtering, so lost/gained access to a row is a `remove`/`insert` delta; `resumeLiveQuery`
+re-resolves + re-authorizes and refuses a cursor issued for a different principal.
+`subscription.open` (`SubscriptionDef`) is an infrastructure trust boundary — no graph
+policy, the adapter contract is the boundary. Every graph-defined `AuthorizationPolicyDef`
+reference is now enforced; `AUTHORIZATION_ENFORCEMENT_UNAVAILABLE` /
+`usesUnenforcedAuthorizationVocabulary` are the dormant fail-closed extension point
+(spec4 §4).
 
 One authorization language. An `AuthorizationPolicyDef` (graph node kind
 `authorization-policy`) is a single boolean `allow` `Expression`. Exactly `true` ⇒ ALLOW;
 `false`, an absent policy, or **any** evaluation error ⇒ DENY (fail closed). Closed
-expression scope: `ref('PRINCIPAL')`, `ref('RESOURCE')`, `ref('OPERATION')` only — **not** a
-`StateDef` (`AUTHORIZATION_INVALID_SCOPE`), **not** a `QueryDef`, **not**
-`now`/`uuid`/`random` (`AUTHORIZATION_NONDETERMINISTIC`). Referenced by id:
-`ActionDef.authorizationPolicy` (`action.invoke`), `QueryDef.authorizationPolicy`
-(`query.read`, distinct from `readPolicyId` row filtering), `WorkflowDef.startPolicy`
-(`workflow.start`), `WorkflowDef.instanceAccessPolicy` (`workflow.inspect`/`.history`/
-`.cancel`). Legacy `ActionDef.authorization` (an `Expression`) and `ReadPolicyDef` coexist;
-the effective decision when both a policy and a legacy expression are present is their
-conjunction. Canonical operation ids: `AUTHORIZATION_OPERATIONS`.
+expression scope — the three reserved ids exported from core: `ref(PRINCIPAL)`
+(`'axiom_principal'`, the id `ActionDef.authorization` already uses), `ref(RESOURCE)`
+(`'axiom_resource'` — for `action.invoke`, a `{ id, kind }` descriptor), `ref(OPERATION)`
+(`'axiom_operation'` — resolves to the canonical operation string). **Not** a `StateDef`
+(`AUTHORIZATION_INVALID_SCOPE`), **not** a `QueryDef`, **not** `now`/`uuid`/`random`
+(`AUTHORIZATION_NONDETERMINISTIC`). Referenced by id: `ActionDef.authorizationPolicy`
+(`action.invoke`), `QueryDef.authorizationPolicy` (`query.read`, distinct from `readPolicyId`
+row filtering), `WorkflowDef.startPolicy` (`workflow.start`),
+`WorkflowDef.instanceAccessPolicy` (`workflow.inspect`/`.history`/`.cancel`). Legacy
+`ActionDef.authorization` (an `Expression`) and `ReadPolicyDef` coexist; when both a policy
+and a legacy expression are present the effective decision is their conjunction. Canonical
+operation ids: `AUTHORIZATION_OPERATIONS`. The pure ALLOW/DENY combiner is
+`decideAuthorization` (core).
 
 `AuthorizationPolicyDef` is in `EXECUTABLE_KINDS` — editing `allow` from ALLOW to DENY moves
 `semanticFingerprint` and the `AuthorityCompatibilityKey`; a `name`/`description` change
@@ -1260,9 +1284,27 @@ document it always did. Totality: every validate/compile/analyze surface is tota
 `null` / non-object policy / non-plain `allow` — structured diagnostic, never a native
 `TypeError`.
 
+Static analysis: `AgentAPI.analyzeAuthorization()` → what protects every action / query /
+workflow surface, per-policy dependencies + a secret-free rule `summary`, the `unprotected`
+list (surfaces with no explicit boundary), and per-workflow `privilegeReviewActions`
+(policy-carrying action steps the start principal is not statically proven to satisfy). It
+never claims authorization it cannot prove and exposes no runtime secret. Primitive:
+`authorizationPolicyDependencies(policy)` (core).
+
+Conformance: `axiom.conformance.v9` (`conformance/authorization/`),
+`runAuthorizationConformanceFixture` / `Suite` — a compiled Server IR + principals +
+provider rows + a deterministic driver script, each step carrying the independently-computed
+decision; verified over memory and SQLite.
+
 Diagnostics (validation): `AUTHORIZATION_INVALID_POLICY` `AUTHORIZATION_INVALID_SCOPE`
-`AUTHORIZATION_NONDETERMINISTIC` `AUTHORIZATION_UNKNOWN_POLICY`. Runtime refusal (from Phase
-C): `AUTHORIZATION_DENIED` — terminal, not retryable, carries no secret.
+`AUTHORIZATION_NONDETERMINISTIC` `AUTHORIZATION_UNKNOWN_POLICY`. Runtime refusal:
+`AUTHORIZATION_DENIED` — `details.operation` (`action.invoke` / `query.read` /
+`workflow.start` / `workflow.cancel`) + `details.reason`
+(`policy-denied`/`policy-error`/`legacy-denied`/`legacy-error`/`owner-mismatch`), terminal,
+not retryable, carries no state value / credential / claim. A denied `query` operation
+inside an action surfaces as `QUERY_OPERATION_FAILED` with `details.code =
+'AUTHORIZATION_DENIED'` and rolls the action back. A denied `workflow.inspect` /
+`workflow.history` returns `undefined` / `[]` (no existence leak).
 
 ## Metadata classes
 

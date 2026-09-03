@@ -26,18 +26,23 @@
  * closed with a structured diagnostic, never a native exception (spec15 §37).
  */
 
+import { OPERATION, PRINCIPAL, RESOURCE } from './authority.js';
 import type { Expression } from './expressions.js';
 import type { NodeId } from './ids.js';
 import type { NodeBase } from './nodes.js';
 
 // --------------------------------------------------------------------- reserved scope ids
 
-/** The canonical caller. Already reserved for `ActionDef.authorization` and workflow scope. */
-export const AUTHZ_PRINCIPAL_SCOPE = 'PRINCIPAL' as const;
+/**
+ * The canonical caller. The **same** reserved id `ActionDef.authorization` uses
+ * (`'axiom_principal'`, exported from `authority.ts` as `PRINCIPAL`) — write a policy with
+ * `field(ref(PRINCIPAL), F_ROLE)`, exactly as a legacy authorization expression.
+ */
+export const AUTHZ_PRINCIPAL_SCOPE: NodeId = PRINCIPAL;
 /** The semantic object the operation targets (a record, a workflow instance, …), where one exists. */
-export const AUTHZ_RESOURCE_SCOPE = 'RESOURCE' as const;
-/** The canonical operation identity — an `AuthorizationOperation` string. */
-export const AUTHZ_OPERATION_SCOPE = 'OPERATION' as const;
+export const AUTHZ_RESOURCE_SCOPE: NodeId = RESOURCE;
+/** The canonical operation identity — `ref(OPERATION)` resolves to an `AuthorizationOperation` string. */
+export const AUTHZ_OPERATION_SCOPE: NodeId = OPERATION;
 
 /** Every id a policy `allow` expression's `ref` may resolve. Nothing else is in scope. */
 export const AUTHORIZATION_SCOPE_IDS: readonly string[] = [
@@ -202,6 +207,140 @@ export function authorizationPolicyProblems(policy: unknown): AuthorizationPolic
     });
   }
   return problems;
+}
+
+// ------------------------------------------------------- dependency analysis (spec15 §35, §44)
+
+export interface AuthorizationPolicyDependencies {
+  /** Field ids the policy's `allow` expression reads off `PRINCIPAL`. */
+  principalFields: string[];
+  /** Field ids it reads off `RESOURCE`. */
+  resourceFields: string[];
+  /** Whether it references `OPERATION` at all. */
+  readsOperation: boolean;
+  /**
+   * A verdict when `allow` is a constant `literal` (spec15 §8): a literal `true` always
+   * allows, anything else always denies. `null` when the decision depends on the inputs.
+   */
+  constant: 'always-allow' | 'always-deny' | null;
+}
+
+function collectScopeFieldReads(
+  expression: unknown,
+  principal: Set<string>,
+  resource: Set<string>,
+  operation: { seen: boolean },
+  seen: Set<object> = new Set(),
+): void {
+  if (!isPlainObject(expression) || seen.has(expression)) return;
+  seen.add(expression);
+  if (expression.kind === 'ref' && String(expression.targetId) === AUTHZ_OPERATION_SCOPE) {
+    operation.seen = true;
+  }
+  if (
+    expression.kind === 'field' &&
+    isPlainObject(expression.source) &&
+    expression.source.kind === 'ref' &&
+    expression.fieldId !== undefined
+  ) {
+    const target = String(expression.source.targetId);
+    if (target === AUTHZ_PRINCIPAL_SCOPE) principal.add(String(expression.fieldId));
+    else if (target === AUTHZ_RESOURCE_SCOPE) resource.add(String(expression.fieldId));
+  }
+  if (expression.kind === 'literal') return;
+  for (const value of Object.values(expression)) {
+    if (Array.isArray(value)) {
+      for (const entry of value) collectScopeFieldReads(entry, principal, resource, operation, seen);
+    } else if (isPlainObject(value)) {
+      collectScopeFieldReads(value, principal, resource, operation, seen);
+    }
+  }
+}
+
+/**
+ * What an `AuthorizationPolicyDef` depends on — for explainability, static coverage analysis
+ * and AI authoring (spec15 §35, §44). Total over malformed input (empty result). Reports
+ * *structure only*, never a runtime value.
+ */
+export function authorizationPolicyDependencies(policy: unknown): AuthorizationPolicyDependencies {
+  const principal = new Set<string>();
+  const resource = new Set<string>();
+  const operation = { seen: false };
+  const allow = isPlainObject(policy) ? policy.allow : undefined;
+  if (isPlainObject(allow)) {
+    collectScopeFieldReads(allow, principal, resource, operation);
+  }
+  let constant: 'always-allow' | 'always-deny' | null = null;
+  if (isPlainObject(allow) && allow.kind === 'literal') {
+    constant = allow.value === true ? 'always-allow' : 'always-deny';
+  }
+  return {
+    principalFields: [...principal].sort(),
+    resourceFields: [...resource].sort(),
+    readsOperation: operation.seen,
+    constant,
+  };
+}
+
+// --------------------------------------------------------------- the decision (spec15 §8)
+
+export const AUTHORIZATION_DECISIONS = ['ALLOW', 'DENY'] as const;
+export type AuthorizationDecision = (typeof AUTHORIZATION_DECISIONS)[number];
+
+/** One evaluated boolean input to an authorization decision. `ok: false` ⇒ evaluation failed. */
+export interface AuthorizationCheckPart {
+  ok: boolean;
+  value?: unknown;
+}
+
+export interface AuthorizationCheckInput {
+  /**
+   * The `AuthorizationPolicyDef.allow` outcome, when a policy is attached. Per spec15 §8 a
+   * policy allows only when it evaluates to **exactly `true`**.
+   */
+  policy?: AuthorizationCheckPart;
+  /**
+   * The legacy `ActionDef.authorization` expression outcome, when that expression is present.
+   * Its historical truthiness rule is kept: a non-empty array or any truthy value allows.
+   */
+  legacy?: AuthorizationCheckPart;
+}
+
+export interface AuthorizationCheckResult {
+  decision: AuthorizationDecision;
+  reason:
+    | 'no-policy'
+    | 'allowed'
+    | 'policy-denied'
+    | 'policy-error'
+    | 'legacy-denied'
+    | 'legacy-error';
+}
+
+/**
+ * The canonical ALLOW/DENY combination (spec15 §8, §123) — a pure function of already
+ * evaluated inputs, so it is identical on every surface and independently checkable.
+ *
+ * - neither a policy nor a legacy expression ⇒ ALLOW (`no-policy`);
+ * - a policy that failed to evaluate ⇒ DENY (`policy-error`) — an evaluation error never allows;
+ * - a policy whose value is not exactly `true` ⇒ DENY (`policy-denied`);
+ * - a legacy expression that failed to evaluate ⇒ DENY (`legacy-error`);
+ * - a legacy expression that is falsy / an empty collection ⇒ DENY (`legacy-denied`);
+ * - otherwise ALLOW (`allowed`). Both, when present, must pass (conjunction).
+ */
+export function decideAuthorization(input: AuthorizationCheckInput): AuthorizationCheckResult {
+  const { policy, legacy } = input;
+  if (!policy && !legacy) return { decision: 'ALLOW', reason: 'no-policy' };
+  if (policy) {
+    if (!policy.ok) return { decision: 'DENY', reason: 'policy-error' };
+    if (policy.value !== true) return { decision: 'DENY', reason: 'policy-denied' };
+  }
+  if (legacy) {
+    if (!legacy.ok) return { decision: 'DENY', reason: 'legacy-error' };
+    const permitted = Array.isArray(legacy.value) ? legacy.value.length > 0 : Boolean(legacy.value);
+    if (!permitted) return { decision: 'DENY', reason: 'legacy-denied' };
+  }
+  return { decision: 'ALLOW', reason: 'allowed' };
 }
 
 /**

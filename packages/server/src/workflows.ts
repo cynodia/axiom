@@ -171,6 +171,19 @@ export interface WorkflowEngineOptions {
   compatibilityFingerprint: string;
   /** Resolve a credential to a canonical principal record + its fingerprint (spec14 §22). */
   resolvePrincipal: (credential: unknown) => Promise<{ principal: unknown; fingerprint: string }>;
+  /**
+   * spec15 Phase E — evaluate an `AuthorizationPolicyDef` by id for a workflow operation
+   * (`workflow.start` / `.inspect` / `.history` / `.cancel`), in the one closed policy scope
+   * (`PRINCIPAL` / `OPERATION` / `RESOURCE`). `principal` is the already-resolved caller.
+   * Absent ⇒ the engine applies its own defaults (owner-fingerprint for `cancel`, open for
+   * inspection — an operator trust boundary, spec15 §112-§113).
+   */
+  authorizePolicy?: (
+    policyId: string,
+    operation: 'workflow.start' | 'workflow.inspect' | 'workflow.history' | 'workflow.cancel',
+    resource: unknown,
+    principal: unknown,
+  ) => { ok: boolean; reason?: string };
   coordination?: CoordinationProvider;
   instanceId: string; // this authority's id, for the coordination owner
   now?: () => number;
@@ -215,9 +228,9 @@ export interface WorkflowEngine {
   stop(): void;
   startWorkflow(request: WorkflowStartRequest): Promise<{ instanceId: string; status: string } | { error: { code: string; message: string } }>;
   cancelWorkflow(instanceId: string, credential?: unknown): Promise<{ ok: true; status: string } | { error: { code: string; message: string } }>;
-  getWorkflow(instanceId: string): Promise<WorkflowInspection | undefined>;
-  listWorkflows(limit?: number): Promise<WorkflowInspection[]>;
-  workflowHistory(instanceId: string): Promise<Awaited<ReturnType<WorkflowStore['history']>>>;
+  getWorkflow(instanceId: string, credential?: unknown): Promise<WorkflowInspection | undefined>;
+  listWorkflows(limit?: number, credential?: unknown): Promise<WorkflowInspection[]>;
+  workflowHistory(instanceId: string, credential?: unknown): Promise<Awaited<ReturnType<WorkflowStore['history']>>>;
   /**
    * The event pipeline calls this for every accepted event (spec14 §54-§60). The engine
    * appends it to the durable `WorkflowStore` journal and allocates its store-global `seq`
@@ -831,6 +844,58 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
     }
   }
 
+  // ---- authorization (spec15 Phase E) ----------------------------------------
+
+  /** A non-secret projection of an instance, for a policy's `RESOURCE` scope (spec15 §99). */
+  function instanceResource(record: WorkflowInstanceRecord): Record<string, unknown> {
+    return {
+      id: record.instanceId,
+      kind: 'workflow-instance',
+      workflowId: record.workflowId,
+      status: record.status,
+      ownerFingerprint: record.principalFingerprint,
+    };
+  }
+
+  /**
+   * `workflow.cancel` — a durable mutation, always authorized. A declared
+   * `instanceAccessPolicy` decides; otherwise the 0.14/spec14pt6 owner-fingerprint baseline
+   * (caller fingerprint == the instance's durable owner) — a role such as `admin` never
+   * bypasses it implicitly (spec15 §14).
+   */
+  async function authorizeInstanceMutation(
+    record: WorkflowInstanceRecord,
+    credential: unknown,
+  ): Promise<{ ok: boolean; reason: string }> {
+    const policyId = byId.get(record.workflowId)?.instanceAccessPolicy;
+    const { principal, fingerprint } = await options.resolvePrincipal(credential);
+    if (policyId && options.authorizePolicy) {
+      const d = options.authorizePolicy(String(policyId), 'workflow.cancel', instanceResource(record), principal);
+      return { ok: d.ok, reason: d.reason ?? 'policy-denied' };
+    }
+    return fingerprint === record.principalFingerprint
+      ? { ok: true, reason: 'owner' }
+      : { ok: false, reason: 'owner-mismatch' };
+  }
+
+  /**
+   * `workflow.inspect` / `workflow.history` — gated **only** when the `WorkflowDef` declares
+   * an `instanceAccessPolicy`. With no policy these stay open operator-inspection APIs, an
+   * explicit trust boundary (spec15 §112-§113): they are direct authority methods, never
+   * reachable through the principal-facing protocol. An unauthorized caller is answered
+   * exactly like a missing instance — no existence leak (spec15 §39).
+   */
+  async function mayInspectInstance(
+    record: WorkflowInstanceRecord,
+    credential: unknown,
+    operation: 'workflow.inspect' | 'workflow.history',
+  ): Promise<boolean> {
+    const policyId = byId.get(record.workflowId)?.instanceAccessPolicy;
+    if (!policyId || !options.authorizePolicy) return true;
+    const { principal } = await options.resolvePrincipal(credential);
+    return options.authorizePolicy(String(policyId), operation, instanceResource(record), principal).ok;
+  }
+
   // ---- public API -------------------------------------------------------------
 
   async function startWorkflow(request: WorkflowStartRequest) {
@@ -839,6 +904,27 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
       return { error: { code: WF_DIAGNOSTIC.UNKNOWN_WORKFLOW, message: `No workflow ${request.workflowId}` } };
     }
     const { principal, fingerprint } = await options.resolvePrincipal(request.credential);
+
+    // spec15 §100 — `workflow.start`. Being able to discover a `WorkflowDef` is not being
+    // able to start it, and this is decided independently of the ActionDef authorization a
+    // later step is subject to (spec15 §101).
+    const startPolicyId = (workflow as { startPolicy?: unknown }).startPolicy;
+    if (startPolicyId !== undefined && options.authorizePolicy) {
+      const d = options.authorizePolicy(
+        String(startPolicyId),
+        'workflow.start',
+        { id: request.workflowId, kind: 'workflow' },
+        principal,
+      );
+      if (!d.ok) {
+        return {
+          error: {
+            code: WF_DIAGNOSTIC.UNAUTHORIZED,
+            message: `Not authorized to start workflow ${request.workflowId}`,
+          },
+        };
+      }
+    }
 
     const declared = new Map((workflow.inputs ?? []).map((i) => [String(i.id), i]));
     const inputs: Record<string, unknown> = {};
@@ -896,16 +982,15 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
       return { ok: true as const, status: record.status }; // idempotent; a terminal workflow is not resurrected
     }
 
-    // spec14pt6 F4 — cancellation is an authorized durable mutation. The calling
-    // credential is resolved to a canonical principal and its fingerprint must match the
-    // one the instance was **started** under (spec14 §257 — instance access is keyed by
-    // `principalFingerprint`). A cross-principal caller is refused with the canonical
-    // `AUTHORIZATION_DENIED` **before** any lease claim or transition — no
-    // `instanceRevision` advance, no history, no wake. The check resolves identically on
-    // every authority (durable `principalFingerprint` + deterministic `resolvePrincipal`),
-    // so it is topology-independent.
-    const { fingerprint } = await options.resolvePrincipal(credential);
-    if (fingerprint !== record.principalFingerprint) {
+    // spec14pt6 F4 + spec15 §14 — cancellation is an authorized durable mutation. A declared
+    // `WorkflowDef.instanceAccessPolicy` decides `workflow.cancel`; with none, the calling
+    // credential's fingerprint must match the one the instance was **started** under (spec14
+    // §257). Either way the refusal is the canonical `AUTHORIZATION_DENIED` **before** any
+    // lease claim or transition — no `instanceRevision` advance, no history, no wake — and it
+    // resolves identically on every authority (durable fingerprint + deterministic
+    // `resolvePrincipal` / policy), so it is topology-independent.
+    const mutationAuth = await authorizeInstanceMutation(record, credential);
+    if (!mutationAuth.ok) {
       return {
         error: {
           code: WF_DIAGNOSTIC.UNAUTHORIZED,
@@ -1012,14 +1097,24 @@ export function createWorkflowEngine(options: WorkflowEngineOptions): WorkflowEn
     },
     startWorkflow,
     cancelWorkflow,
-    async getWorkflow(instanceId) {
+    async getWorkflow(instanceId, credential) {
       const record = await store.load(instanceId);
-      return record ? inspect(record) : undefined;
+      if (!record) return undefined;
+      // Unauthorized (only possible when an `instanceAccessPolicy` is declared) is answered
+      // exactly like a missing instance — no existence leak (spec15 §15, §39).
+      return (await mayInspectInstance(record, credential, 'workflow.inspect')) ? inspect(record) : undefined;
     },
-    async listWorkflows(limit = 100) {
-      return (await store.list(limit)).map(inspect);
+    async listWorkflows(limit = 100, credential) {
+      const records = await store.list(limit);
+      const visible: WorkflowInstanceRecord[] = [];
+      for (const record of records) {
+        if (await mayInspectInstance(record, credential, 'workflow.inspect')) visible.push(record);
+      }
+      return visible.map(inspect);
     },
-    async workflowHistory(instanceId) {
+    async workflowHistory(instanceId, credential) {
+      const record = await store.load(instanceId);
+      if (!record || !(await mayInspectInstance(record, credential, 'workflow.history'))) return [];
       return store.history(instanceId);
     },
     onEventAccepted,

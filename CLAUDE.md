@@ -316,38 +316,93 @@ turn it into a working browser application whose generated JavaScript nobody rea
   untouched. New tests: `server/test/workflows-server.test.ts` (+5 — owner cancels,
   cross-principal / anonymous refused with zero mutation, continue-after-refusal, failover
   parity, terminal idempotency).
-* `specs/spec15.md` — the **0.15 authorization completeness release** (a 9-phase milestone
-  A–I; **this checkout has landed Phase A + Phase B foundation only, no version bump** —
-  `0.15.0-alpha.1` lands with enforcement, Phases C–F). *Whether a principal may perform a
-  semantic operation* is part of the graph's executable meaning. **One** authorization
-  language: `AuthorizationPolicyDef` (`packages/core/src/authorization.ts`, graph node kind
-  `authorization-policy`) — a single boolean `allow` `Expression`, closed scope
-  `PRINCIPAL` / `RESOURCE` / `OPERATION` (never `StateDef` / `QueryDef` /
-  `now`·`uuid`·`random`); exactly `true` ⇒ ALLOW, `false` / absent / **any eval error** ⇒
-  DENY (fail closed). Referenced by id from `ActionDef.authorizationPolicy` (`action.invoke`;
-  conjunction with the legacy `ActionDef.authorization` expression), `QueryDef
-  .authorizationPolicy` (`query.read`, distinct from `readPolicyId` row filtering),
-  `WorkflowDef.startPolicy` (`workflow.start`) and `WorkflowDef.instanceAccessPolicy`
-  (inspect / history / cancel; absent ⇒ 0.14 owner-fingerprint). `AUTHORIZATION_OPERATIONS`
-  is the canonical operation-id vocabulary. **Phase A** — the public-API authorization
-  inventory (`docs/AUTHORIZATION.md`, `reports/AXIOM_0_15_AUTHORIZATION_RESEARCH.md`).
-  **Phase B** — `validateGraph` totality (`authorizationPolicyProblems` /
-  `authorizationPolicyExpressions` total over `unknown`) with `AUTHORIZATION_INVALID_POLICY`
-  / `_INVALID_SCOPE` / `_NONDETERMINISTIC` / `_UNKNOWN_POLICY`; `'authorization-policy'`
-  joins `EXECUTABLE_KINDS` so the **single** projection (`serverIrSemanticProjection` via
-  `SERVER_IR_EXECUTABLE_SLICES`, `since: 'v9'`, emitted only when non-empty) picks it up —
-  `semanticFingerprint` + `AuthorityCompatibilityKey` move on an ALLOW→DENY edit, not on a
-  `name`/`description` edit, and a graph with no authorization vocabulary is byte-identical
-  to its prior v1–v8 document. **Server IR `axiom.server.v9`** (`usesAuthorizationVocabulary`
-  derives it; `server-ir.v9.schema.json` generated). **No enforcement is wired** —
-  `createAxiomServer` fails closed with `AUTHORIZATION_ENFORCEMENT_UNAVAILABLE` on any IR
-  carrying authorization vocabulary rather than running a declared policy as a no-op
-  (spec4 §4). Later phases: C (action/mutation/state), D (query + row unification with
-  `ReadPolicyDef`), E (workflow instance access), F (live-query / subscription / revocation,
-  `AUTHORIZATION_DENIED`), G (`AgentAPI.analyzeAuthorization`), H (`axiom.conformance.v9`),
-  I (adversarial / mixed-build / real-process). New tests:
-  `core/test/authorization.test.ts`, `core/test/semantic-identity.test.ts` (+4 spec15),
-  `server/test/authorization-identity.test.ts`. Report:
+* `specs/spec15.md` — the **0.15 authorization completeness release** (`0.15.0-alpha.1`; a
+  9-phase milestone A–I — **this checkout has landed Phases A–H**; I is the real-process /
+  mixed-build / adversarial soak, no vocabulary). *Whether a principal may perform a
+  semantic operation* is part of
+  the graph's executable meaning. **One** authorization language: `AuthorizationPolicyDef`
+  (`packages/core/src/authorization.ts`, graph node kind `authorization-policy`) — a single
+  boolean `allow` `Expression`, closed scope `PRINCIPAL` / `RESOURCE` / `OPERATION`
+  (reserved ids `axiom_principal` / `axiom_resource` / `axiom_operation`, exported from
+  `core`; never `StateDef` / `QueryDef` / `now`·`uuid`·`random`); exactly `true` ⇒ ALLOW,
+  `false` / absent / **any eval error** ⇒ DENY (fail closed). Referenced by id from
+  `ActionDef.authorizationPolicy` (`action.invoke`; conjunction with the legacy
+  `ActionDef.authorization` expression), `QueryDef.authorizationPolicy` (`query.read`,
+  distinct from `readPolicyId` row filtering), `WorkflowDef.startPolicy` (`workflow.start`)
+  and `WorkflowDef.instanceAccessPolicy` (inspect / history / cancel; absent ⇒ 0.14
+  owner-fingerprint). `AUTHORIZATION_OPERATIONS` is the canonical operation-id vocabulary.
+  **Phase A** — the public-API authorization inventory (`docs/AUTHORIZATION.md`,
+  `reports/AXIOM_0_15_AUTHORIZATION_RESEARCH.md`). **Phase B** — `validateGraph` totality
+  (`authorizationPolicyProblems` / `authorizationPolicyExpressions` total over `unknown`)
+  with `AUTHORIZATION_INVALID_POLICY` / `_INVALID_SCOPE` / `_NONDETERMINISTIC` /
+  `_UNKNOWN_POLICY`; `'authorization-policy'` joins `EXECUTABLE_KINDS` so the **single**
+  projection (`serverIrSemanticProjection` via `SERVER_IR_EXECUTABLE_SLICES`, `since: 'v9'`,
+  emitted only when non-empty) picks it up — `semanticFingerprint` +
+  `AuthorityCompatibilityKey` move on an ALLOW→DENY edit, not on a `name`/`description`
+  edit, and a graph with no authorization vocabulary is byte-identical to its prior v1–v8
+  document. **Server IR `axiom.server.v9`** (`usesAuthorizationVocabulary` derives it;
+  `server-ir.v9.schema.json` generated). **Phase C** — `ActionDef.authorizationPolicy` is
+  **enforced** by the one `authorize()` in `server.ts` on every `invokeCore` path (direct /
+  workflow step / scheduler / event / retry / failover), conjoined with the legacy
+  expression via the pure `decideAuthorization` combiner (core), re-evaluated per invocation;
+  `AUTHORIZATION_DENIED` carries non-secret `operation` + `reason` (`policy-denied` /
+  `policy-error` / `legacy-denied` / `legacy-error`); a workflow gains no authority from its
+  start principal (§101), a `'system'` source is not privilege (§102), denial is terminal
+  not retried (§109); an eval error is DENY never ALLOW (§123). `OPERATION` / `RESOURCE` are
+  ephemeral synthetic runtime states beside `PRINCIPAL`. **Phase D** — `QueryDef
+  .authorizationPolicy` (`query.read`) is enforced by the shared `evaluatePolicy` /
+  `authorizeQueryRead` before any provider call, identically for a one-shot `handle({kind:
+  'query'})`, a `query` operation inside an action (rollback on deny → `QUERY_OPERATION_FAILED`
+  with `details.code = AUTHORIZATION_DENIED`), and `openLiveQuery` / `resumeLiveQuery` at
+  open. Row-level stays `ReadPolicyDef`, already AND-ed into the effective filter, so `limit`
+  is over the authorized set (§18/§81) and aggregates exclude unauthorized rows (§82); a
+  provider that can't run the predicate is `QUERY_CAPABILITY_UNSUPPORTED`, never
+  approximated. **Phase E** — `WorkflowDef.startPolicy` (`workflow.start`; a denied start
+  creates no instance; independent of a later step's ActionDef auth, §100/§101) and
+  `WorkflowDef.instanceAccessPolicy` (`workflow.cancel` / `.inspect` / `.history`) are
+  enforced by the workflow engine via an injected `authorizePolicy` hook (server implements
+  it with `evaluatePolicy` + `decideAuthorization` — same single evaluator). No
+  `instanceAccessPolicy` ⇒ cancel keeps the spec14pt6 owner-fingerprint baseline
+  (`reason: owner-mismatch`), and `getWorkflow` / `inspectWorkflows` / `workflowHistory`
+  (now with an optional `credential`) stay open operator-inspection APIs (explicit trust
+  boundary, not on the protocol, §112-§113). A declared policy: unauthorized inspection is
+  answered like a missing instance (`undefined` / `[]` / filtered — no existence leak, §39);
+  cancel has no implicit role bypass (§14); terminal cancel stays idempotent for any caller
+  (§110). **Phase F** — a live query re-resolves the caller and re-checks `query.read` on
+  **every** re-evaluation (`server.ts` `reevaluate`): a revoked principal throws
+  `.code='AUTHORIZATION_DENIED'`, which `live-query.ts`'s engine catch turns into
+  `{ kind:'error', code:'AUTHORIZATION_DENIED' }` — the stream stops serving. The *current*
+  caller also drives row filtering, so lost/gained `ReadPolicyDef` access is a
+  `remove`/`insert` delta (§79/§80, no code change — filter + `queryDependencies` already
+  compose). `resumeLiveQuery` re-authorizes (Phase D path) and the spec13 HMAC cursor is
+  principal-bound so another principal's cursor mismatches (§20). `subscription.open`
+  (`SubscriptionDef`) is an infra trust boundary — adapter contract, no graph policy.
+  Every graph-defined `AuthorizationPolicyDef` reference is now enforced;
+  `usesUnenforcedAuthorizationVocabulary` returns `false` and the
+  `AUTHORIZATION_ENFORCEMENT_UNAVAILABLE` admission gate is a dormant extension point.
+  **Phase G** — `AgentAPI.analyzeAuthorization()` (`agent-api/src/authorization.ts`, core
+  only): a graph-level coverage audit — per-surface `protection` discriminant +
+  `unresolved` flag, `unprotected[]` (public action / query, workflow with no `startPolicy`;
+  owner-fingerprint instance ops are a defined default, not listed), per-policy
+  `authorizationPolicyDependencies` (core: `PRINCIPAL` / `RESOURCE` field reads, `OPERATION`,
+  constant verdict — total, secret-free) + a best-effort one-line `summary`, per-workflow
+  `privilegeReviewActions` (§101). Static, never claims unproven authorization (§50), no
+  runtime secret (§83). **Phase H** — `axiom.conformance.v9`
+  (`server/src/authorization-conformance.ts`, `runAuthorizationConformanceFixture` /
+  `Suite`): `conformance/authorization/` (10 fixtures, generator
+  `scripts/authorization-conformance.mjs` in `conformance:generate`) — a compiled Server IR
+  + principals + `providerRows` + a driver script (`invoke` / `query` / `start-workflow` /
+  `cancel-workflow` / `inspect-workflow` / `open-live-query` / `resume-live-query`), each
+  step carrying the fixture author's independently-computed decision; `expectFinalState`
+  proves a denied step mutated nothing (§115). Run over memory **and** SQLite persistence
+  (§114). Later phase: I (real-process / mixed-build / adversarial soak — §73–§82 matrix,
+  §116 contention, §117 SIGKILL). New tests: `core/test/authorization.test.ts`,
+  `core/test/semantic-identity.test.ts` (+4), `agent-api/test/authorization.test.ts`,
+  `server/test/authorization-identity.test.ts`,
+  `server/test/authorization-enforcement.test.ts`, `server/test/authorization-query.test.ts`,
+  `server/test/authorization-workflow-access.test.ts`,
+  `server/test/authorization-live-query.test.ts`,
+  `server/test/authorization-conformance.test.ts`. Report:
   `AXIOM_0_15_IMPLEMENTATION_REPORT.md`. Full model: `docs/AUTHORIZATION.md`.
 
 Together, spec2–spec14 are the authority on design decisions — **except where the

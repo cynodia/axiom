@@ -250,6 +250,21 @@ export function usesAuthorizationVocabulary(ir: {
 }
 
 /**
+ * Authorization vocabulary whose *enforcement* has not shipped yet — the admission gate a
+ * build uses to fail closed rather than run a declared policy as a silent no-op (spec4 §4,
+ * spec15 §128). spec15 landed enforcement in phases: C — `ActionDef.authorizationPolicy`
+ * (and every state / provider-record mutation it drives); D — `QueryDef.authorizationPolicy`
+ * (`query.read`, one-shot / live-open / query-operation); E — `WorkflowDef.startPolicy` /
+ * `instanceAccessPolicy` (`workflow.start` / `.inspect` / `.history` / `.cancel`). Every
+ * `AuthorizationPolicyDef` reference the graph vocabulary defines is now enforced, so this
+ * predicate is `false` for every valid IR. It is kept as the extension point: a later phase
+ * that introduces authorization vocabulary ahead of its enforcement re-populates it.
+ */
+export function usesUnenforcedAuthorizationVocabulary(_ir: unknown): boolean {
+  return false;
+}
+
+/**
  * Whether a document uses 0.10's semantic data-access vocabulary — a `QueryDef`, a
  * `RelationshipDef`, a `ReadPolicyDef`, or a `query` operation inside an action. A v5
  * runtime knows none of it: it would accept a document that promises demand-driven,

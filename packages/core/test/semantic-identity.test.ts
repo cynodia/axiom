@@ -238,7 +238,7 @@ test('spec14pt3: construction order does not affect the workflow fingerprint', (
 // ------------------------------------------------------------- spec15: AuthorizationPolicyDef
 
 import type { AuthorizationPolicyDef } from '@cynodia/axiom-core';
-import { binary as bin, field as fld, fieldId as fid, ref as rf } from '@cynodia/axiom-core';
+import { PRINCIPAL as AUTHZ_PRINCIPAL, RESOURCE as AUTHZ_RESOURCE, binary as bin, field as fld, fieldId as fid, ref as rf } from '@cynodia/axiom-core';
 
 const POL = nodeId('policy_x');
 const F_R_OWNER = fid('field_r_owner');
@@ -250,7 +250,7 @@ function authzGraph(mut: (p: AuthorizationPolicyDef) => void = () => {}): Applic
     id: POL,
     kind: 'authorization-policy',
     name: 'Owner may act',
-    allow: bin('eq', fld(rf('RESOURCE' as never), F_R_OWNER), fld(rf('PRINCIPAL' as never), F_P_ID)),
+    allow: bin('eq', fld(rf(AUTHZ_RESOURCE), F_R_OWNER), fld(rf(AUTHZ_PRINCIPAL), F_P_ID)),
   };
   mut(policy);
   g.addNode<AuthorizationPolicyDef>(policy);

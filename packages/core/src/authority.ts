@@ -42,6 +42,22 @@ export const AUTHORITIES: readonly Authority[] = ['client', 'server'];
 export const PRINCIPAL: NodeId = 'axiom_principal' as NodeId;
 
 /**
+ * The semantic object an authorization decision is made *about* — a provider record, a
+ * workflow instance, or (for `action.invoke`, where there is no per-record target) a stable
+ * descriptor of the operation's target. Bound only where an authority evaluates an
+ * `AuthorizationPolicyDef` (spec15 §34, §99); like `PRINCIPAL` it is never client-visible.
+ */
+export const RESOURCE: NodeId = 'axiom_resource' as NodeId;
+
+/**
+ * The canonical semantic operation identity an authorization decision is made *for* — one of
+ * `AUTHORIZATION_OPERATIONS` (`'action.invoke'`, `'query.read'`, …). `ref(OPERATION)`
+ * resolves to that string directly. Bound only where an authority evaluates an
+ * `AuthorizationPolicyDef` (spec15 §34, §98).
+ */
+export const OPERATION: NodeId = 'axiom_operation' as NodeId;
+
+/**
  * The authority of a state. Absent metadata means `client`, so every 0.5.x graph keeps
  * executing exactly as it did.
  */

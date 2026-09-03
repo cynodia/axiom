@@ -4,9 +4,13 @@ import {
   ApplicationGraph,
   AUTHORIZATION_OPERATIONS,
   AUTHORIZATION_SCOPE_IDS,
+  OPERATION,
+  PRINCIPAL,
+  RESOURCE,
   authorizationPolicyExpressions,
   authorizationPolicyProblems,
   binary,
+  decideAuthorization,
   field,
   fieldId,
   literal,
@@ -70,7 +74,7 @@ function ownerPolicy(): AuthorizationPolicyDef {
   return {
     id: POL_OWNER,
     kind: 'authorization-policy',
-    allow: binary('eq', field(ref('RESOURCE' as never), F_OWNER), field(ref('PRINCIPAL' as never), P_ID)),
+    allow: binary('eq', field(ref(RESOURCE), F_OWNER), field(ref(PRINCIPAL), P_ID)),
   };
 }
 
@@ -78,7 +82,33 @@ test('spec15: operation identity and policy scope are closed enumerations', () =
   assert.ok(AUTHORIZATION_OPERATIONS.includes('action.invoke'));
   assert.ok(AUTHORIZATION_OPERATIONS.includes('workflow.cancel'));
   assert.ok(AUTHORIZATION_OPERATIONS.includes('live.resume'));
-  assert.deepEqual([...AUTHORIZATION_SCOPE_IDS], ['PRINCIPAL', 'RESOURCE', 'OPERATION']);
+  // The closed policy scope is the same reserved ids `ActionDef.authorization` already uses.
+  assert.deepEqual([...AUTHORIZATION_SCOPE_IDS], [PRINCIPAL, RESOURCE, OPERATION]);
+});
+
+test('spec15 §8: decideAuthorization is fail-closed and conjunctive', () => {
+  assert.deepEqual(decideAuthorization({}), { decision: 'ALLOW', reason: 'no-policy' });
+  assert.deepEqual(decideAuthorization({ policy: { ok: true, value: true } }), {
+    decision: 'ALLOW',
+    reason: 'allowed',
+  });
+  // Not exactly `true` ⇒ DENY.
+  assert.equal(decideAuthorization({ policy: { ok: true, value: 1 } }).decision, 'DENY');
+  assert.equal(decideAuthorization({ policy: { ok: true, value: 'yes' } }).decision, 'DENY');
+  // An evaluation error never allows.
+  assert.deepEqual(decideAuthorization({ policy: { ok: false } }), {
+    decision: 'DENY',
+    reason: 'policy-error',
+  });
+  // Conjunction: policy allows but the legacy expression denies.
+  assert.equal(
+    decideAuthorization({ policy: { ok: true, value: true }, legacy: { ok: true, value: false } })
+      .decision,
+    'DENY',
+  );
+  // Legacy truthiness rule preserved: a non-empty array allows.
+  assert.equal(decideAuthorization({ legacy: { ok: true, value: [1] } }).decision, 'ALLOW');
+  assert.equal(decideAuthorization({ legacy: { ok: true, value: [] } }).decision, 'DENY');
 });
 
 test('spec15: a valid owner policy referenced by an action validates', () => {

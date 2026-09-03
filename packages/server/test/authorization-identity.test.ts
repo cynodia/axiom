@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   ApplicationGraph,
   EXECUTABLE_KINDS,
+  PRINCIPAL,
   binary,
   compareAuthorityCompatibility,
   field,
@@ -12,8 +13,9 @@ import {
   primitiveType,
   ref,
   stateLocation,
+  usesUnenforcedAuthorizationVocabulary,
 } from '@cynodia/axiom-core';
-import type { ActionDef, AuthorizationPolicyDef, EntityDef, StateDef } from '@cynodia/axiom-core';
+import type { ActionDef, AuthorizationPolicyDef, EntityDef, QueryDef, StateDef } from '@cynodia/axiom-core';
 import { compileToServerIR } from '@cynodia/axiom-compiler';
 import {
   SERVER_IR_EXECUTABLE_SLICES,
@@ -28,8 +30,10 @@ import type { ServerIR } from '@cynodia/axiom-server';
 /**
  * spec15 Phase B — authorization policy vocabulary enters the *single* semantic projection
  * (`EXECUTABLE_KINDS`), so `semanticFingerprint` and the authority-compatibility key pick it
- * up automatically; a graph with none is byte-identical to its prior contract; and a build
- * that cannot yet enforce a declared policy fails closed rather than running it as a no-op.
+ * up automatically, and a graph with none is byte-identical to its prior contract.
+ * Phase C — an `ActionDef.authorizationPolicy` graph now admits and enforces; a still-unenforced
+ * `QueryDef` / `WorkflowDef` policy fails closed at admission (see authorization-enforcement.test.ts
+ * for the runtime decision).
  */
 
 const S_COUNT = nodeId('state_count');
@@ -57,7 +61,7 @@ function ir(opts: { policy?: boolean; deny?: boolean; description?: string } = {
       ...(opts.description ? { description: opts.description } : {}),
       allow: opts.deny
         ? literal(false)
-        : binary('eq', field(ref('PRINCIPAL' as never), F_P_ROLE), literal('editor')),
+        : binary('eq', field(ref(PRINCIPAL), F_P_ROLE), literal('editor')),
     });
   }
   return compileToServerIR(g);
@@ -100,23 +104,24 @@ test('spec15 §45: a policy presentation-only change stays compatible', () => {
   );
 });
 
-test('spec15 §128 / spec4 §4: createAxiomServer fails closed on an unenforceable authorization policy', async () => {
-  let err: unknown;
-  try {
-    const s = createAxiomServer({ ir: ir({ policy: true }), persistence: createMemoryPersistence() });
-    await s.start();
-    await s.stop().catch(() => {});
-  } catch (error) {
-    err = error;
-  }
-  assert.ok(err instanceof Error, String(err));
-  assert.match((err as Error).message, /AUTHORIZATION_ENFORCEMENT_UNAVAILABLE/);
-  assert.ok(!/TypeError|Cannot read/.test((err as Error).message), 'structured, not native');
+test('spec15 Phases C–E: action, query and workflow policies all admit and are enforced', async () => {
+  // Every `AuthorizationPolicyDef` reference the graph vocabulary defines is enforced (see
+  // authorization-{enforcement,query,workflow-access}.test.ts for the decisions).
+  const started = createAxiomServer({ ir: ir({ policy: true }), persistence: createMemoryPersistence() });
+  await started.start();
+  await started.stop();
 
-  // A graph with no authorization vocabulary still starts normally.
-  const ok = createAxiomServer({ ir: ir({}), persistence: createMemoryPersistence() });
-  await ok.start();
-  await ok.stop();
+  const withQueryPolicy = {
+    ...ir({ policy: true }),
+    queries: [{ id: nodeId('q'), kind: 'query', authorizationPolicy: POL } as unknown as QueryDef],
+  } as ServerIR;
+  const withQuery = createAxiomServer({ ir: withQueryPolicy, persistence: createMemoryPersistence() });
+  await withQuery.start();
+  await withQuery.stop();
+
+  // `usesUnenforcedAuthorizationVocabulary` is now `false` for every valid IR — the
+  // admission gate is the dormant extension point, not a live refusal.
+  assert.equal(usesUnenforcedAuthorizationVocabulary(withQueryPolicy), false);
 });
 
 test('spec15 §69: the authorization policy round-trips through Server IR serialization', () => {

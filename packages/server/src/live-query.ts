@@ -413,7 +413,10 @@ export function createLiveQueryEngine(options: LiveQueryEngineOptions): LiveQuer
         } catch (error) {
           push(reg, {
             kind: 'error',
-            code: 'LIVE_QUERY_EVALUATION_FAILED',
+            // A re-evaluation that fails because the caller's authorization no longer holds
+            // (spec15 §19) carries `AUTHORIZATION_DENIED`; anything else is an evaluation
+            // fault. Either way the stream stops serving now-unauthorized / stale data.
+            code: (error as { code?: string })?.code ?? 'LIVE_QUERY_EVALUATION_FAILED',
             message: error instanceof Error ? error.message : String(error),
           });
           continue;

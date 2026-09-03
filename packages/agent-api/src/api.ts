@@ -11,6 +11,8 @@ import { analyzeLiveQuery } from './live-query.js';
 import type { LiveQueryAnalysis } from './live-query.js';
 import { analyzeWorkflow } from './workflow.js';
 import type { WorkflowAnalysis } from './workflow.js';
+import { analyzeAuthorization } from './authorization.js';
+import type { AuthorizationAnalysis } from './authorization.js';
 
 /**
  * The machine-facing interface to an application. Agents query semantics and apply
@@ -102,5 +104,18 @@ export class AgentAPI extends PresentationQueries {
    */
   analyzeWorkflow(workflowId: string): WorkflowAnalysis {
     return analyzeWorkflow(this.graph, workflowId);
+  }
+
+  /**
+   * The authorization semantics of this application (spec15 §42, §43, §44): what protects
+   * every action / query / workflow surface, what each `AuthorizationPolicyDef` depends on
+   * (`PRINCIPAL` / `RESOURCE` fields, `OPERATION`, a secret-free rule summary), which
+   * surfaces have no explicit authorization boundary, and which workflow action steps run a
+   * policy the start principal is not statically proven to satisfy. Static over the graph;
+   * it never claims a principal is authorized where it cannot prove it, and exposes no
+   * runtime secret. Live decisions are the authority's job (`AUTHORIZATION_DENIED`).
+   */
+  analyzeAuthorization(): AuthorizationAnalysis {
+    return analyzeAuthorization(this.graph);
   }
 }
