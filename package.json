@@ -8,7 +8,7 @@
   "scripts": {
     "build": "npm run docs:sync && npm run build --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
-    "test:soak": "AXIOM_WF_TRIALS=50 AXIOM_WF_MIXED_TRIALS=25 npm test --workspaces --if-present",
+    "test:soak": "AXIOM_WF_TRIALS=50 AXIOM_WF_MIXED_TRIALS=25 AXIOM_AUTHZ_TRIALS=25 npm test --workspaces --if-present",
     "test:browser": "node scripts/browser-test.mjs",
     "release:clean": "node scripts/clean.mjs",
     "release:pack": "npm run docs:sync && node scripts/pack.mjs",

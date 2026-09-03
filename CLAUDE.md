@@ -317,8 +317,8 @@ turn it into a working browser application whose generated JavaScript nobody rea
   cross-principal / anonymous refused with zero mutation, continue-after-refusal, failover
   parity, terminal idempotency).
 * `specs/spec15.md` — the **0.15 authorization completeness release** (`0.15.0-alpha.1`; a
-  9-phase milestone A–I — **this checkout has landed Phases A–H**; I is the real-process /
-  mixed-build / adversarial soak, no vocabulary). *Whether a principal may perform a
+  9-phase milestone A–I — **all internal phases A–I are landed**; external blind adversarial
+  validation precedes the 0.15 semantic freeze). *Whether a principal may perform a
   semantic operation* is part of
   the graph's executable meaning. **One** authorization language: `AuthorizationPolicyDef`
   (`packages/core/src/authorization.ts`, graph node kind `authorization-policy`) — a single
@@ -395,14 +395,25 @@ turn it into a working browser application whose generated JavaScript nobody rea
   `cancel-workflow` / `inspect-workflow` / `open-live-query` / `resume-live-query`), each
   step carrying the fixture author's independently-computed decision; `expectFinalState`
   proves a denied step mutated nothing (§115). Run over memory **and** SQLite persistence
-  (§114). Later phase: I (real-process / mixed-build / adversarial soak — §73–§82 matrix,
-  §116 contention, §117 SIGKILL). New tests: `core/test/authorization.test.ts`,
-  `core/test/semantic-identity.test.ts` (+4), `agent-api/test/authorization.test.ts`,
-  `server/test/authorization-identity.test.ts`,
+  (§114). **Phase I** — the internal adversarial suite:
+  `server/test/authorization-adversarial.test.ts` (every surface × {owner / different /
+  anonymous / role-equivalent / admin-like / malformed credential}; the §137 forbidden
+  counters — `unauthorized_*`, `cross_principal_*`, `revoked_*`, `policy_fail_open`,
+  `native_authorization_exception` — all 0) and
+  `server/test/authorization-distributed.test.ts` (same decision on 1/2/8 authorities over
+  shared SQLite — §75; cross-principal race + contention, no unauthorized commit, only
+  structured codes, zero raw SQLite errors — §77/§116; denied-op failover parity — §76;
+  `AXIOM_AUTHZ_TRIALS`). Audit findings pinned: `recordKey` is principal-scoped (§120),
+  `WorkflowStartIdentity` carries `principalFingerprint` (§119). External blind adversarial
+  validation (§134-§137) precedes the semantic freeze. New tests:
+  `core/test/authorization.test.ts`, `core/test/semantic-identity.test.ts` (+4),
+  `agent-api/test/authorization.test.ts`, `server/test/authorization-identity.test.ts`,
   `server/test/authorization-enforcement.test.ts`, `server/test/authorization-query.test.ts`,
   `server/test/authorization-workflow-access.test.ts`,
   `server/test/authorization-live-query.test.ts`,
-  `server/test/authorization-conformance.test.ts`. Report:
+  `server/test/authorization-conformance.test.ts`,
+  `server/test/authorization-adversarial.test.ts`,
+  `server/test/authorization-distributed.test.ts`. Report:
   `AXIOM_0_15_IMPLEMENTATION_REPORT.md`. Full model: `docs/AUTHORIZATION.md`.
 
 Together, spec2–spec14 are the authority on design decisions — **except where the
@@ -457,8 +468,9 @@ checks that state writes stay confined to the mutation subsystem, and
 
 Every test runs in both tiers. What changes is only how many times the **randomized
 multi-process soak tests** repeat, through the `AXIOM_*` environment knobs those tests
-already declare (`AXIOM_WF_TRIALS`, `AXIOM_WF_MIXED_TRIALS`, `AXIOM_RACE_TRIALS`,
-`AXIOM_AUTHORITIES` and the rest — `grep 'process.env.AXIOM' packages/server/test`).
+already declare (`AXIOM_WF_TRIALS`, `AXIOM_WF_MIXED_TRIALS`, `AXIOM_AUTHZ_TRIALS`,
+`AXIOM_RACE_TRIALS`, `AXIOM_AUTHORITIES` and the rest — `grep 'process.env.AXIOM'
+packages/server/test`).
 
 | Tier | Command | Trials | Wall clock |
 | ---- | ------- | ------ | ---------- |

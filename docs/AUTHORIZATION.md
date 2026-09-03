@@ -11,8 +11,9 @@ prior contract.
 > outside portable application semantics. **Authorization** answers *may this principal
 > perform this semantic operation?* — that is what this document defines.
 
-0.15 lands in phases. This document describes the **model** (stable) and marks which
-surfaces **enforce** it in which phase.
+0.15 landed in nine phases (A–I). This document describes the **model** (stable) and marks
+which phase delivered each surface. External adversarial validation precedes the semantic
+freeze (spec15 §134).
 
 | Phase | Delivers | State |
 | --- | --- | --- |
@@ -24,7 +25,7 @@ surfaces **enforce** it in which phase.
 | **F** | A live query re-checks `query.read` against the **re-resolved** caller on every re-evaluation, so a revoked principal stops the stream (`{ kind: 'error', code: 'AUTHORIZATION_DENIED' }`). The current caller drives row filtering, so a claim / row change that removes access is a `remove` delta and the reverse an `insert`. `resumeLiveQuery` re-resolves + re-authorizes and refuses a cursor issued for a different principal. `subscription.open` (`SubscriptionDef`) is an infrastructure trust boundary — no graph policy, the adapter contract is the boundary | ✅ **enforced** |
 | **G** | `AgentAPI.analyzeAuthorization()` — a graph-level coverage audit: what protects every action / query / workflow surface, what each policy depends on (`PRINCIPAL` / `RESOURCE` fields, `OPERATION`, a secret-free rule summary), which surfaces have **no** explicit boundary, and which workflow action steps run a policy the start principal is not statically proven to hold. `authorizationPolicyDependencies` in core | ✅ **landed** |
 | **H** | `axiom.conformance.v9` — the portable authorization fixture tier (`conformance/authorization/`), `runAuthorizationConformanceFixture` / `Suite`; decisions verified over both memory and SQLite persistence | ✅ **landed** |
-| I | Real-process / mixed-build / adversarial validation | ⏳ |
+| **I** | The internal adversarial matrix (§74/§88/§136/§137 — every public surface × {owner, different, anonymous, role-equivalent, admin-like, malformed}, forbidden counters at zero), topology-independence over 1/2/8 authorities on shared SQLite, cross-principal race + contention (no unauthorized win, no raw SQLite error), and failover parity | ✅ **landed** |
 
 Every `AuthorizationPolicyDef` reference the graph vocabulary defines is enforced across
 `ActionDef` / `QueryDef` / `WorkflowDef` and every live-query re-evaluation.

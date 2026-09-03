@@ -42,6 +42,6 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",
-    "test": "AXIOM_WF_TRIALS=${AXIOM_WF_TRIALS:-3} AXIOM_WF_MIXED_TRIALS=${AXIOM_WF_MIXED_TRIALS:-2} node --test --test-concurrency=1 dist-test/**/*.test.js"
+    "test": "AXIOM_WF_TRIALS=${AXIOM_WF_TRIALS:-3} AXIOM_WF_MIXED_TRIALS=${AXIOM_WF_MIXED_TRIALS:-2} AXIOM_AUTHZ_TRIALS=${AXIOM_AUTHZ_TRIALS:-3} node --test --test-concurrency=1 dist-test/**/*.test.js"
   }
 }

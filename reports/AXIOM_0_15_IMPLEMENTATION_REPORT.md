@@ -17,7 +17,10 @@ Spec: `specs/spec15.md` — **Authorization Completeness**. Design note:
 | **F** | live-query re-authorization on every re-evaluation (revoked caller ⇒ stream error), row-level revocation / gain via re-resolved caller, `resumeLiveQuery` re-auth + cross-principal cursor refusal; `subscription.open` documented as an infra trust boundary | ✅ landed |
 | **G** | `AgentAPI.analyzeAuthorization()` — coverage audit, per-policy dependency analysis, secret-free rule summaries, `unprotected` surface list, workflow `privilegeReviewActions`; `authorizationPolicyDependencies` in core | ✅ landed |
 | **H** | `axiom.conformance.v9` — `conformance/authorization/` (10 fixtures), `runAuthorizationConformanceFixture` / `Suite`, verified over memory + SQLite | ✅ landed |
-| I | Real-process / mixed-build / adversarial validation | ⏳ |
+| **I** | The internal adversarial matrix (forbidden counters), topology-independence 1/2/8 authorities on shared SQLite, cross-principal race + contention, failover parity | ✅ landed |
+
+**All nine phases are landed** at `0.15.0-alpha.1`. External blind adversarial validation
+(spec15 §134-§137) precedes the 0.15 semantic freeze and is not part of this checkout.
 
 **Version bumped to `0.15.0-alpha.1`.** Enforcement Phases C–F are landed — every
 `AuthorizationPolicyDef` reference the graph vocabulary defines is enforced — so the
@@ -281,6 +284,8 @@ and one-shot / live-open decide identically.
 | `packages/server/test/authorization-live-query.test.ts` | 6 | `openLiveQuery` enforces `query.read` (§16); revoking the caller mid-subscription ⇒ `{ kind:'error', code:'AUTHORIZATION_DENIED' }` (§19, §59); row leaves authorized set ⇒ `remove` delta, one-shot agrees (§79); row enters ⇒ `insert` delta (§80); a resume cursor does not carry another principal's access (§20); a revoked principal cannot resume its own cursor (§20, §59) |
 | `packages/agent-api/test/authorization.test.ts` | 6 | `authorizationPolicyDependencies` — scope reads, constants, totality (§35); `analyzeAuthorization` classifies every surface's protection (§42, §43); `unprotected` list is exactly the public surfaces, workflow instance ops excluded (§43); secret-free `summary` renderings (§44, §83); workflow `privilegeReviewActions` (§101); on `AgentAPI`, total over a no-vocabulary graph |
 | `packages/server/test/authorization-conformance.test.ts` | 13 | every `axiom.conformance.v9` fixture through `runAuthorizationConformanceFixture` (memory); category coverage vs spec15 §71; every fixture re-run over SQLite persistence with identical decisions (§114/§115); `runAuthorizationConformanceSuite` fold |
+| `packages/server/test/authorization-adversarial.test.ts` | 1 (13 forbidden counters) | every public surface × {owner, different, anonymous, role-equivalent, admin-like, malformed credential}; direct vs live, one-shot vs live, direct vs workflow, open vs resume, idempotency reuse; `unauthorized_*` / `cross_principal_*` / `revoked_*` / `policy_fail_open` / `native_authorization_exception` all **0** (§74, §88, §136, §137) |
+| `packages/server/test/authorization-distributed.test.ts` | 3 | same decision on 1/2/8 authorities over shared SQLite state (§75); cross-principal race + contention — no unauthorized commit, only structured `AUTHORIZATION_DENIED` / `CONCURRENCY_CONFLICT`, zero raw SQLite errors (§77, §116); denied-operation parity after failover (§76). `AXIOM_AUTHZ_TRIALS` (3 fast / 25 soak) |
 
 ## Phase G — static authorization analysis
 
@@ -300,6 +305,27 @@ and one-shot / live-open decide identically.
 - `AgentAPI.analyzeAuthorization()` + `index.ts` export. agent-api still depends on `core`
   only.
 
+## Phase I — adversarial / distributed / failover
+
+- `packages/server/test/authorization-adversarial.test.ts` — one in-process `AxiomServer`,
+  the full §74/§136 matrix over every surface, measuring the §137 forbidden counters. All
+  zero: no unauthorized action / state / provider mutation, no unauthorized record
+  observation (incl. tenant isolation and one-shot↔live symmetry), no unauthorized workflow
+  start / inspection / cancellation, no cross-principal cursor resume, no cross-principal
+  idempotency reuse (`recordKey` is principal-scoped — §120), no revoked-live-data
+  continuation, no revoked-workflow-privilege continuation (§101), no policy fail-open (a
+  throwing policy DENIES), no native exception from the authorization path.
+- `packages/server/test/authorization-distributed.test.ts` — shared SQLite state store:
+  the same authorized/denied decision on 1, 2 and 8 authorities (§75, no topology
+  dependence); a `Promise.all` race of an authorized and an unauthorized invoke across two
+  authorities never commits the unauthorized one and surfaces only structured codes
+  (`AUTHORIZATION_DENIED` / `CONCURRENCY_CONFLICT`), zero raw SQLite errors (§77, §116);
+  a workflow whose step is denied under its start principal fails identically after the
+  starting authority dies and another resumes it (§76). `AXIOM_AUTHZ_TRIALS`.
+- **Audit findings (already correct, now pinned by test):** action idempotency
+  (`recordKey`) is scoped by resolved principal identity (§120); `WorkflowStartIdentity`
+  includes `principalFingerprint` so `P1+K` and `P2+K` are distinct (§119).
+
 ## Phase H — portable conformance tier
 
 - `packages/server/src/authorization-conformance.ts` — `AuthorizationConformanceFixture`
@@ -318,9 +344,15 @@ and one-shot / live-open decide identically.
 - `packages/server/test/authorization-conformance.test.ts` — runs every fixture over memory
   **and** SQLite persistence, asserting identical decisions (§114/§115).
 
-## Not done (deferred to later phases, documented as such)
+## Scope boundary
 
-- No real-process / mixed-build / adversarial soak suite for authorization (I): the §73–§82
-  adversarial matrix, §116 SQLite contention with multiple authorities, §117 SIGKILL
-  boundaries, §75/§77 cross-authority races, §46/§47 mixed-build semantic-fingerprint
-  divergence under real processes. Adds no graph/IR vocabulary.
+- **Internal** gates A–I are complete. **External blind adversarial validation**
+  (spec15 §134-§137) — a tester working from the published npm packages, docs, `.d.ts`,
+  AgentAPI, conformance fixtures, a fresh consumer, real OS processes and SQLite, with no
+  repository access — precedes the 0.15 semantic freeze and is a separate milestone
+  activity, not part of this checkout.
+- The internal Phase I suite runs authorities **in one process** over shared SQLite. A
+  forked-process SIGKILL boundary specific to the authorization path (§117) is not added
+  separately: `workflow-crash-matrix.test.ts` already SIGKILLs forked authorities, and
+  every workflow action step now flows through `authorize()`, so authorization-under-crash
+  is exercised there transitively.
