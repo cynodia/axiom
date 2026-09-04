@@ -73,6 +73,7 @@ const A_DENY = nodeId('action_deny');
 const A_THROW = nodeId('action_throw');
 const A_PROVIDER = nodeId('action_provider'); // admin-gated provider-record mutation
 const A_STEP = nodeId('action_step'); // admin-gated, system-only — a workflow step
+const A_LEG_DENYLIST = nodeId('action_legacy_denylist'); // legacy ActionDef.authorization: role != "banned" (spec15pt3)
 const P_ID = nodeId('param_id');
 
 const Q_DOCS = nodeId('query_docs');
@@ -146,6 +147,12 @@ function graph(): ApplicationGraph {
     operations: [{ kind: 'set', target: providerRecordFieldLocation(E_DOC, F_DID, ref(P_ID), F_DFLAG), value: literal('touched') }],
   } as ActionDef);
   g.addNode<ActionDef>({ id: A_STEP, kind: 'action', authorizationPolicy: POL_ADMIN, invocation: { allowedSources: ['system'] }, operations: bump() });
+  g.addNode<ActionDef>({
+    id: A_LEG_DENYLIST,
+    kind: 'action',
+    authorization: binary('neq', field(ref(PRINCIPAL), F_ROLE), literal('banned')),
+    operations: bump(),
+  } as ActionDef);
 
   g.addNode<QueryDef>({
     id: Q_DOCS,
@@ -212,6 +219,8 @@ const PRINCIPALS: Record<string, PrincipalRecord> = {
   analyst: { [F_UID]: 'u-an', [F_ROLE]: 'analyst', [F_TENANT]: 't1' },
   'analyst-2': { [F_UID]: 'u-an2', [F_ROLE]: 'analyst', [F_TENANT]: 't2' }, // role-equivalent, different identity/tenant
   manager: { [F_UID]: 'u-mgr', [F_ROLE]: 'manager', [F_TENANT]: 't1' },
+  banned: { [F_UID]: 'u-ban', [F_ROLE]: 'banned', [F_TENANT]: 't1' }, // on a legacy deny-list
+  no_role: { [F_UID]: 'u-nr', [F_TENANT]: 't1' } as PrincipalRecord, // attribute-less named principal (spec15pt3 §29)
 };
 
 interface Counters {
@@ -228,6 +237,7 @@ interface Counters {
   revoked_workflow_privilege_continues: number;
   policy_fail_open: number;
   native_authorization_exception: number;
+  legacy_missing_attribute_allow: number; // spec15pt3 §108 — legacy ActionDef.authorization fail-open
 }
 
 function zeroCounters(): Counters {
@@ -245,6 +255,7 @@ function zeroCounters(): Counters {
     revoked_workflow_privilege_continues: 0,
     policy_fail_open: 0,
     native_authorization_exception: 0,
+    legacy_missing_attribute_allow: 0,
   };
 }
 
@@ -331,6 +342,21 @@ test('spec15 §88/§137: the adversarial matrix leaves every forbidden counter a
     }
     // a constant-deny policy denies even the owner (mixed-build fail-closed shape).
     if ((await invoke(s, A_DENY, 'owner')).ok === true) c.policy_fail_open += 1;
+
+    // ---- legacy ActionDef.authorization deny-list absent-value fail-open (spec15pt3) ------
+    // `role != "banned"` must DENY a banned role, an attribute-less named principal, an
+    // anonymous caller and an unresolvable credential — and ALLOW only a concrete non-banned
+    // role. A missing `role` must never become authority through `neq`.
+    {
+      assert.equal((await invoke(s, A_LEG_DENYLIST, 'other')).ok, true, 'a concrete non-banned role still ALLOWs (no overcorrection)');
+      for (const cred of ['banned', 'no_role', undefined, 'garbage-credential']) {
+        const before = s.getState(S_COUNT);
+        const r = await invoke(s, A_LEG_DENYLIST, cred);
+        if (r.ok === true) c.legacy_missing_attribute_allow += 1;
+        if (!denied(r)) c.legacy_missing_attribute_allow += 1; // a *structured* denial
+        if (s.getState(S_COUNT) !== before) c.unauthorized_state_mutation += 1;
+      }
+    }
 
     // ---- unauthorized provider mutation (§88 provider bypass) ---------------------------
     {

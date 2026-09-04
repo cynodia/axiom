@@ -15,6 +15,7 @@ import {
   SERVER_IR_CONTRACTS,
   allowedInvocationSources,
   decideAuthorization,
+  evaluateAuthorizationExpression,
   evaluateAuthorizationPolicyAllow,
   optionalType,
   entityType,
@@ -1015,6 +1016,15 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
    * expression (pre-0.15) are conjoined by `decideAuthorization`; either failing to evaluate,
    * or a policy that is not exactly `true`, is DENY — an evaluation error never allows
    * (spec15 §8, §123).
+   *
+   * spec15pt3 F1-legacy — the legacy `ActionDef.authorization` expression is evaluated by the
+   * **same** security-absence-aware primitive as `AuthorizationPolicyDef.allow`
+   * (`evaluateAuthorizationExpression`, mode `'legacy-action'`), never generic
+   * `runtime.evaluate`: a missing `field(ref(PRINCIPAL), …)` is security-scope absence, so
+   * `neq` / `not` / boolean composition cannot turn an absent principal attribute into ALLOW
+   * (spec15pt3 §5, §21, §32). The historical `StateDef` scope is preserved by delegating any
+   * non-`PRINCIPAL` `ref` to the ordinary evaluator; an unresolvable ref fails closed exactly
+   * as a throwing `runtime.evaluate` did before.
    */
   function authorize(action: ActionDef, context: ExecutionContext): RuntimeDiagnostic | null {
     const policyId = (action as { authorizationPolicy?: NodeId }).authorizationPolicy;
@@ -1029,7 +1039,21 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
       { id: String(action.id), kind: 'action' },
       context.principal as Record<string, unknown> | null,
     );
-    const legacyPart = legacy ? evalToPart(runtime.evaluate(legacy)) : undefined;
+    const legacyPart = legacy
+      ? evaluateAuthorizationExpression(
+          legacy,
+          {
+            principal: context.principal as Record<string, unknown> | null,
+            resource: null,
+            operation: 'action.invoke',
+            resolveExternalRef: (refId) => {
+              const outcome = runtime.evaluate({ kind: 'ref', targetId: nodeId(refId) } as Expression);
+              return outcome.ok ? { found: true, value: outcome.value } : { found: false };
+            },
+          },
+          'legacy-action',
+        )
+      : undefined;
 
     const { decision, reason } = decideAuthorization({
       ...(policyPart ? { policy: policyPart } : {}),
@@ -1118,13 +1142,6 @@ export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
         : `The caller may not read query ${query.name ?? query.id}`,
       { queryId: query.id, operation: 'query.read', reason, principal: principalIdentity(principal) },
     );
-  }
-
-  /** Normalize a `runtime.evaluate` outcome to the `{ ok, value }` shape `decideAuthorization` takes. */
-  function evalToPart(
-    outcome: { ok: true; value: unknown } | { ok: false; diagnostic: RuntimeDiagnostic },
-  ): { ok: boolean; value?: unknown } {
-    return outcome.ok ? { ok: true, value: outcome.value } : { ok: false };
   }
 
   /** Observable states the authority recomputes rather than stores. */

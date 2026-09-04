@@ -1,6 +1,6 @@
 # Schema evolution & semantic migrations
 
-Axiom 0.15.0-alpha.2. The operational contract for evolving a deployed application's
+Axiom 0.15.0-alpha.3. The operational contract for evolving a deployed application's
 semantic model and its persisted canonical data over time — adding a required field,
 splitting one field into two, removing an obsolete one, migrating millions of
 provider-backed rows — **without** an application-authored SQL migration, an ORM migration,

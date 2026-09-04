@@ -1,6 +1,6 @@
 # Effects
 
-Axiom 0.15.0-alpha.2. External effects are not rollback-capable state mutations. This file
+Axiom 0.15.0-alpha.3. External effects are not rollback-capable state mutations. This file
 is the delivery model; [`AUTHORITY.md`](AUTHORITY.md#external-effects) is the load-bearing
 statement of why, and [`INTEGRATIONS.md`](INTEGRATIONS.md) is the operation vocabulary this
 builds on.

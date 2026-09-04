@@ -1,11 +1,12 @@
 {
   "conformance": "axiom.conformance.v9",
-  "name": "constant-deny-policy",
+  "name": "legacy-action-constant-public",
   "covers": [
-    "deny",
-    "mixed-build policy change"
+    "allow",
+    "anonymous",
+    "action invocation"
   ],
-  "description": "A policy whose allow is literal(false) always denies — the fail-closed behaviour a mixed-build incompatible authority also exhibits (full semantic-fingerprint divergence is authorization-identity.test.ts; real-process is Phase I).",
+  "description": "spec15pt3 §17/§49 — a legacy ActionDef.authorization of literal(true) still admits an anonymous caller. Prevents overcorrection: the rule is \"missing referenced security fields cannot create authority\", not \"anonymous is forbidden\".",
   "providerRows": {
     "entity_doc": [
       {
@@ -69,16 +70,14 @@
   "steps": [
     {
       "do": "invoke",
-      "action": "action_deny",
-      "credential": "admin",
+      "action": "action_legacy_true",
       "expect": {
-        "decision": "DENY",
-        "reason": "policy-denied"
+        "decision": "ALLOW"
       }
     }
   ],
   "expectFinalState": {
-    "state_count": 0
+    "state_count": 1
   },
   "serverIR": {
     "contract": "axiom.server.v9",

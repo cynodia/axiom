@@ -1,6 +1,6 @@
 # Authorization
 
-Axiom 0.15.0-alpha.2. The operational contract for **authorization completeness** — the 0.15
+Axiom 0.15.0-alpha.3. The operational contract for **authorization completeness** — the 0.15
 milestone (spec15). Whether a principal may perform a semantic operation is part of the
 graph's executable meaning — not a runtime concern, not UI visibility, not something that
 varies by transport, provider, process, retry path or authority topology. `axiom.server.v9`
@@ -11,12 +11,16 @@ prior contract.
 > outside portable application semantics. **Authorization** answers *may this principal
 > perform this semantic operation?* — that is what this document defines.
 
-0.15 landed in nine phases (A–I); `0.15.0-alpha.2` (spec15pt2) is a corrective pass —
-authorization **absent-value safety** (a missing PRINCIPAL / RESOURCE field never grants
-authority), `validateGraph` totality over a malformed `allow` tree, and a fail-closed
-`host.authenticate` exception boundary. This document describes the **model** (stable) and
-marks which phase delivered each surface. External adversarial validation precedes the
-semantic freeze (spec15 §134).
+0.15 landed in nine phases (A–I); `0.15.0-alpha.2` (spec15pt2) and `0.15.0-alpha.3`
+(spec15pt3) are corrective passes. **spec15pt2**: authorization **absent-value safety** (a
+missing PRINCIPAL / RESOURCE field never grants authority), `validateGraph` totality over a
+malformed `allow` tree, a fail-closed `host.authenticate` exception boundary. **spec15pt3**:
+the same fail-closed absent-value semantics now also cover the **legacy
+`ActionDef.authorization` expression** (F1-legacy) — one canonical evaluator for every
+authorization expression, so `PRINCIPAL.role != "banned"` / `NOT(PRINCIPAL.role == "banned")`
+no longer allow an anonymous or attribute-less caller through that surface either. This
+document describes the **model** (stable) and marks which phase delivered each surface.
+External adversarial validation precedes the semantic freeze (spec15 §134).
 
 | Phase | Delivers | State |
 | --- | --- | --- |
@@ -70,16 +74,30 @@ graph.addNode<AuthorizationPolicyDef>({
 - **ALLOW / DENY, fail closed.** `allow` evaluating to exactly `true` is **ALLOW**. `false`,
   an absent policy field, or *any evaluation error* is **DENY** — the safe direction for a
   failed access check is always refusal (spec15 §8, §123).
-- **A missing PRINCIPAL / RESOURCE field never satisfies a rule** (spec15pt2 F1). The policy
-  evaluator is three-valued — a concrete value, **security-scope absence** (a field the
-  scope object does not carry), or an evaluation error. A comparison, `not`, `neq` or `or`
+- **A missing PRINCIPAL / RESOURCE field never satisfies a rule** (spec15pt2 F1,
+  spec15pt3 F1-legacy). The authorization-expression evaluator is three-valued — a concrete
+  value, **security-scope absence** (a field the scope object does not carry), or an
+  evaluation error. A comparison, `not`, `neq`, `lt`, `contains`, `or` or any composition
   whose truth would depend on absence is *not satisfied*, so `PRINCIPAL.role != "banned"` /
   `NOT(PRINCIPAL.role == "banned")` / `RESOURCE.ownerId == PRINCIPAL.id` all **DENY** when
-  the named field is absent or the caller is anonymous. This is authorization-evaluation
-  semantics only; ordinary `Expression` equality/nullish behaviour elsewhere is unchanged
-  (spec15pt2 §4). An `OR` branch that is *concretely* true still allows even if the other
-  branch is absent-dependent. `literal(true)` is a genuine constant — an explicitly public
-  policy still admits an anonymous caller.
+  the named field is absent or the caller is anonymous. An evaluation error keeps its
+  provenance through `not` / `or`, so it can never be negated back to ALLOW. This is
+  authorization-evaluation semantics only; ordinary `Expression` equality / nullish behaviour
+  elsewhere is unchanged (spec15pt2 §4, spec15pt3 §6, §31). An `OR` branch that is
+  *concretely* true still allows even if the other branch is absent-dependent. `literal(true)`
+  is a genuine constant — an explicitly public rule still admits an anonymous caller; the
+  invariant is "missing referenced security fields cannot create authority", **not**
+  "anonymous is forbidden" (spec15pt3 §17).
+- **This applies to both authorization expressions Axiom supports** (spec15pt3 §74, §128):
+  the modern `AuthorizationPolicyDef.allow` **and** the retained legacy
+  `ActionDef.authorization` boolean expression. They share one canonical security-absence
+  primitive (`evaluateAuthorizationExpression`); they differ only in the *final*
+  interpretation applied downstream — a policy allows on exactly `true`, legacy keeps its
+  historical truthiness — never in how absence, boolean composition or errors propagate. So
+  yes: `ActionDef.authorization` **fails closed if a referenced principal attribute is
+  missing.** The legacy expression's historical scope (which could also read an ordinary
+  `StateDef`) is preserved; an unresolvable ref fails closed exactly as a throwing evaluation
+  did before.
 - **Referenced by id.** A protected surface points at a policy:
   - `ActionDef.authorizationPolicy` — `action.invoke`
   - `QueryDef.authorizationPolicy` — `query.read` (distinct from `readPolicyId`, which
@@ -134,13 +152,18 @@ architecture, preserved). Therefore:
 A graph with **no** authorization vocabulary compiles to the byte-identical v1–v8 document
 it always did and its fingerprint is unchanged (spec15 §39, §132).
 
-**Evaluator version.** `0.15.0-alpha.1` and `0.15.0-alpha.2` evaluate the *same* policy
-differently (absent-value safety, spec15pt2 F1), yet the graph — and its
-`semanticFingerprint` — is identical. So the `AuthorityCompatibilityKey` carries an
-`authorizationRuntime` discriminator, present only when the IR uses authorization
-vocabulary: a mixed `alpha.1` / `alpha.2` cluster over an authorization-bearing graph is
-fail-closed **incompatible** (spec15pt2 §35), while a graph with no policy rolls the
-upgrade unaffected.
+**Evaluator version.** Successive builds evaluate the *same* authorization expression
+differently — `alpha.1` → `alpha.2` for policies (spec15pt2 F1), `alpha.2` → `alpha.3` for
+the legacy `ActionDef.authorization` expression (spec15pt3 F1-legacy) — yet the graph, and
+its `semanticFingerprint`, is identical (runtime evaluator version is
+authority-compatibility identity, not graph identity). So the `AuthorityCompatibilityKey`
+carries an `authorizationRuntime` discriminator (`alpha.2` = `axiom.authz.v2`, `alpha.3` =
+`axiom.authz.v3`), present whenever the IR carries an authorization *decision* — an
+`AuthorizationPolicyDef` reference **or** a legacy `ActionDef.authorization` expression. A
+mixed cluster across evaluator versions, over any such graph, is fail-closed
+**incompatible** (present-vs-absent and any string difference are both mismatches;
+spec15pt2 §35, spec15pt3 §37-§42). A graph with **no** authorization decision never carries
+the field and rolls every upgrade unaffected.
 
 ---
 
@@ -153,7 +176,7 @@ effect retry) reconstructs it from durable identity, never a process-local objec
 
 | Operation | Kind | Resource | Effective principal | Pre-0.15 behaviour | 0.15 target |
 | --- | --- | --- | --- | --- | --- |
-| `handle({kind:'invoke'})` / `ActionDef` | execute | `ActionDef` (`{id,kind}`) | caller credential | `ActionDef.authorization` expr, or public | **C ✅** — `action.invoke` policy ∧ legacy expr, re-evaluated on every invocation against current policy |
+| `handle({kind:'invoke'})` / `ActionDef` | execute | `ActionDef` (`{id,kind}`) | caller credential | `ActionDef.authorization` expr, or public | **C ✅** — `action.invoke` policy ∧ legacy expr (both through the one security-absence-aware evaluator, spec15pt3), re-evaluated on every invocation against current policy |
 | workflow `action` step | execute | `ActionDef` | **workflow's start principal** | inherits action's `authorization`, re-evaluated per step (0.14) | **C ✅** — same `authorize()` as a direct call; workflow start never amplifies privilege (§101); denial is terminal not retried (§109) |
 | trigger / scheduler / event → action | execute | `ActionDef` | semantic object that scheduled it (no ambient SYSTEM) | `source: 'system'`, `invocation.allowedSources` | **C ✅** — policy under the canonical effective principal; `'system'` source is not privilege (§26, §102) |
 | `handle({kind:'query'})` / `QueryDef` | read | `QueryDef` | caller credential | `ReadPolicyDef` row filter, or public | **D ✅** — `query.read` policy gates the whole query before any provider call; `ReadPolicyDef` still filters rows, AND-ed into the effective filter so `filter`/`sort`/`limit`/aggregate see the authorized dataset (§18, §81, §82) |
@@ -186,7 +209,9 @@ stream serves no further data. Its `details` carry the canonical `operation`, a 
 machine `reason` —
 `policy-denied` (the policy is not exactly `true`), `policy-error` (the policy threw — an
 evaluation error is DENY, never ALLOW, spec15 §123), `legacy-denied` / `legacy-error` (the
-legacy `authorization` expression), or (for workflow instance ops with no policy declared)
+legacy `ActionDef.authorization` expression — `legacy-denied` covers the spec15pt3 case
+where the decision depended on a missing security-scope field), or (for workflow instance
+ops with no policy declared)
 `owner-mismatch`, or (spec15pt2 F3, when `host.authenticate` itself threw)
 `authentication-error` with `operation: 'authentication'` — plus `actionId` / `queryId`
 where applicable. A denied `query` operation

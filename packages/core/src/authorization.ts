@@ -21,6 +21,17 @@
  * equivalent to an inline `allow` over `PRINCIPAL`; `ReadPolicyDef` (spec10) remains the
  * row-level read mechanism, unified into query authorization by spec15 Phase D.
  *
+ * **spec15pt3 — one security-absence-aware evaluator for *every* authorization expression.**
+ * `AuthorizationPolicyDef.allow` and the legacy `ActionDef.authorization` expression share
+ * {@link evaluateAuthorizationExpression}: a `field(ref(PRINCIPAL), …)` / `field(ref(RESOURCE),
+ * …)` read of a key the scope object does not carry is **security-scope absence**, not an
+ * ordinary `undefined`, and `neq` / `not` / `or` / any comparison whose truth would depend on
+ * that absence is *not satisfied* — so a missing principal attribute can never manufacture
+ * authority through either surface (spec15pt3 §5, §7, §32). The two modes differ only in
+ * their *final interpretation* (a policy allows on exactly `true`; legacy keeps its historical
+ * truthiness), which `decideAuthorization` applies downstream — never in how absence, boolean
+ * composition or errors propagate.
+ *
  * This module is portable plain data + `Expression` trees; it carries no enforcement (that
  * is Phases C–F). The accessors are **total over any input** so a hand-tampered policy fails
  * closed with a structured diagnostic, never a native exception (spec15 §37).
@@ -377,6 +388,10 @@ export interface AuthorizationCheckInput {
   /**
    * The legacy `ActionDef.authorization` expression outcome, when that expression is present.
    * Its historical truthiness rule is kept: a non-empty array or any truthy value allows.
+   * spec15pt3 — this part MUST be produced by {@link evaluateAuthorizationExpression} (mode
+   * `'legacy-action'`), so `{ ok: true, value: false }` for a decision that depended on a
+   * missing security-scope field: absence reaches this combiner as a plain DENY, never as a
+   * truthy value.
    */
   legacy?: AuthorizationCheckPart;
 }
@@ -418,7 +433,7 @@ export function decideAuthorization(input: AuthorizationCheckInput): Authorizati
   return { decision: 'ALLOW', reason: 'allowed' };
 }
 
-// ------------------------------------- three-valued policy evaluation (spec15pt2 F1)
+// ------------------------------------- three-valued authorization evaluation (spec15pt2 F1, spec15pt3 F1-legacy)
 
 /**
  * The closed scope an `AuthorizationPolicyDef.allow` expression is evaluated against. Each
@@ -429,6 +444,38 @@ export interface AuthorizationPolicyScope {
   principal: Record<string, unknown> | null | undefined;
   resource: Record<string, unknown> | null | undefined;
   operation: string;
+}
+
+/**
+ * Which authorization surface an expression is evaluated for (spec15pt3 §32). Both modes
+ * share {@link evaluateAuthorizationExpression}'s security-absence, boolean-composition and
+ * error propagation; they differ only downstream, in `decideAuthorization` — a `'policy'`
+ * result allows on exactly `true`, a `'legacy-action'` result keeps the historical
+ * `ActionDef.authorization` truthiness rule.
+ */
+export type AuthorizationEvaluationMode = 'policy' | 'legacy-action';
+
+/**
+ * The evaluation context for {@link evaluateAuthorizationExpression}. `'policy'` mode uses the
+ * closed `{ principal, resource, operation }` scope only. `'legacy-action'` mode additionally
+ * honours the historical `ActionDef.authorization` scope, which could also read an ordinary
+ * `StateDef`: {@link resolveExternalRef} resolves such a `ref` through the caller's ordinary
+ * evaluator, and an id it cannot resolve fails **closed** (never silently allows), exactly as
+ * a throwing `runtime.evaluate` did pre-pt3.
+ */
+export interface AuthorizationExpressionContext {
+  principal: Record<string, unknown> | null | undefined;
+  resource?: Record<string, unknown> | null | undefined;
+  operation?: string;
+  resolveExternalRef?: (refId: string) => { found: boolean; value?: unknown };
+}
+
+interface AuthzEvalContext {
+  principal: Record<string, unknown> | null | undefined;
+  resource: Record<string, unknown> | null | undefined;
+  operation: string;
+  mode: AuthorizationEvaluationMode;
+  resolveExternalRef?: (refId: string) => { found: boolean; value?: unknown };
 }
 
 /** `concrete` value | `unknown` (a missing PRINCIPAL/RESOURCE field) | `error`. */
@@ -459,7 +506,7 @@ function isSecurityRooted(expression: unknown): boolean {
   return false;
 }
 
-function evalAuthz(expression: unknown, scope: AuthorizationPolicyScope, seen: Set<object>): AuthzValue {
+function evalAuthz(expression: unknown, scope: AuthzEvalContext, seen: Set<object>): AuthzValue {
   if (!isPlainObject(expression) || seen.has(expression)) return E;
   seen.add(expression);
   switch (expression.kind) {
@@ -470,6 +517,14 @@ function evalAuthz(expression: unknown, scope: AuthorizationPolicyScope, seen: S
       if (t === AUTHZ_PRINCIPAL_SCOPE) return C(scope.principal ?? null);
       if (t === AUTHZ_RESOURCE_SCOPE) return C(scope.resource ?? null);
       if (t === AUTHZ_OPERATION_SCOPE) return C(scope.operation);
+      // spec15pt3 — a legacy `ActionDef.authorization` expression's historical scope also
+      // reaches ordinary `StateDef` refs. Resolve them through the caller's ordinary
+      // evaluator; an unresolved ref fails closed (`E` ⇒ DENY), never silently allows. A
+      // policy expression's scope is closed, so this branch is unreachable in `'policy'` mode.
+      if (scope.mode === 'legacy-action' && scope.resolveExternalRef) {
+        const resolved = scope.resolveExternalRef(t);
+        return resolved.found ? C(resolved.value) : E;
+      }
       return E; // out of the closed scope — validation rejects it; be total
     }
     case 'field': {
@@ -619,35 +674,67 @@ function applyPolicyBuiltin(fn: string, args: unknown[]): AuthzValue {
 }
 
 /**
- * spec15pt2 F1 — the **canonical** three-valued `AuthorizationPolicyDef.allow` evaluator,
- * used by every policy-bearing surface (spec15pt2 §33). Returns the `{ ok, value }` shape
- * `decideAuthorization` already consumes:
+ * spec15pt3 §32 — the **one** canonical security-absence-aware authorization-expression
+ * evaluator, shared by `AuthorizationPolicyDef.allow` (`mode: 'policy'`) and the legacy
+ * `ActionDef.authorization` expression (`mode: 'legacy-action'`). Returns the `{ ok, value }`
+ * shape `decideAuthorization` consumes:
  *
- * - `allow` reduces to **exactly `true`** (with every required security input present) ⇒
- *   `{ ok: true, value: true }` — the only ALLOW;
- * - `allow` reduces to any other concrete value ⇒ `{ ok: true, value: false }`;
- * - the truth of `allow` depends on a **missing PRINCIPAL / RESOURCE field**
- *   (`AbsentSecurityValue`) ⇒ `{ ok: true, value: false }` — absence never creates authority
- *   through `eq` / `neq` / `not` / `or` (spec15pt2 §8-§12);
- * - an evaluation error (malformed node reaching the runtime, unsupported builtin) ⇒
- *   `{ ok: false }`.
+ * - the expression reduces to a concrete value ⇒ `{ ok: true, value }` — for `'policy'` only
+ *   an exact `true` is ALLOW; for `'legacy-action'` the historical truthiness rule (a truthy
+ *   value / non-empty array) applies, both in `decideAuthorization`;
+ * - its truth depends on a **missing PRINCIPAL / RESOURCE field** ⇒ `{ ok: true, value: false }`
+ *   — absence never creates authority through `eq` / `neq` / `not` / `lt` / `contains` /
+ *   `or` / any composition (spec15pt2 §8-§12, spec15pt3 §11-§16, §79-§82);
+ * - an evaluation error (malformed node reaching the runtime, unsupported builtin, an
+ *   unresolvable legacy `ref`) ⇒ `{ ok: false }` — fail closed, and the error keeps its
+ *   provenance through `not` / `or` so it cannot be negated back to ALLOW (spec15pt3 §84).
  *
  * A constant `literal(true)` is `{ ok: true, value: true }` regardless of principal — an
- * explicitly public policy still admits an anonymous caller (spec15pt2 §13, §14).
+ * explicitly public rule still admits an anonymous caller; the invariant is "missing
+ * referenced security fields cannot create authority", not "anonymous is forbidden"
+ * (spec15pt2 §13, §14; spec15pt3 §17). A `literal` nullish value stays a concrete value,
+ * never security absence (spec15pt3 §58).
  */
-export function evaluateAuthorizationPolicyAllow(
-  allow: unknown,
-  scope: AuthorizationPolicyScope,
+export function evaluateAuthorizationExpression(
+  expression: unknown,
+  context: AuthorizationExpressionContext,
+  mode: AuthorizationEvaluationMode,
 ): AuthorizationCheckPart {
   let result: AuthzValue;
   try {
-    result = evalAuthz(allow, scope, new Set());
+    result = evalAuthz(
+      expression,
+      {
+        principal: context.principal ?? null,
+        resource: context.resource ?? null,
+        operation: context.operation ?? 'action.invoke',
+        mode,
+        ...(context.resolveExternalRef ? { resolveExternalRef: context.resolveExternalRef } : {}),
+      },
+      new Set(),
+    );
   } catch {
     return { ok: false };
   }
   if (result.t === 'e') return { ok: false };
   if (result.t === 'u') return { ok: true, value: false };
   return { ok: true, value: result.v };
+}
+
+/**
+ * spec15pt2 F1 — the three-valued `AuthorizationPolicyDef.allow` evaluator. A thin, stable
+ * wrapper over {@link evaluateAuthorizationExpression} in `'policy'` mode, kept for every
+ * existing policy-bearing call site (spec15pt2 §33).
+ */
+export function evaluateAuthorizationPolicyAllow(
+  allow: unknown,
+  scope: AuthorizationPolicyScope,
+): AuthorizationCheckPart {
+  return evaluateAuthorizationExpression(
+    allow,
+    { principal: scope.principal, resource: scope.resource, operation: scope.operation },
+    'policy',
+  );
 }
 
 /**

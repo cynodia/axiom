@@ -10,7 +10,7 @@
     "contract": "axiom.server.v6",
     "id": "query-conformance",
     "name": "Query Conformance",
-    "version": "0.15.0-alpha.2",
+    "version": "0.15.0-alpha.3",
     "entities": [
       {
         "id": "entity_principal",

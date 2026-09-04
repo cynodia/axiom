@@ -47,6 +47,7 @@ const S_COUNT = nodeId('state_count');
 const POL_ADMIN = nodeId('policy_admin');
 const A_BUMP = nodeId('action_bump'); // admin-gated authoritative state mutation
 const A_STEP = nodeId('action_step'); // admin-gated system-only workflow step
+const A_LEG = nodeId('action_legacy'); // legacy ActionDef.authorization: role != "banned" (spec15pt3)
 const WF_ESCALATE = nodeId('wf_escalate');
 const P_TAG = nodeId('input_tag');
 const EV = nodeId('event_go');
@@ -74,6 +75,12 @@ function graph(): ApplicationGraph {
   ];
   g.addNode<ActionDef>({ id: A_BUMP, kind: 'action', authorizationPolicy: POL_ADMIN, operations: bump() });
   g.addNode<ActionDef>({ id: A_STEP, kind: 'action', authorizationPolicy: POL_ADMIN, invocation: { allowedSources: ['system'] }, operations: bump() });
+  g.addNode<ActionDef>({
+    id: A_LEG,
+    kind: 'action',
+    authorization: binary('neq', field(ref(PRINCIPAL), F_ROLE), literal('banned')),
+    operations: bump(),
+  } as ActionDef);
   g.addNode<WorkflowDef>({
     id: WF_ESCALATE,
     kind: 'workflow',
@@ -90,10 +97,11 @@ function graph(): ApplicationGraph {
 const IR = compileToServerIR(graph());
 const ADMIN = { [F_UID]: 'u-admin', [F_ROLE]: 'admin' };
 const CLERK = { [F_UID]: 'u-clerk', [F_ROLE]: 'clerk' };
+const BANNED = { [F_UID]: 'u-ban', [F_ROLE]: 'banned' };
 
 function host() {
   return createDeterministicServerHost({
-    authenticate: (c) => (c === 'admin' ? ADMIN : c === 'clerk' ? CLERK : null) as never,
+    authenticate: (c) => (c === 'admin' ? ADMIN : c === 'clerk' ? CLERK : c === 'banned' ? BANNED : null) as never,
   });
 }
 
@@ -136,6 +144,28 @@ test('spec15 §75: the same authorized decision holds on 1, 2 and 8 authorities 
       // Exactly the n authorized commits landed — the denied ones mutated nothing.
       const snap = await servers[0].coherentSnapshot();
       assert.equal(snap.states[S_COUNT as never], n, `only the ${n} authorized bumps committed`);
+    });
+  }
+});
+
+test('spec15pt3 §68/§69/§72: the legacy `role != "banned"` decision is identical on 1, 2 and 8 authorities', { skip: !sqlite }, async () => {
+  const legInvoke = (credential?: string): ServerRequest =>
+    ({ kind: 'invoke', protocol: PROTOCOL_VERSION, actionId: A_LEG, arguments: {}, ...(credential ? { credential } : {}) }) as ServerRequest;
+  for (const n of [1, 2, 8]) {
+    await withAuthorities(n, async (servers) => {
+      let allowed = 0;
+      for (let i = 0; i < n; i += 1) {
+        const ok = (await servers[i].handle(legInvoke('admin'))) as { ok?: boolean };
+        assert.equal(ok.ok, true, `authority ${i}/${n}: a concrete non-banned role must ALLOW`);
+        allowed += 1;
+        for (const bad of ['banned', undefined] as const) {
+          const no = (await servers[(i + 1) % n].handle(legInvoke(bad))) as { ok?: boolean; diagnostics?: Array<{ code?: unknown }> };
+          assert.equal(no.ok, false, `authority ${i}/${n}: ${bad ?? 'anonymous'} must DENY the legacy deny-list action`);
+          assert.ok((no.diagnostics ?? []).some((x) => String(x.code) === 'AUTHORIZATION_DENIED'));
+        }
+      }
+      const snap = await servers[0].coherentSnapshot();
+      assert.equal(snap.states[S_COUNT as never], allowed, `only the ${allowed} authorized invoke(s) committed — banned / anonymous mutated nothing`);
     });
   }
 });

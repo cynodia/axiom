@@ -174,12 +174,15 @@ export interface AuthorityCompatibilityKey {
   serverContract: string;
   semanticFingerprint: string;
   /**
-   * spec15pt2 §35 — the runtime authorization-evaluator semantics version. `0.15.0-alpha.1`
-   * and `0.15.0-alpha.2` evaluate the *same* Server IR authorization policy differently
-   * (absent-value safety, F1), yet the graph — and therefore `semanticFingerprint` — is
-   * identical. This discriminator, present only when the IR carries authorization
-   * vocabulary, keeps the two builds from silently co-participating in one authority domain.
-   * Absent on a graph with no authorization policy (its evaluation is unchanged).
+   * spec15pt2 §35, spec15pt3 §37-§39 — the runtime authorization-evaluator semantics
+   * version. Successive builds evaluate the *same* Server IR authorization expression
+   * differently — `alpha.1` → `alpha.2` for `AuthorizationPolicyDef.allow` (absent-value
+   * safety, F1), `alpha.2` → `alpha.3` for the legacy `ActionDef.authorization` expression
+   * (F1-legacy) — yet the graph, and therefore `semanticFingerprint`, is identical. This
+   * discriminator, present whenever the IR carries an authorization *decision* (a policy
+   * reference or a legacy `authorization` expression), keeps builds that disagree from
+   * silently co-participating in one authority domain. Absent on a graph with no
+   * authorization decision (its evaluation is unchanged across every build).
    */
   authorizationRuntime?: string;
 }

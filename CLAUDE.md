@@ -444,6 +444,36 @@ turn it into a working browser application whose generated JavaScript nobody rea
   `pt2-owner-both-absent`, memory + SQLite). New tests:
   `core/test/authorization.test.ts` (+10), `server/test/authorization-pt2.test.ts`,
   `server/test/authorization-identity.test.ts` (+1).
+* `specs/spec15pt3.md` — the **0.15pt3 corrective pass** (`0.15.0-alpha.3`), closing the
+  alpha.2 blind-rerun blocker **F1-legacy**: the legacy `ActionDef.authorization` expression
+  still ran through generic `runtime.evaluate`, so `PRINCIPAL.role != "banned"` /
+  `NOT(PRINCIPAL.role == "banned")` ALLOWed an anonymous / attribute-less caller (spec15pt2
+  §32 had deliberately left it unchanged). Fix: **one** canonical
+  `evaluateAuthorizationExpression(expression, context, mode)` in `core/authorization.ts`
+  (`mode: 'policy' | 'legacy-action'`) — the pt2 `evalAuthz` three-valued machinery
+  generalized with a mode + optional `resolveExternalRef`; `evaluateAuthorizationPolicyAllow`
+  is now a thin `'policy'` wrapper (every policy call site byte-unchanged). Both modes share
+  absence provenance / boolean-comparison propagation / error containment and differ **only**
+  downstream in `decideAuthorization` (policy allows on exactly `true`; legacy keeps its
+  historical truthiness). `server.ts` `authorize()` evaluates `action.authorization` through
+  it (mode `'legacy-action'`, `resolveExternalRef` = `runtime.evaluate` for the historical
+  `StateDef` scope; an unresolved ref fails closed) — the single legacy-auth evaluation site,
+  so direct / workflow-step / scheduler / event / retry / failover all funnel through
+  `invokeCore` → `authorize` identically (§21, §22); `evalToPart` removed. `literal(true)`
+  still admits anonymous (§17); `literal(undefined)` stays concrete (§58); an error keeps
+  provenance through `not` (§84). **§37-§42** — `AUTHORIZATION_RUNTIME_VERSION` →
+  `'axiom.authz.v3'`, stamped when the IR carries an authorization *decision*
+  (`usesAuthorizationVocabulary(ir) || usesLegacyActionAuthorization(ir)` — new total core
+  helper): alpha.2↔alpha.3 is fail-closed incompatible for a legacy-only graph
+  (present-vs-absent), a legacy+policy graph and a policy-only graph (`v2`≠`v3`); a graph
+  with no authorization decision rolls forward unaffected. `semanticFingerprint` /
+  `SEMANTIC_FINGERPRINT_VERSION` unchanged (§43). **No new graph/IR vocabulary**; Server IR
+  `axiom.server.v9`, conformance `axiom.conformance.v9` (+5 fixtures →17:
+  `legacy-action-neq-absent-deny`, `legacy-action-not-eq-absent-deny`,
+  `legacy-action-constant-public`, `legacy-action-positive-role`,
+  `legacy-plus-policy-absent-conjunction`, memory + SQLite). New tests:
+  `core/test/authorization.test.ts` (+14), `server/test/authorization-pt3.test.ts` (9),
+  `server/test/authorization-identity.test.ts` (+5).
 
 Together, spec2–spec14 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is

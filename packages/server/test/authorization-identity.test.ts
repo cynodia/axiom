@@ -161,3 +161,73 @@ test('spec15pt2 §35/§76-§78: the authorization-evaluator version discriminate
   // A non-authz graph is compatible across the (missing) discriminator on both sides.
   assert.equal(compareAuthorityCompatibility(plain, serverIrCompatibilityKey(ir({}))).compatible, true);
 });
+
+// ---------------------------------- spec15pt3 §37-§42 — legacy evaluator version discriminator
+
+const F_ROLE = fieldId('field_principal_role2');
+
+/** A graph carrying a legacy `ActionDef.authorization` expression (and optionally a policy). */
+function legacyIr(opts: { policy?: boolean } = {}): ServerIR {
+  const g = new ApplicationGraph('ali', 'Authz Legacy Identity');
+  g.addNode<EntityDef>({ id: E_PRIN, kind: 'entity', fields: [{ id: F_ROLE, valueType: primitiveType('string'), required: false }] });
+  g.setPrincipalEntity(E_PRIN);
+  g.addNode<StateDef>({ id: S_COUNT, kind: 'state', authority: 'server', valueType: primitiveType('number'), initialValue: 0 });
+  g.addNode<ActionDef>({
+    id: A_DO,
+    kind: 'action',
+    invocation: { allowedSources: ['system'] },
+    authorization: binary('neq', field(ref(PRINCIPAL), F_ROLE), literal('banned')),
+    ...(opts.policy ? { authorizationPolicy: POL } : {}),
+    operations: [{ kind: 'set', target: stateLocation(S_COUNT), value: binary('add', ref(S_COUNT), literal(1)) }],
+  } as ActionDef);
+  if (opts.policy) {
+    g.addNode<AuthorizationPolicyDef>({ id: POL, kind: 'authorization-policy', allow: literal(true) });
+  }
+  return compileToServerIR(g);
+}
+
+/** An alpha.2-shaped key: the same graph identity, but no `authorizationRuntime` at all. */
+const dropRuntime = (k: ReturnType<typeof serverIrCompatibilityKey>) => ({
+  schemaVersion: k.schemaVersion,
+  schemaFingerprint: k.schemaFingerprint,
+  serverContract: k.serverContract,
+  semanticFingerprint: k.semanticFingerprint,
+});
+/** An alpha.2-shaped key that still stamps the *old* `axiom.authz.v2` discriminator (a policy graph on alpha.2). */
+const withV2 = (k: ReturnType<typeof serverIrCompatibilityKey>) => ({ ...dropRuntime(k), authorizationRuntime: 'axiom.authz.v2' });
+
+test('spec15pt3 §39: a legacy-`ActionDef.authorization` graph carries the evaluator discriminator', () => {
+  const key = serverIrCompatibilityKey(legacyIr());
+  assert.equal((key as { authorizationRuntime?: string }).authorizationRuntime, 'axiom.authz.v3');
+});
+
+test('spec15pt3 §40: alpha.2 ↔ alpha.3 over a legacy-auth graph is fail-closed incompatible', () => {
+  const alpha3 = serverIrCompatibilityKey(legacyIr());
+  // alpha.2 never stamped a discriminator for a legacy-only graph (`usesAuthorizationVocabulary` is false there).
+  const cmp = compareAuthorityCompatibility(alpha3, dropRuntime(alpha3));
+  assert.equal(cmp.compatible, false);
+  assert.ok(cmp.mismatches.includes('authorizationRuntime'));
+  // alpha.3 ↔ alpha.3 on the same graph stays compatible.
+  assert.equal(compareAuthorityCompatibility(alpha3, serverIrCompatibilityKey(legacyIr())).compatible, true);
+});
+
+test('spec15pt3 §41: alpha.2 ↔ alpha.3 over a legacy + new-policy graph is incompatible', () => {
+  const alpha3 = serverIrCompatibilityKey(legacyIr({ policy: true }));
+  const cmp = compareAuthorityCompatibility(alpha3, withV2(alpha3));
+  assert.equal(cmp.compatible, false);
+  assert.ok(cmp.mismatches.includes('authorizationRuntime'));
+});
+
+test('spec15pt3 §41: alpha.2 ↔ alpha.3 over a new-policy-only graph is incompatible (v2 ≠ v3)', () => {
+  const alpha3 = serverIrCompatibilityKey(ir({ policy: true }));
+  assert.equal((alpha3 as { authorizationRuntime?: string }).authorizationRuntime, 'axiom.authz.v3');
+  assert.equal(compareAuthorityCompatibility(alpha3, withV2(alpha3)).compatible, false);
+});
+
+test('spec15pt3 §42/§43: a graph with no authorization decision rolls alpha.2 → alpha.3 unaffected', () => {
+  const plain = serverIrCompatibilityKey(ir({}));
+  assert.equal((plain as { authorizationRuntime?: string }).authorizationRuntime, undefined);
+  // Same semantic fingerprint across the two builds, no discriminator on either side ⇒ compatible.
+  assert.equal(compareAuthorityCompatibility(plain, dropRuntime(plain)).compatible, true);
+  assert.equal(serverIrSemanticFingerprint(ir({})), serverIrSemanticFingerprint(ir({})));
+});

@@ -12,6 +12,7 @@ import {
   binary,
   call,
   decideAuthorization,
+  evaluateAuthorizationExpression,
   evaluateAuthorizationPolicyAllow,
   field,
   fieldId,
@@ -301,4 +302,189 @@ test('spec15pt2 F2/§79: validateGraph rejects a malformed AuthorizationPolicyDe
     const codes = validateGraph(g).errors.map((e) => e.code);
     assert.ok(codes.includes('AUTHORIZATION_INVALID_POLICY'), `${JSON.stringify(allow)} → codes ${codes.join(',')}`);
   }
+});
+
+// ------------------------------- spec15pt3 F1-legacy — legacy ActionDef.authorization
+
+/**
+ * Decide a *legacy* `ActionDef.authorization` expression through the same canonical
+ * security-absence-aware primitive as a policy (`evaluateAuthorizationExpression`, mode
+ * `'legacy-action'`), then the legacy branch of `decideAuthorization` (spec15pt3 §7, §32).
+ */
+function legacyDecide(
+  expression: unknown,
+  scope: {
+    principal?: Record<string, unknown> | null;
+    resource?: Record<string, unknown> | null;
+    resolveExternalRef?: (refId: string) => { found: boolean; value?: unknown };
+  } = {},
+): 'ALLOW' | 'DENY' {
+  const part = evaluateAuthorizationExpression(
+    expression,
+    {
+      principal: scope.principal ?? null,
+      resource: scope.resource ?? null,
+      operation: 'action.invoke',
+      ...(scope.resolveExternalRef ? { resolveExternalRef: scope.resolveExternalRef } : {}),
+    },
+    'legacy-action',
+  );
+  return decideAuthorization({ legacy: part }).decision;
+}
+
+test('spec15pt3 §11: legacy PRINCIPAL.role != "banned" — concrete allows, absent / anonymous deny', () => {
+  const expr = binary('neq', pRole(), literal('banned'));
+  assert.equal(legacyDecide(expr, { principal: { [P_ROLE]: 'user' } }), 'ALLOW');
+  assert.equal(legacyDecide(expr, { principal: { [P_ROLE]: 'banned' } }), 'DENY');
+  assert.equal(legacyDecide(expr, { principal: {} }), 'DENY', 'role absent');
+  assert.equal(legacyDecide(expr, { principal: null }), 'DENY', 'anonymous');
+});
+
+test('spec15pt3 §12: legacy NOT(PRINCIPAL.role == "banned") — absent / anonymous / malformed deny', () => {
+  const expr = unary('not', binary('eq', pRole(), literal('banned')));
+  assert.equal(legacyDecide(expr, { principal: { [P_ROLE]: 'user' } }), 'ALLOW');
+  assert.equal(legacyDecide(expr, { principal: { [P_ROLE]: 'banned' } }), 'DENY');
+  assert.equal(legacyDecide(expr, { principal: {} }), 'DENY');
+  assert.equal(legacyDecide(expr, { principal: null }), 'DENY');
+  assert.equal(legacyDecide(expr, { principal: { unrelated: 1 } as never }), 'DENY', 'attribute-less named principal');
+});
+
+test('spec15pt3 §13: legacy both-absent equality ⇒ DENY, concrete match ⇒ ALLOW', () => {
+  const expr = binary('eq', field(ref(PRINCIPAL), P_ID2), field(ref(RESOURCE), R_OWNER));
+  assert.equal(legacyDecide(expr, { principal: {}, resource: {} }), 'DENY');
+  assert.equal(legacyDecide(expr, { principal: { [P_ID2]: 'u1' }, resource: { [R_OWNER]: 'u1' } }), 'ALLOW');
+  assert.equal(legacyDecide(expr, { principal: { [P_ID2]: 'u1' }, resource: { [R_OWNER]: 'u2' } }), 'DENY');
+});
+
+test('spec15pt3 §17/§18: legacy literal(true) admits anonymous; literal(false) denies', () => {
+  assert.equal(legacyDecide(literal(true), { principal: null }), 'ALLOW');
+  assert.equal(legacyDecide(literal(false), { principal: { [P_ROLE]: 'admin' } }), 'DENY');
+});
+
+test('spec15pt3 §19: legacy PRINCIPAL.role == "admin" — positive rule is unchanged', () => {
+  const expr = binary('eq', pRole(), literal('admin'));
+  assert.equal(legacyDecide(expr, { principal: { [P_ROLE]: 'admin' } }), 'ALLOW');
+  assert.equal(legacyDecide(expr, { principal: { [P_ROLE]: 'user' } }), 'DENY');
+  assert.equal(legacyDecide(expr, { principal: {} }), 'DENY');
+  assert.equal(legacyDecide(expr, { principal: null }), 'DENY');
+});
+
+test('spec15pt3 §9: legacy call(required, ref(PRINCIPAL)) — a present principal allows, anonymous denies', () => {
+  const expr = call('required', ref(PRINCIPAL));
+  assert.equal(legacyDecide(expr, { principal: { [P_ID2]: 'u1' } }), 'ALLOW');
+  assert.equal(legacyDecide(expr, { principal: null }), 'DENY');
+});
+
+test('spec15pt3 §15/§16/§56: legacy OR — an independent concrete branch still allows, otherwise absence denies', () => {
+  const idBranch = binary('eq', field(ref(PRINCIPAL), P_ID2), literal('public-service'));
+  const roleBranch = binary('neq', pRole(), literal('banned'));
+  const or = binary('or', idBranch, roleBranch);
+  // id = public-service, role absent ⇒ first branch concretely true ⇒ ALLOW (§56)
+  assert.equal(legacyDecide(or, { principal: { [P_ID2]: 'public-service' } }), 'ALLOW');
+  // anonymous ⇒ both branches unknown ⇒ DENY (§57)
+  assert.equal(legacyDecide(or, { principal: null }), 'DENY');
+  // FALSE OR unknown ⇒ DENY
+  assert.equal(legacyDecide(or, { principal: { [P_ID2]: 'someone-else' } }), 'DENY');
+});
+
+test('spec15pt3 §55: legacy nested NOT(banned OR disabled) — any absent input denies', () => {
+  const P_STATUS = fieldId('field_p_status');
+  const expr = unary(
+    'not',
+    binary(
+      'or',
+      binary('eq', pRole(), literal('banned')),
+      binary('eq', field(ref(PRINCIPAL), P_STATUS), literal('disabled')),
+    ),
+  );
+  assert.equal(legacyDecide(expr, { principal: { [P_ROLE]: 'user', [P_STATUS]: 'active' } }), 'ALLOW');
+  assert.equal(legacyDecide(expr, { principal: { [P_ROLE]: 'banned', [P_STATUS]: 'active' } }), 'DENY');
+  assert.equal(legacyDecide(expr, { principal: { [P_ROLE]: 'user', [P_STATUS]: 'disabled' } }), 'DENY');
+  assert.equal(legacyDecide(expr, { principal: { [P_STATUS]: 'active' } }), 'DENY', 'role absent');
+  assert.equal(legacyDecide(expr, { principal: { [P_ROLE]: 'user' } }), 'DENY', 'status absent');
+  assert.equal(legacyDecide(expr, { principal: null }), 'DENY');
+});
+
+test('spec15pt3 §80: legacy comparison operators over absent security data never grant', () => {
+  const P_LEVEL = fieldId('field_p_level');
+  for (const op of ['eq', 'neq', 'lt', 'lte', 'gt', 'gte'] as const) {
+    assert.equal(
+      legacyDecide(binary(op, field(ref(PRINCIPAL), P_LEVEL), literal(5)), { principal: {} }),
+      'DENY',
+      `${op} over an absent field`,
+    );
+  }
+  // `contains` with an absent principal operand does not accidentally satisfy
+  assert.equal(
+    legacyDecide(call('contains', field(ref(PRINCIPAL), P_LEVEL), literal('x')), { principal: {} }),
+    'DENY',
+  );
+});
+
+test('spec15pt3 §58: a legacy literal(undefined) stays concrete, not security-absence', () => {
+  assert.equal(
+    legacyDecide(binary('eq', literal(undefined as never), literal(undefined as never)), {}),
+    'ALLOW',
+  );
+});
+
+test('spec15pt3 §84: a legacy evaluation error stays fail-closed through NOT', () => {
+  // An unresolvable non-PRINCIPAL ref with no resolver ⇒ error ⇒ DENY, and NOT(error) is
+  // still DENY — the error is not negated back to ALLOW.
+  const bareRef = ref(nodeId('state_missing'));
+  assert.equal(legacyDecide(bareRef), 'DENY');
+  assert.equal(legacyDecide(unary('not', bareRef)), 'DENY');
+});
+
+test('spec15pt3 §8: legacy StateDef scope is preserved via resolveExternalRef; an unresolved ref fails closed', () => {
+  const S_FLAG = nodeId('state_flag');
+  const expr = binary(
+    'and',
+    binary('eq', pRole(), literal('admin')),
+    binary('eq', ref(S_FLAG), literal('on')),
+  );
+  const resolve = (id: string) => (id === String(S_FLAG) ? { found: true, value: 'on' } : { found: false });
+  assert.equal(
+    legacyDecide(expr, { principal: { [P_ROLE]: 'admin' }, resolveExternalRef: resolve }),
+    'ALLOW',
+    'admin + state flag on ⇒ ALLOW (historical scope preserved)',
+  );
+  assert.equal(
+    legacyDecide(expr, { principal: { [P_ROLE]: 'admin' } }),
+    'DENY',
+    'no resolver ⇒ the state ref is an error ⇒ DENY',
+  );
+  assert.equal(
+    legacyDecide(binary('eq', ref(S_FLAG), literal('on')), {
+      resolveExternalRef: () => ({ found: false }),
+    }),
+    'DENY',
+    'resolver reports not-found ⇒ DENY',
+  );
+});
+
+test('spec15pt3 §32/§33: policy and legacy modes share one primitive — same absence propagation', () => {
+  // The same expression evaluated in each mode reduces the same absence to a non-grant; the
+  // only difference is downstream (decideAuthorization policy vs legacy branch).
+  const expr = binary('neq', pRole(), literal('banned'));
+  const scope = { principal: {}, resource: null, operation: 'action.invoke' };
+  const asPolicy = evaluateAuthorizationExpression(expr, scope, 'policy');
+  const asLegacy = evaluateAuthorizationExpression(expr, scope, 'legacy-action');
+  assert.deepEqual(asPolicy, { ok: true, value: false });
+  assert.deepEqual(asLegacy, { ok: true, value: false });
+  assert.equal(decideAuthorization({ policy: asPolicy }).decision, 'DENY');
+  assert.equal(decideAuthorization({ legacy: asLegacy }).decision, 'DENY');
+});
+
+test('spec15pt3 §31: ordinary Expression semantics are untouched — this is authorization-only', () => {
+  // evaluateAuthorizationExpression is a dedicated primitive; it does not touch the ordinary
+  // expression evaluator. The absent-value rule here is scoped to authorization by construction
+  // (a different function), so any non-authorization eq(undefined, undefined) elsewhere keeps
+  // its own semantics.
+  const part = evaluateAuthorizationExpression(
+    binary('eq', literal(undefined as never), literal(undefined as never)),
+    { principal: null, resource: null, operation: 'action.invoke' },
+    'legacy-action',
+  );
+  assert.deepEqual(part, { ok: true, value: true }, 'literal/literal comparison is concrete');
 });

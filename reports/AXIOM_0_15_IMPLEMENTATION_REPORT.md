@@ -20,9 +20,9 @@ Spec: `specs/spec15.md` — **Authorization Completeness**. Design note:
 | **I** | The internal adversarial matrix (forbidden counters), topology-independence 1/2/8 authorities on shared SQLite, cross-principal race + contention, failover parity | ✅ landed |
 
 **All nine phases A–I are landed.** `0.15.0-alpha.1` cut the milestone; `0.15.0-alpha.2`
-(spec15pt2) is a corrective pass — see **spec15pt2** below. External blind adversarial
-validation (spec15 §134-§137) precedes the 0.15 semantic freeze and is not part of this
-checkout.
+(spec15pt2) and `0.15.0-alpha.3` (spec15pt3) are corrective passes — see **spec15pt2** and
+**spec15pt3** below. External blind adversarial validation (spec15 §134-§137) precedes the
+0.15 semantic freeze and is not part of this checkout.
 
 ## spec15pt2 — corrective pass (`0.15.0-alpha.2`)
 
@@ -88,6 +88,58 @@ workflow revision, and no exception detail (token / stack) crossing the boundary
 | `packages/server/test/authorization-pt2.test.ts` (7) | F1 end-to-end on action / query / workflow start / instance access / live open / live re-eval (concrete allows, absent + anonymous deny); `literal(true)` still admits anonymous; F3 throwing `authenticate` fails closed secret-free on every surface with zero mutation |
 | `packages/server/test/authorization-identity.test.ts` (+1) | `authorizationRuntime` discriminates `alpha.1` (stored key, no field) from `alpha.2`; `alpha.2`↔`alpha.2` and presentation-only stay compatible; non-authz graph unaffected (§35, §76-§78) |
 | `packages/server/conformance/authorization/` (+2 fixtures) | `pt2-deny-list-absent-value`, `pt2-owner-both-absent` — over memory **and** SQLite (§53, §54) |
+
+## spec15pt3 — corrective pass (`0.15.0-alpha.3`)
+
+The blind rerun of `alpha.2` confirmed F1/F2/F3 closed but found one new release blocker,
+**F1-legacy**: the *legacy* `ActionDef.authorization` expression path still used generic
+`runtime.evaluate`, so `NOT(PRINCIPAL.role == "banned")` / `PRINCIPAL.role != "banned"`
+evaluated to ALLOW for an anonymous / attribute-less caller (`absent != "banned"` is
+`true`). spec15pt2 §32 had explicitly left that path unchanged; spec15pt3 closes it. No new
+graph/IR vocabulary; Server IR stays `axiom.server.v9`, conformance `axiom.conformance.v9`.
+
+### F1-legacy — legacy `ActionDef.authorization` absent-value fail-open (release-blocking)
+
+- **`packages/core/src/authorization.ts`** — one canonical
+  `evaluateAuthorizationExpression(expression, context, mode)` (`mode: 'policy' |
+  'legacy-action'`). The pt2 three-valued machinery (`evalAuthz`) is generalized to carry
+  the mode + an optional `resolveExternalRef`; `evaluateAuthorizationPolicyAllow` becomes a
+  thin wrapper (`mode: 'policy'`) — every existing policy call site is byte-unchanged. The
+  two modes share absence provenance, boolean/comparison propagation and error containment;
+  they differ **only** downstream in `decideAuthorization` (a policy allows on exactly
+  `true`; legacy keeps its historical truthiness). No second absence ruleset (spec15pt3
+  §32, §33).
+- **`legacy-action` mode scope.** `field(ref(PRINCIPAL|RESOURCE), F)` with `F` absent ⇒
+  security-scope `unknown` ⇒ non-grant. The historical scope also reached an ordinary
+  `StateDef`: a `ref` outside PRINCIPAL/RESOURCE/OPERATION is delegated to
+  `resolveExternalRef` (server backs it with `runtime.evaluate`), and an id it cannot
+  resolve is an `error` ⇒ DENY — exactly as a throwing `runtime.evaluate` was before
+  (spec15pt3 §8, §84). `literal(true)` still admits anonymous (§17); a `literal(undefined)`
+  stays concrete, not absence (§58).
+- **`packages/server/src/server.ts`** — `authorize()` now evaluates
+  `action.authorization` through `evaluateAuthorizationExpression(..., 'legacy-action')`
+  instead of `evalToPart(runtime.evaluate(legacy))` (removed). This is the **single**
+  legacy-authorization evaluation site, so every path — direct invoke, workflow action
+  step, scheduler / event trigger, retry, failover — funnels through `invokeCore` →
+  `authorize` and gets identical semantics (spec15pt3 §21, §22). Denial reason stays
+  `legacy-denied` (a missing-field decision) / `legacy-error`.
+- **§37-§42 — authority compatibility.** `AUTHORIZATION_RUNTIME_VERSION` →
+  `'axiom.authz.v3'`, and the discriminator is now stamped when the IR carries an
+  authorization *decision* — `usesAuthorizationVocabulary(ir) ||
+  usesLegacyActionAuthorization(ir)` (new total core helper). A legacy-only graph got **no**
+  discriminator on `alpha.2` (that predicate was false there), so `alpha.2` ↔ `alpha.3` is
+  present-vs-absent ⇒ incompatible; a policy graph goes `v2` ↔ `v3` ⇒ incompatible; a graph
+  with no authorization decision carries nothing on either build and rolls forward
+  unaffected (§42). `semanticFingerprint` / `SEMANTIC_FINGERPRINT_VERSION` unchanged (§43).
+
+### spec15pt3 tests
+
+| File | Covers |
+| --- | --- |
+| `packages/core/test/authorization.test.ts` (+14) | legacy `neq` / `not(eq)` absent ⇒ DENY, both-absent equality, `literal(true)` / `literal(false)`, positive `role == "admin"`, `required(PRINCIPAL)`, OR with an independent concrete branch (§56) vs. all-unknown (§57), nested `NOT(banned OR disabled)` (§55), every comparison operator + `contains` over absence (§80), `literal(undefined)` concrete (§58), error provenance through `not` (§84), `StateDef` scope via `resolveExternalRef` + unresolved-ref fail-closed (§8), policy/legacy modes share one primitive (§32/§33), ordinary semantics untouched (§31) |
+| `packages/server/test/authorization-pt3.test.ts` (9) | legacy `role != "banned"` and `NOT(role == "banned")` end-to-end (concrete allow; banned / absent / anonymous / unresolvable deny, `reason: legacy-denied`, zero mutation §59); `literal(true)` admits anonymous (§17); positive role (§19); legacy ∧ policy `literal(true)` — anonymous still DENY, legacy denies independently (§23-§25); legacy ALLOW ∧ policy DENY ⇒ DENY (§26); idempotency isolation — anonymous reusing an authorized `requestId` is denied and inherits no response (§60); a workflow started by a principal lacking `role` fails its legacy-protected action step, action executes 0 times, non-retryable (§61-§63) |
+| `packages/server/test/authorization-identity.test.ts` (+5) | legacy-`authorization` graph carries `axiom.authz.v3`; `alpha.2` ↔ `alpha.3` incompatible for legacy-only, legacy + policy, and policy-only graphs; a no-authorization graph rolls forward compatible with `semanticFingerprint` unchanged (§39-§43) |
+| `packages/server/conformance/authorization/` (+5 fixtures) | `legacy-action-neq-absent-deny`, `legacy-action-not-eq-absent-deny`, `legacy-action-constant-public`, `legacy-action-positive-role`, `legacy-plus-policy-absent-conjunction` — over memory **and** SQLite (§47-§53). Tier is now 17 fixtures |
 
 ## What landed
 

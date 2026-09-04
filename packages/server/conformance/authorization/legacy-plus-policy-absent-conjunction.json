@@ -1,11 +1,14 @@
 {
   "conformance": "axiom.conformance.v9",
-  "name": "constant-deny-policy",
+  "name": "legacy-plus-policy-absent-conjunction",
   "covers": [
     "deny",
-    "mixed-build policy change"
+    "allow",
+    "anonymous",
+    "role/claim condition",
+    "action invocation"
   ],
-  "description": "A policy whose allow is literal(false) always denies — the fail-closed behaviour a mixed-build incompatible authority also exhibits (full semantic-fingerprint divergence is authorization-identity.test.ts; real-process is Phase I).",
+  "description": "spec15pt3 §51/§25 — legacy ActionDef.authorization (role != \"banned\") AND authorizationPolicy (POL_OP, which allows every caller on action.invoke). An anonymous caller is DENY because the legacy side denies independently — the permissive policy cannot mask the legacy fail-closed decision.",
   "providerRows": {
     "entity_doc": [
       {
@@ -69,16 +72,32 @@
   "steps": [
     {
       "do": "invoke",
-      "action": "action_deny",
+      "action": "action_legacy_plus_policy",
       "credential": "admin",
       "expect": {
+        "decision": "ALLOW"
+      }
+    },
+    {
+      "do": "invoke",
+      "action": "action_legacy_plus_policy",
+      "credential": "norole",
+      "expect": {
         "decision": "DENY",
-        "reason": "policy-denied"
+        "reason": "legacy-denied"
+      }
+    },
+    {
+      "do": "invoke",
+      "action": "action_legacy_plus_policy",
+      "expect": {
+        "decision": "DENY",
+        "reason": "legacy-denied"
       }
     }
   ],
   "expectFinalState": {
-    "state_count": 0
+    "state_count": 1
   },
   "serverIR": {
     "contract": "axiom.server.v9",

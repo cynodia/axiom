@@ -10,7 +10,7 @@
     "contract": "axiom.server.v7",
     "id": "migration-conformance",
     "name": "Migration Conformance",
-    "version": "0.15.0-alpha.2",
+    "version": "0.15.0-alpha.3",
     "schemaVersion": 2,
     "schemaFingerprint": "7e4d24d95c273ff084e7758508a02e35015d5db2ceda46ca61e7ee8a2c2a4929",
     "migrations": [

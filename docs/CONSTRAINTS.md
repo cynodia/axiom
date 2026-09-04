@@ -1,6 +1,6 @@
 # Constraints
 
-Axiom 0.15.0-alpha.2. Two constructs, answering different questions. They are not
+Axiom 0.15.0-alpha.3. Two constructs, answering different questions. They are not
 interchangeable.
 
 | | Question | Sees |

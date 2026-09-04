@@ -31,18 +31,29 @@ import {
   canonicalWorkflowForFingerprint,
   compatibilityKeyString,
   usesAuthorizationVocabulary,
+  usesLegacyActionAuthorization,
   type AuthorityCompatibilityKey,
   type ServerIR,
 } from './deps.js';
 
 /**
- * spec15pt2 §35 — the authorization-evaluator semantics version stamped into an
- * authority's compatibility key when the Server IR carries authorization vocabulary.
- * `alpha.1` did not stamp this field; `alpha.2` (three-valued absent-value-safe evaluator)
- * does, so a mixed `alpha.1`/`alpha.2` cluster over one authorization-bearing graph is
- * fail-closed incompatible.
+ * The authorization-evaluator semantics version stamped into an authority's compatibility
+ * key when the Server IR carries any authorization decision — an `AuthorizationPolicyDef`
+ * reference **or** a legacy `ActionDef.authorization` expression (spec15pt3 §37-§39).
+ *
+ * - `alpha.1` did not stamp this field at all;
+ * - `alpha.2` = `axiom.authz.v2` — the three-valued absent-value-safe *policy* evaluator
+ *   (spec15pt2 F1);
+ * - `alpha.3` = `axiom.authz.v3` — the same security-absence semantics now also cover the
+ *   legacy `ActionDef.authorization` expression (spec15pt3 F1-legacy), so `alpha.2` and
+ *   `alpha.3` evaluate that expression differently for the same graph.
+ *
+ * A mixed cluster across any two of these, over a graph that carries an authorization
+ * decision, is fail-closed incompatible (`present`-vs-`absent` and any string difference are
+ * both mismatches). A graph with **no** authorization decision never carries the field, so it
+ * rolls the upgrade unaffected (spec15pt3 §42).
  */
-export const AUTHORIZATION_RUNTIME_VERSION = 'axiom.authz.v2';
+export const AUTHORIZATION_RUNTIME_VERSION = 'axiom.authz.v3';
 
 type ExecutableKind = (typeof EXECUTABLE_KINDS)[number];
 
@@ -158,9 +169,13 @@ export function serverIrCompatibilityKey(ir: ServerIR): AuthorityCompatibilityKe
     schemaFingerprint: ir.schemaFingerprint ?? '',
     serverContract: String(ir.contract),
     semanticFingerprint: serverIrSemanticFingerprint(ir),
-    // Only an authorization-bearing IR gets the evaluator-version discriminator, so a graph
-    // with no policy rolls alpha.1 → alpha.2 unaffected (spec15pt2 §35).
-    ...(usesAuthorizationVocabulary(ir as never) ? { authorizationRuntime: AUTHORIZATION_RUNTIME_VERSION } : {}),
+    // Only an IR that carries an authorization *decision* — a 0.15 `AuthorizationPolicyDef`
+    // reference or a legacy `ActionDef.authorization` expression — gets the evaluator-version
+    // discriminator, so a graph with neither rolls the upgrade unaffected (spec15pt2 §35,
+    // spec15pt3 §39, §42).
+    ...(usesAuthorizationVocabulary(ir as never) || usesLegacyActionAuthorization(ir as never)
+      ? { authorizationRuntime: AUTHORIZATION_RUNTIME_VERSION }
+      : {}),
   });
 }
 

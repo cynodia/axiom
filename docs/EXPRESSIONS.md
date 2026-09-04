@@ -1,6 +1,6 @@
 # Expressions
 
-Axiom 0.15.0-alpha.2. An expression describes **what value is computed**. It is a tree of
+Axiom 0.15.0-alpha.3. An expression describes **what value is computed**. It is a tree of
 plain data, never source text and never a callback. Evaluation is pure: an expression MUST
 NOT change state.
 
@@ -103,13 +103,16 @@ object([
 - `not` → `!truthy(operand)`.
 - `negate` → `-Number(operand ?? 0)`.
 
-> **Authorization policies evaluate differently for a missing security field.** An
-> `AuthorizationPolicyDef.allow` expression is run by a dedicated three-valued evaluator: a
-> `field(ref(PRINCIPAL) | ref(RESOURCE), F)` read of a field the scope object does not
-> carry is **security-scope absence**, not an ordinary `undefined`. A comparison, `not`,
-> `neq` or `or` whose truth would depend on absence is *not satisfied*, so the policy
-> DENIES (spec15pt2 F1). This is scoped to `allow` evaluation — the general expression
-> semantics above are unchanged everywhere else, including in `ActionDef.authorization`.
+> **An expression evaluated as an authorization decision evaluates differently for a
+> missing security field.** Both `AuthorizationPolicyDef.allow` **and** the legacy
+> `ActionDef.authorization` expression are run by one dedicated three-valued evaluator
+> (`evaluateAuthorizationExpression`): a `field(ref(PRINCIPAL) | ref(RESOURCE), F)` read of a
+> field the scope object does not carry is **security-scope absence**, not an ordinary
+> `undefined`. A comparison, `not`, `neq`, `or` or any composition whose truth would depend
+> on absence is *not satisfied*, so the decision DENIES (spec15pt2 F1, spec15pt3 F1-legacy).
+> This is scoped to authorization evaluation only — the general expression semantics above
+> are unchanged everywhere else, and unchanged for the *ordinary* (non-authorization)
+> evaluation of any expression.
 
 ### `call(fn, ...args)`
 

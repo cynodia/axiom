@@ -108,7 +108,7 @@
     "contract": "axiom.server.v9",
     "id": "authz-conformance",
     "name": "Authorization Conformance",
-    "version": "0.15.0-alpha.2",
+    "version": "0.15.0-alpha.3",
     "entities": [
       {
         "id": "entity_user",
@@ -480,6 +480,214 @@
             "system"
           ]
         },
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_legacy_neq": {
+        "id": "action_legacy_neq",
+        "kind": "action",
+        "authorization": {
+          "kind": "binary",
+          "operator": "neq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "banned"
+          }
+        },
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_legacy_noteq": {
+        "id": "action_legacy_noteq",
+        "kind": "action",
+        "authorization": {
+          "kind": "unary",
+          "operator": "not",
+          "operand": {
+            "kind": "binary",
+            "operator": "eq",
+            "left": {
+              "kind": "field",
+              "source": {
+                "kind": "ref",
+                "targetId": "axiom_principal"
+              },
+              "fieldId": "field_user_role"
+            },
+            "right": {
+              "kind": "literal",
+              "value": "banned"
+            }
+          }
+        },
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_legacy_true": {
+        "id": "action_legacy_true",
+        "kind": "action",
+        "authorization": {
+          "kind": "literal",
+          "value": true
+        },
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_legacy_admin": {
+        "id": "action_legacy_admin",
+        "kind": "action",
+        "authorization": {
+          "kind": "binary",
+          "operator": "eq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "admin"
+          }
+        },
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_legacy_plus_policy": {
+        "id": "action_legacy_plus_policy",
+        "kind": "action",
+        "authorization": {
+          "kind": "binary",
+          "operator": "neq",
+          "left": {
+            "kind": "field",
+            "source": {
+              "kind": "ref",
+              "targetId": "axiom_principal"
+            },
+            "fieldId": "field_user_role"
+          },
+          "right": {
+            "kind": "literal",
+            "value": "banned"
+          }
+        },
+        "authorizationPolicy": "policy_op",
         "operations": [
           {
             "kind": "set",

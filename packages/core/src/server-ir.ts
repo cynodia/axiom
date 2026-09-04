@@ -250,6 +250,24 @@ export function usesAuthorizationVocabulary(ir: {
 }
 
 /**
+ * Whether a document carries any legacy `ActionDef.authorization` expression (spec15pt3
+ * §39). This is not 0.15 *vocabulary* — it predates the milestone — but its runtime meaning
+ * changed in `0.15.0-alpha.3` (security-absence-aware evaluation, F1-legacy), so a mixed
+ * `alpha.2` / `alpha.3` cluster over a graph that can exercise it must fail closed. Total
+ * over a tampered IR.
+ */
+export function usesLegacyActionAuthorization(ir: {
+  actions?: Record<string, { authorization?: unknown }>;
+}): boolean {
+  for (const action of Object.values(ir.actions ?? {})) {
+    if (action && typeof action === 'object' && (action as { authorization?: unknown }).authorization !== undefined) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Authorization vocabulary whose *enforcement* has not shipped yet — the admission gate a
  * build uses to fail closed rather than run a declared policy as a silent no-op (spec4 §4,
  * spec15 §128). spec15 landed enforcement in phases: C — `ActionDef.authorizationPolicy`

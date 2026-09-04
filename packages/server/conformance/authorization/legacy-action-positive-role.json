@@ -1,11 +1,14 @@
 {
   "conformance": "axiom.conformance.v9",
-  "name": "constant-deny-policy",
+  "name": "legacy-action-positive-role",
   "covers": [
+    "allow",
     "deny",
-    "mixed-build policy change"
+    "anonymous",
+    "role/claim condition",
+    "action invocation"
   ],
-  "description": "A policy whose allow is literal(false) always denies — the fail-closed behaviour a mixed-build incompatible authority also exhibits (full semantic-fingerprint divergence is authorization-identity.test.ts; real-process is Phase I).",
+  "description": "spec15pt3 §50 — a legacy ActionDef.authorization of PRINCIPAL.role == \"admin\": admin ALLOWs, another role / absent role / anonymous DENY. Ordinary positive rules are unchanged by pt3.",
   "providerRows": {
     "entity_doc": [
       {
@@ -69,16 +72,41 @@
   "steps": [
     {
       "do": "invoke",
-      "action": "action_deny",
+      "action": "action_legacy_admin",
       "credential": "admin",
       "expect": {
+        "decision": "ALLOW"
+      }
+    },
+    {
+      "do": "invoke",
+      "action": "action_legacy_admin",
+      "credential": "nobody",
+      "expect": {
         "decision": "DENY",
-        "reason": "policy-denied"
+        "reason": "legacy-denied"
+      }
+    },
+    {
+      "do": "invoke",
+      "action": "action_legacy_admin",
+      "credential": "norole",
+      "expect": {
+        "decision": "DENY",
+        "reason": "legacy-denied"
+      }
+    },
+    {
+      "do": "invoke",
+      "action": "action_legacy_admin",
+      "expect": {
+        "decision": "DENY",
+        "reason": "legacy-denied"
       }
     }
   ],
   "expectFinalState": {
-    "state_count": 0
+    "state_count": 1
   },
   "serverIR": {
     "contract": "axiom.server.v9",

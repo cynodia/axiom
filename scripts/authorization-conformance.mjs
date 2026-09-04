@@ -14,7 +14,7 @@ const core = await import(path.join(repoRoot, 'packages/core/dist/index.js'));
 const compiler = await import(path.join(repoRoot, 'packages/compiler/dist/index.js'));
 const {
   ApplicationGraph, PRINCIPAL, OPERATION, RESOURCE,
-  binary, entityType, field, fieldId, literal, nodeId, primitiveType, ref, stateLocation,
+  binary, entityType, field, fieldId, literal, nodeId, primitiveType, ref, stateLocation, unary,
 } = core;
 
 const E_USER = nodeId('entity_user');
@@ -49,6 +49,12 @@ const A_DENY = nodeId('action_deny');
 const A_DENYLIST = nodeId('action_denylist');
 const A_OWNER = nodeId('action_owner');
 const A_STEP = nodeId('action_step');
+// spec15pt3 — legacy `ActionDef.authorization` expressions (not `authorizationPolicy`).
+const A_LEG_NEQ = nodeId('action_legacy_neq'); // authorization: PRINCIPAL.role != "banned"
+const A_LEG_NOTEQ = nodeId('action_legacy_noteq'); // authorization: NOT(PRINCIPAL.role == "banned")
+const A_LEG_TRUE = nodeId('action_legacy_true'); // authorization: literal(true)
+const A_LEG_ADMIN = nodeId('action_legacy_admin'); // authorization: PRINCIPAL.role == "admin"
+const A_LEG_PLUS_POLICY = nodeId('action_legacy_plus_policy'); // legacy deny-list ∧ policy (POL_OP allows all)
 
 const Q_DOCS = nodeId('query_docs');
 const Q_NOTES = nodeId('query_notes');
@@ -107,6 +113,13 @@ function buildGraph() {
   g.addNode({ id: A_DENYLIST, kind: 'action', authorizationPolicy: POL_DENYLIST, operations: bump() });
   g.addNode({ id: A_OWNER, kind: 'action', authorizationPolicy: POL_OWNER, operations: bump() });
   g.addNode({ id: A_STEP, kind: 'action', invocation: { allowedSources: ['system'] }, operations: bump() });
+
+  const legNeqBanned = binary('neq', field(ref(PRINCIPAL), F_ROLE), literal('banned'));
+  g.addNode({ id: A_LEG_NEQ, kind: 'action', authorization: legNeqBanned, operations: bump() });
+  g.addNode({ id: A_LEG_NOTEQ, kind: 'action', authorization: unary('not', binary('eq', field(ref(PRINCIPAL), F_ROLE), literal('banned'))), operations: bump() });
+  g.addNode({ id: A_LEG_TRUE, kind: 'action', authorization: literal(true), operations: bump() });
+  g.addNode({ id: A_LEG_ADMIN, kind: 'action', authorization: binary('eq', field(ref(PRINCIPAL), F_ROLE), literal('admin')), operations: bump() });
+  g.addNode({ id: A_LEG_PLUS_POLICY, kind: 'action', authorization: legNeqBanned, authorizationPolicy: POL_OP, operations: bump() });
 
   g.addNode({
     id: Q_DOCS, kind: 'query', source: E_DOC, rowScopeId: ROW,
@@ -283,6 +296,60 @@ const fixtures = [
       { do: 'invoke', action: String(A_OWNER), expect: { decision: 'DENY', reason: 'policy-denied' } },
     ],
     expectFinalState: { [String(S_COUNT)]: 0 },
+  },
+  {
+    name: 'legacy-action-neq-absent-deny', covers: ['deny', 'allow', 'anonymous', 'role/claim condition', 'action invocation'],
+    description: 'spec15pt3 F1-legacy — legacy ActionDef.authorization PRINCIPAL.role != "banned": a concrete non-banned role ALLOWs; role = "banned", role absent, and anonymous all DENY (legacy-denied). Independent oracle: allow iff principal.role is present and != "banned".',
+    providerRows, principals,
+    steps: [
+      { do: 'invoke', action: String(A_LEG_NEQ), credential: 'admin', expect: { decision: 'ALLOW' } },
+      { do: 'invoke', action: String(A_LEG_NEQ), credential: 'banned', expect: { decision: 'DENY', reason: 'legacy-denied' } },
+      { do: 'invoke', action: String(A_LEG_NEQ), credential: 'norole', expect: { decision: 'DENY', reason: 'legacy-denied' } },
+      { do: 'invoke', action: String(A_LEG_NEQ), expect: { decision: 'DENY', reason: 'legacy-denied' } },
+    ],
+    expectFinalState: { [String(S_COUNT)]: 1 },
+  },
+  {
+    name: 'legacy-action-not-eq-absent-deny', covers: ['deny', 'allow', 'anonymous', 'role/claim condition', 'action invocation'],
+    description: 'spec15pt3 F1-legacy — legacy ActionDef.authorization NOT(PRINCIPAL.role == "banned"): same matrix as the neq form — absence never negates back to ALLOW.',
+    providerRows, principals,
+    steps: [
+      { do: 'invoke', action: String(A_LEG_NOTEQ), credential: 'admin', expect: { decision: 'ALLOW' } },
+      { do: 'invoke', action: String(A_LEG_NOTEQ), credential: 'banned', expect: { decision: 'DENY', reason: 'legacy-denied' } },
+      { do: 'invoke', action: String(A_LEG_NOTEQ), credential: 'norole', expect: { decision: 'DENY', reason: 'legacy-denied' } },
+      { do: 'invoke', action: String(A_LEG_NOTEQ), expect: { decision: 'DENY', reason: 'legacy-denied' } },
+    ],
+    expectFinalState: { [String(S_COUNT)]: 1 },
+  },
+  {
+    name: 'legacy-action-constant-public', covers: ['allow', 'anonymous', 'action invocation'],
+    description: 'spec15pt3 §17/§49 — a legacy ActionDef.authorization of literal(true) still admits an anonymous caller. Prevents overcorrection: the rule is "missing referenced security fields cannot create authority", not "anonymous is forbidden".',
+    providerRows, principals,
+    steps: [{ do: 'invoke', action: String(A_LEG_TRUE), expect: { decision: 'ALLOW' } }],
+    expectFinalState: { [String(S_COUNT)]: 1 },
+  },
+  {
+    name: 'legacy-action-positive-role', covers: ['allow', 'deny', 'anonymous', 'role/claim condition', 'action invocation'],
+    description: 'spec15pt3 §50 — a legacy ActionDef.authorization of PRINCIPAL.role == "admin": admin ALLOWs, another role / absent role / anonymous DENY. Ordinary positive rules are unchanged by pt3.',
+    providerRows, principals,
+    steps: [
+      { do: 'invoke', action: String(A_LEG_ADMIN), credential: 'admin', expect: { decision: 'ALLOW' } },
+      { do: 'invoke', action: String(A_LEG_ADMIN), credential: 'nobody', expect: { decision: 'DENY', reason: 'legacy-denied' } },
+      { do: 'invoke', action: String(A_LEG_ADMIN), credential: 'norole', expect: { decision: 'DENY', reason: 'legacy-denied' } },
+      { do: 'invoke', action: String(A_LEG_ADMIN), expect: { decision: 'DENY', reason: 'legacy-denied' } },
+    ],
+    expectFinalState: { [String(S_COUNT)]: 1 },
+  },
+  {
+    name: 'legacy-plus-policy-absent-conjunction', covers: ['deny', 'allow', 'anonymous', 'role/claim condition', 'action invocation'],
+    description: 'spec15pt3 §51/§25 — legacy ActionDef.authorization (role != "banned") AND authorizationPolicy (POL_OP, which allows every caller on action.invoke). An anonymous caller is DENY because the legacy side denies independently — the permissive policy cannot mask the legacy fail-closed decision.',
+    providerRows, principals,
+    steps: [
+      { do: 'invoke', action: String(A_LEG_PLUS_POLICY), credential: 'admin', expect: { decision: 'ALLOW' } },
+      { do: 'invoke', action: String(A_LEG_PLUS_POLICY), credential: 'norole', expect: { decision: 'DENY', reason: 'legacy-denied' } },
+      { do: 'invoke', action: String(A_LEG_PLUS_POLICY), expect: { decision: 'DENY', reason: 'legacy-denied' } },
+    ],
+    expectFinalState: { [String(S_COUNT)]: 1 },
   },
 ];
 

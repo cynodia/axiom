@@ -1,11 +1,14 @@
 {
   "conformance": "axiom.conformance.v9",
-  "name": "constant-deny-policy",
+  "name": "legacy-action-neq-absent-deny",
   "covers": [
     "deny",
-    "mixed-build policy change"
+    "allow",
+    "anonymous",
+    "role/claim condition",
+    "action invocation"
   ],
-  "description": "A policy whose allow is literal(false) always denies — the fail-closed behaviour a mixed-build incompatible authority also exhibits (full semantic-fingerprint divergence is authorization-identity.test.ts; real-process is Phase I).",
+  "description": "spec15pt3 F1-legacy — legacy ActionDef.authorization PRINCIPAL.role != \"banned\": a concrete non-banned role ALLOWs; role = \"banned\", role absent, and anonymous all DENY (legacy-denied). Independent oracle: allow iff principal.role is present and != \"banned\".",
   "providerRows": {
     "entity_doc": [
       {
@@ -69,16 +72,41 @@
   "steps": [
     {
       "do": "invoke",
-      "action": "action_deny",
+      "action": "action_legacy_neq",
       "credential": "admin",
       "expect": {
+        "decision": "ALLOW"
+      }
+    },
+    {
+      "do": "invoke",
+      "action": "action_legacy_neq",
+      "credential": "banned",
+      "expect": {
         "decision": "DENY",
-        "reason": "policy-denied"
+        "reason": "legacy-denied"
+      }
+    },
+    {
+      "do": "invoke",
+      "action": "action_legacy_neq",
+      "credential": "norole",
+      "expect": {
+        "decision": "DENY",
+        "reason": "legacy-denied"
+      }
+    },
+    {
+      "do": "invoke",
+      "action": "action_legacy_neq",
+      "expect": {
+        "decision": "DENY",
+        "reason": "legacy-denied"
       }
     }
   ],
   "expectFinalState": {
-    "state_count": 0
+    "state_count": 1
   },
   "serverIR": {
     "contract": "axiom.server.v9",
