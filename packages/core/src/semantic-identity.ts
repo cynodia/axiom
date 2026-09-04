@@ -101,6 +101,16 @@ export type ExecutableKind = (typeof EXECUTABLE_KINDS)[number];
 /** Keys removed everywhere in the tree — human metadata, never executable meaning. */
 const NON_SEMANTIC_KEYS = new Set(['name', 'description', 'label', 'metadata', AUTHORING_METADATA_KEY]);
 
+/**
+ * Removes human metadata (`name` / `description` / `label` / `metadata` / authoring
+ * provenance) from a value, recursively. Exported so tooling that needs "does this node's
+ * *meaning* differ" — `semanticDiff`, for one — shares the exact same notion of "meaning"
+ * the fingerprint uses, rather than reimplementing it (spec16 §35, §154).
+ */
+export function stripNonSemanticMetadata(value: unknown): unknown {
+  return stripNonSemantic(value);
+}
+
 function stripNonSemantic(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(stripNonSemantic);

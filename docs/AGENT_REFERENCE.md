@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.15.0-alpha.3. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.16.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -1322,6 +1322,56 @@ not retryable, carries no state value / credential / claim. A denied `query` ope
 inside an action surfaces as `QUERY_OPERATION_FAILED` with `details.code =
 'AUTHORIZATION_DENIED'` and rolls the action back. A denied `workflow.inspect` /
 `workflow.history` returns `undefined` / `[]` (no existence leak).
+
+## EXPLAINABILITY & AI AUTHORING (spec16)
+
+Full model: [`AGENT_API.md`](AGENT_API.md#semantic-inventory-dependencies-and-explanation-spec16).
+No new graph/IR vocabulary; Server IR stays `axiom.server.v9` — 0.16 adds inspection,
+analysis and authoring-metadata APIs over the existing graph, never new execution semantics.
+Everything below is **static**: it reads the graph, never a running authority, and performs
+zero mutation / zero effect / zero provider call (spec16 §133).
+
+```ts
+agent.inventory({ kinds?, cursor?, limit? })                 // every node, dependency/dependent counts
+agent.getTransitiveDependencies(id, edgeKinds?) / agent.getTransitiveDependents(id, edgeKinds?)
+agent.explainDependency(fromId, toId)                         // { edges, reasons } | undefined
+
+agent.explainAction(actionId)     // reads/writes/effects/authorization/invokedBy/analysisComplete
+agent.explainState(stateId)       // type/persistence/authority/readers/writers/constraints
+agent.explainQuery(queryId)       // explainQuery + { authorization, liveCapability }
+agent.explainWorkflow(workflowId) // analyzeWorkflow + { startPolicyId, instanceAccessPolicyId, … }
+agent.explainGraph()              // structural summary: counts, executable roots, security, opaque boundaries
+
+agent.analyzeCapabilities()          // { requirements: [{ capability, required, reasons }], requiredCapabilities }
+agent.listNativeOperations() / agent.summarizeNativeOperations()   // the one opaque boundary, made discoverable
+
+agent.explainAuthorizationDecision({ actionId | queryId, principal?, resource? })
+// same evaluator the authority uses; ALLOW/DENY + which mechanism decided it. Advisory only.
+
+agent.semanticDiff(otherGraph)    // { entries, schema, compatibility, byCategory, isNoOp }
+agent.requiredServerContract()    // the Server IR contract this graph currently needs
+
+agent.proposeEdit({ changes, preconditions? })   // { applied, conflict?, applyError?, validation?, diff?, candidate? }
+agent.acceptEdit(result, { reason?, actor? })    // commits a validated candidate
+
+authoringSchema() / describeAuthoringKind(kind) / listAuthorableKinds()   // free functions, core
+```
+
+`REQUIRED_CAPABILITIES`: `persistence` `coordination` `mutation-observation` `live-queries`
+`workflow-store` `event-journal` `scheduler` `effect-execution` `provider-transaction`
+`blob-storage` `subscription-adapter`. `SEMANTIC_DIFF_CATEGORIES`: `semantic` `authorization`
+`schema` `provider` `workflow` `query` `presentation` `metadata`.
+
+`explainAction`/`listNativeOperations`: a `NativeOperation` with no declared effects makes
+`analysisComplete: false` — never silently treated as "no further effects" (spec16 §29,
+§102). `explainAuthorizationDecision` runs through the same `evaluateAuthorizationExpression`
+/ `decideAuthorization` the authority uses (spec15pt3) — it is not a second evaluator, and a
+prior result is never a token; the real operation always re-authorizes (spec16 §138).
+`semanticDiff` reuses `diffSchema` for entity/state/relationship/read-policy changes (`.schema`)
+and classifies everything else (`.entries`) — a rename is `metadata` only, attaching/editing a
+policy is always tagged `authorization` even on an `ActionDef`/`QueryDef`/`WorkflowDef`.
+`proposeEdit` replays a portable `GraphChange[]` onto a private clone — the graph passed in is
+never mutated, whether or not the candidate validates.
 
 ## Metadata classes
 

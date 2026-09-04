@@ -1,6 +1,6 @@
 # Agent API
 
-Axiom 0.15.0-alpha.3. The machine-facing interface. Agents query semantics and apply
+Axiom 0.16.0-alpha.1. The machine-facing interface. Agents query semantics and apply
 structural transformations; they never edit generated code.
 
 ```ts
@@ -257,6 +257,158 @@ diff**.
 
 Change sets are in memory and per `AgentAPI` instance. There is no semantic version control.
 
+## Semantic inventory, dependencies and explanation (spec16)
+
+Everything in this section is **static**: it answers what the graph represents, never what a
+running authority has observed. It requires no repository source, no runtime internals and
+no credential — see [`AGENT_REFERENCE.md`](AGENT_REFERENCE.md#explainability--ai-authoring-spec16)
+for the compressed reference and the discoverability contract.
+
+```ts
+agent.inventory({ kinds?, cursor?, limit? })
+// { countsByKind, entries: [{ id, kind, name?, dependencyCount, dependentCount }], nextCursor? }
+
+agent.getTransitiveDependencies(id, edgeKinds?)   // { root, ids: [...] } — cycle-safe
+agent.getTransitiveDependents(id, edgeKinds?)
+agent.explainDependency(fromId, toId)             // { edges, reasons } — why the edge exists, or undefined
+```
+
+`inventory()` covers every graph-model kind and every UI kind. `kinds` restricts it; `limit` +
+`cursor` page through a large graph deterministically (canonical order is by id).
+
+### Explaining one node
+
+```ts
+agent.explainAction(actionId)
+// { actionId, parameters, reads, writes, invokesActions, integrationQueries, integrationEffects,
+//   runsQueries, storages, nativeOperations, authorization, constraintsThatMayBlock, invokedBy,
+//   clientInvocable, systemOnly, destructive, analysisComplete, analysisGaps }
+
+agent.explainState(stateId)
+// { stateId, valueType, derived, draft, ephemeral, authority, serverOnly, persistence,
+//   hasInitialValue, readers, writers, entities, constraints, transitionConstraints }
+
+agent.explainQuery(queryId)     // explainQuery(id) + { authorization, liveCapability }
+agent.explainWorkflow(workflowId)  // analyzeWorkflow(id) + { startPolicyId, instanceAccessPolicyId,
+                                   //   actionAuthorization, privilegeReviewActions }
+agent.explainGraph()
+// { nodeCountsByKind, executableRoots, securityBoundaries, externalCapabilities, opaqueBoundaries }
+```
+
+`explainAction` returning `analysisComplete: false` means a `NativeOperation` with no
+declared effects prevents a complete answer — `analysisGaps` says which one. Never read the
+absence of a listed effect as proof no such effect exists past that boundary (spec16 §29,
+§102, §173).
+
+### Capabilities and the NativeOperation boundary
+
+```ts
+agent.analyzeCapabilities()
+// { requirements: [{ capability, required, reasons }], requiredCapabilities }
+```
+
+`capability` is one of `REQUIRED_CAPABILITIES`: `persistence` `coordination`
+`mutation-observation` `live-queries` `workflow-store` `event-journal` `scheduler`
+`effect-execution` `provider-transaction` `blob-storage` `subscription-adapter`. Each
+requirement carries `reasons` — which graph nodes make it necessary — never a bare list
+(spec16 §31). This names capability *domains*, never a provider brand (spec16 §51).
+
+```ts
+agent.listNativeOperations()        // every NativeOperation, with its action and declared effects
+agent.summarizeNativeOperations()   // { count, opaqueCount, occurrences }
+```
+
+`opaque: true` on an occurrence means it declares no effects at all — static analysis cannot
+see past it. Long-term framework direction is zero (spec16 §49).
+
+### Authorization decision explanation
+
+```ts
+agent.explainAuthorizationDecision({ actionId | queryId, principal?, resource? })
+// { operation, decision: 'ALLOW' | 'DENY', reason, policyId, policyResult, legacyResult } | undefined
+```
+
+Evaluated through the **same** evaluator the authority uses (`evaluateAuthorizationExpression`
+/ `decideAuthorization`, spec15pt3) — never a second interpretation. Performs zero mutation,
+zero effect, zero provider call. It is advisory: the real operation always re-authorizes on
+the authority, and a prior result here is never a token (spec16 §26, §136-138). A missing
+`PRINCIPAL`/`RESOURCE` field can never manufacture `ALLOW` — see [`AUTHORIZATION.md`](AUTHORIZATION.md).
+
+### Semantic diff
+
+```ts
+agent.semanticDiff(otherGraph)
+// {
+//   entries: [{ changeKind: 'added'|'removed'|'changed', nodeId, nodeKind, categories, message }],
+//   schema: SchemaDiff,          // the spec11 field-level diff — entities/states/relationships/read-policies
+//   compatibility: {
+//     semanticFingerprintChanged, schemaFingerprintChanged, authorityCompatibilityAffected,
+//     serverContractBefore, serverContractAfter, serverContractChanged, migrationRequired,
+//   },
+//   byCategory, isNoOp,
+// }
+agent.requiredServerContract()   // the Server IR contract this graph currently requires
+```
+
+`entries` covers every non-schema-owned node kind (actions, queries, workflows,
+authorization policies, triggers, UI, …); entity/field/state/relationship/read-policy changes
+are in `schema` instead — the one place spec11 already classifies them, not duplicated here
+(spec16 §159). `categories` is one or more of `semantic` `authorization` `schema` `provider`
+`workflow` `query` `presentation` `metadata` — a rename is `metadata` only, never
+`semantic` (spec16 §35, §154-155); attaching/detaching/editing a policy is always tagged
+`authorization`, even on an `ActionDef`/`QueryDef`/`WorkflowDef` node (spec16 §156). Diffing
+is pure: it reads both graphs and mutates neither.
+
+### Candidate graph edits
+
+```ts
+const result = agent.proposeEdit({ changes: GraphChange[], preconditions?: EditPrecondition[] });
+// { applied, conflict?, applyError?, validation?, diff?, candidate? }
+agent.acceptEdit(result, { reason?, actor? });   // commits a validated candidate; throws otherwise
+```
+
+`changes` is the same portable `GraphChange[]` vocabulary `Transaction` already records —
+`add-node` `remove-node` `update-node` `add-field` `remove-field` `add-edge` `remove-edge`
+`set-theme` — so a proposal is plain, serializable data, not a TypeScript closure (spec16
+§79-80, §184). `proposeGraphEdit`/`applyGraphChanges` (free functions, also exported) never
+touch the graph passed in: every change is replayed onto a private clone, which is then
+validated and diffed against the original (spec16 §81-83, §133, §145).
+
+`preconditions` (`{ nodeId, expect: 'exists' | 'absent' | { field, equals } }`) are checked
+**before** any change is applied; a stale one is reported as `conflict`, not silently merged
+or overwritten (spec16 §85-86). `applyError` means a change referenced something that does
+not exist or is the wrong kind — distinct from `conflict` (a stale precondition) and from an
+invalid `validation` result (a change set that applied but produced an invalid graph, e.g. an
+unresolved reference — `candidate` is still returned for inspection, per spec16 §100).
+Because only the **final** candidate is validated, an atomic multi-change set may pass through
+an intermediate state that would not validate on its own (spec16 §84).
+
+### Machine-readable authoring schema
+
+```ts
+import { authoringSchema, describeAuthoringKind, listAuthorableKinds } from '@cynodia/axiom';
+```
+
+One descriptor per graph-model semantic node kind (`entity` … `authorization-policy` — the
+eighteen `SEMANTIC_NODE_KINDS`): `purpose`, `fields` (name, required, type, reference
+targets, closed enum, description), and a minimal-valid `template`. A template is not a set
+of defaults — it never assigns security-sensitive semantics an author did not ask for
+(spec16 §69-78). UI node kinds are deliberately **not** duplicated here: `@cynodia/axiom-ui`'s
+generated `PATTERN_CATALOG.json` (`npm run toolkit:catalog`) and [`UI.md`](UI.md) already own
+that authoring contract.
+
+### Conformance
+
+`axiom.conformance.v10` (`runToolingConformanceFixture` / `runToolingConformanceSuite`,
+`packages/agent-api/src/tooling-conformance.ts`) checks the canonical inspection/analysis/
+authoring/editing entry points above against independently hand-specified expected results
+(spec16 §123-126) — inventory, dependencies, explain-action, explain-query,
+authorization-analysis, capabilities, semantic-diff, diagnostics, authoring-schema,
+graph-edit and the native-operation boundary. This is a separate, smaller tier from the
+Server-IR execution conformance (`axiom.conformance.v1`-`v9`, `packages/server/conformance/`):
+AgentAPI carries no execution semantics of its own to check against a persistence backend
+(spec16 §121).
+
 ## Scale of change
 
 Prefer the smallest semantic change that expresses the intent.
@@ -276,3 +428,8 @@ State these to yourself before acting on an answer:
 - Type inference is partial, so a type-dependent question may have no answer rather than a wrong one.
 - `getOpaquePresentationNodes()` lists nodes whose renderer-specific presentation is **not** analyzed. Semantic analysis makes no claim about them.
 - Change history is per instance and in memory.
+- `explainAuthorizationDecision` is advisory static analysis, never a token: it does not accept or produce a resolved principal identity, does not authenticate anyone, and the real operation always re-authorizes on the authority (spec16 §26, §138).
+- `analyzeCapabilities` names capability *domains* a runtime would need, derived from graph structure — it does not know which concrete provider a deployment will choose, and never should (spec16 §51).
+- `semanticDiff`'s `.entries` covers every node kind except entities, states, relationships and read policies, which are the already-detailed `.schema` sub-object instead — do not expect an entity/field change to appear in `.entries` too.
+- `authoringSchema()` covers the eighteen graph-model semantic node kinds only. UI node authoring remains `@cynodia/axiom-ui`'s job — see [`UI.md`](UI.md).
+- Axiom provides deterministic semantic validation and analysis of *represented* semantics. It does not prove an AI-authored graph is safe merely because it validates, and it cannot see past a `NativeOperation` that declares no effects (spec16 §221).

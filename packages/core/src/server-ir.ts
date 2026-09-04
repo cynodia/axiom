@@ -9,6 +9,7 @@ import type {
 } from './nodes.js';
 import type { Expression } from './expressions.js';
 import type { FieldIndexEntry } from './graph.js';
+import type { ApplicationGraph } from './graph.js';
 import { walkExpression } from './expressions.js';
 import type { EventDef } from './events.js';
 import type { IntegrationDef, IntegrationOperationDef } from './integrations.js';
@@ -312,6 +313,53 @@ export function usesQueryVocabulary(ir: {
 /** The higher of two contracts, ordered by `SERVER_IR_CONTRACTS`. */
 export function maxContract(a: ServerIRContract, b: ServerIRContract): ServerIRContract {
   return SERVER_IR_CONTRACTS.indexOf(b) > SERVER_IR_CONTRACTS.indexOf(a) ? b : a;
+}
+
+/**
+ * The Server IR contract this graph requires, computed straight from its nodes rather than
+ * from a compiled `ServerIR` (spec16 §32-33). This is the same "computed from the document,
+ * never asserted by hand" rule `compileToServerIR` applies, made available to static
+ * tooling that has only an `ApplicationGraph` — a semantic diff or a compatibility
+ * explanation should never need to run the compiler to answer "does this graph need v9".
+ */
+export function requiredServerContractForGraph(graph: ApplicationGraph): ServerIRContract {
+  const actionsList = graph.getNodesByKind('action') as ActionDef[];
+  const actions = Object.fromEntries(actionsList.map((a) => [a.id, a]));
+  const ir = {
+    states: graph.getNodesByKind('state') as StateDef[],
+    actions,
+    constraints: graph.getNodesByKind('constraint') as ConstraintDef[],
+    transitionConstraints: graph.getNodesByKind('transition-constraint') as TransitionConstraintDef[],
+    expressionDefs: Object.fromEntries(
+      (graph.getNodesByKind('expression') as ExpressionDef[]).map((e) => [e.id, e]),
+    ),
+    integrations: graph.getNodesByKind('integration') as IntegrationDef[],
+    integrationOperations: Object.fromEntries(
+      (graph.getNodesByKind('integration-operation') as IntegrationOperationDef[]).map((o) => [o.id, o]),
+    ),
+    events: graph.getNodesByKind('event') as EventDef[],
+    triggers: graph.getNodesByKind('trigger') as TriggerDef[],
+    subscriptions: graph.getNodesByKind('subscription') as SubscriptionDef[],
+    storages: graph.getNodesByKind('storage') as StorageDef[],
+    queries: graph.getNodesByKind('query') as QueryDef[],
+    readPolicies: graph.getNodesByKind('read-policy') as ReadPolicyDef[],
+    authorizationPolicies: graph.getNodesByKind('authorization-policy') as AuthorizationPolicyDef[],
+    migrations: graph.getNodesByKind('migration') as MigrationDef[],
+    workflows: graph.getNodesByKind('workflow') as WorkflowDef[],
+    schemaVersion: 1,
+  };
+  let required = requiredServerContract(serverIRExpressions(ir));
+  if (usesIntegrationVocabulary(ir)) required = maxContract(required, 'axiom.server.v3');
+  if (usesInvocationVocabulary(ir)) required = maxContract(required, 'axiom.server.v2');
+  if (usesV4Semantics(ir)) required = maxContract(required, 'axiom.server.v4');
+  if (usesExternalIOVocabulary(ir)) required = maxContract(required, 'axiom.server.v5');
+  if (usesQueryVocabulary(ir)) required = maxContract(required, 'axiom.server.v6');
+  if (usesMigrationVocabulary(ir)) required = maxContract(required, 'axiom.server.v7');
+  if (usesWorkflowVocabulary(ir)) required = maxContract(required, 'axiom.server.v8');
+  if (usesAuthorizationVocabulary(ir) || usesLegacyActionAuthorization(ir)) {
+    required = maxContract(required, 'axiom.server.v9');
+  }
+  return required;
 }
 
 /** Every expression a Server IR document contains, in no particular order. */

@@ -1,6 +1,6 @@
 # Durable workflows
 
-Axiom 0.15.0-alpha.3. The operational contract for **long-running semantic computations with
+Axiom 0.16.0-alpha.1. The operational contract for **long-running semantic computations with
 a durable control position** — orchestration that survives process death, authority
 failover, retries, timer delivery, event delivery and ordinary distributed contention
 without application-owned infrastructure. `axiom.server.v8`.
@@ -255,7 +255,7 @@ step's argument expressions / `retry` policy, a `wait-event` step's `where` / `b
   or binding migration, and none is inferred ("closest step" recovery never happens).
 - A graph with **no** `WorkflowDef` compiles to the byte-identical `axiom.server.v1`–`v7`
   document it always did, and its `semanticFingerprint` / `schemaFingerprint` are unchanged.
-- Pre-`0.15.0-alpha.3` instances carry a compatibility key computed before `WorkflowDef`
+- Pre-`0.16.0-alpha.1` instances carry a compatibility key computed before `WorkflowDef`
   participated; a corrected authority treats them as incompatible and fails closed (these
   are pre-freeze alpha releases — silent reinterpretation is the only unacceptable
   outcome).

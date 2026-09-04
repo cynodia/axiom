@@ -20,9 +20,9 @@ import {
   planMigration,
 } from '@cynodia/axiom-server';
 import type { AxiomServer, PersistenceAdapter } from '@cynodia/axiom-server';
-import { ApplicationGraph, diffSchema, formatLocation, semanticContextFromGraph, validateGraph } from '@cynodia/axiom-core';
+import { ApplicationGraph, diffSchema, formatLocation, semanticContextFromGraph, semanticDiff, validateGraph } from '@cynodia/axiom-core';
 import type { AnyNode, NodeKind, Operation, SemanticContext, ValidationResult } from '@cynodia/axiom-core';
-import { explainSchemaDiff, inspectSchema, migrationImpact } from '@cynodia/axiom-agent-api';
+import { AgentAPI, explainSchemaDiff, inspectSchema, migrationImpact } from '@cynodia/axiom-agent-api';
 
 const GRAPH_EXPORT_CANDIDATES = ['default', 'createGraph', 'createApplicationGraph'];
 
@@ -39,6 +39,11 @@ interface Options {
   sqlite?: string;
   against?: string;
   againstExport?: string;
+  /** `explain`: which kind of node, and which id, to explain. */
+  kind?: string;
+  targetId?: string;
+  /** Structured output for CI and external tooling (spec16 §108). */
+  json?: boolean;
 }
 
 /** `<group> <sub>` command forms. `migrate` alone (no sub) is also valid. */
@@ -57,6 +62,7 @@ function parseArguments(argv: string[]): Options | null {
   let sqlite: string | undefined;
   let against: string | undefined;
   let againstExport: string | undefined;
+  let json = false;
 
   for (const argument of argv) {
     if (argument.startsWith('--export=')) {
@@ -75,13 +81,22 @@ function parseArguments(argv: string[]): Options | null {
       against = argument.slice('--against='.length);
     } else if (argument.startsWith('--against-export=')) {
       againstExport = argument.slice('--against-export='.length);
+    } else if (argument === '--json') {
+      json = true;
     } else {
       positional.push(argument);
     }
   }
 
   let [command, modelFile] = positional;
-  if (command && SUBCOMMANDS[command]?.has(positional[1] ?? '')) {
+  let kind: string | undefined;
+  let targetId: string | undefined;
+  if (command === 'explain') {
+    // `axiom explain <kind> <id> <modelFile>` — three positionals after the command itself.
+    kind = positional[1];
+    targetId = positional[2];
+    modelFile = positional[3];
+  } else if (command && SUBCOMMANDS[command]?.has(positional[1] ?? '')) {
     command = `${command} ${positional[1]}`;
     modelFile = positional[2];
   }
@@ -99,6 +114,9 @@ function parseArguments(argv: string[]): Options | null {
     ...(sqlite ? { sqlite } : {}),
     ...(against ? { against } : {}),
     ...(againstExport ? { againstExport } : {}),
+    ...(kind ? { kind } : {}),
+    ...(targetId ? { targetId } : {}),
+    ...(json ? { json } : {}),
   };
 }
 
@@ -490,6 +508,127 @@ async function migrateRun(options: Options): Promise<string> {
   ].join('\n');
 }
 
+// --- Explainability & AI authoring tooling (spec16 §106-112) ---------------
+// Thin renderers over AgentAPI / core, exactly like the schema commands above:
+// the CLI is a consumer of the canonical analysis, never a second place it lives.
+
+function formatExplanation(kind: string, result: Record<string, unknown>): string {
+  const lines: string[] = [];
+  switch (kind) {
+    case 'action': {
+      const reads = result.reads as { stateIds: string[] };
+      const writes = result.writes as { stateIds: string[] };
+      const authorization = result.authorization as { kind: string };
+      const invokedBy = result.invokedBy as { triggers: string[]; workflowSteps: string[] };
+      lines.push(`action ${result.actionId}${result.name ? ` (${result.name})` : ''}`);
+      lines.push(`  reads     : ${reads.stateIds.join(', ') || 'none'}`);
+      lines.push(`  writes    : ${writes.stateIds.join(', ') || 'none'}`);
+      lines.push(`  authorization: ${authorization.kind}`);
+      lines.push(`  invoked by: triggers [${invokedBy.triggers.join(', ')}], workflows [${invokedBy.workflowSteps.join(', ')}]`);
+      if (result.analysisComplete === false) {
+        lines.push(`  INCOMPLETE — ${(result.analysisGaps as string[]).join('; ')}`);
+      }
+      break;
+    }
+    case 'query': {
+      const authorization = result.authorization as { kind: string };
+      lines.push(`query ${result.queryId}`);
+      lines.push(`  source        : ${result.source}`);
+      lines.push(`  authorization : ${authorization.kind}`);
+      lines.push(`  live capability: ${result.liveCapability}`);
+      break;
+    }
+    case 'workflow': {
+      const steps = result.steps as Array<{ id: string; type: string }>;
+      lines.push(`workflow ${result.workflowId}`);
+      lines.push(`  steps       : ${steps.map((s) => `${s.id}:${s.type}`).join(', ')}`);
+      lines.push(`  start policy: ${result.startPolicyId ?? 'public'}`);
+      lines.push(`  privilege-review actions: ${(result.privilegeReviewActions as string[]).join(', ') || 'none'}`);
+      break;
+    }
+    case 'state': {
+      lines.push(`state ${result.stateId}`);
+      lines.push(`  authority : ${result.authority}   derived: ${result.derived}   draft: ${result.draft}`);
+      lines.push(`  writers   : ${(result.writers as string[]).join(', ') || 'none'}`);
+      lines.push(`  readers   : ${(result.readers as string[]).join(', ') || 'none'}`);
+      break;
+    }
+    default:
+      lines.push(JSON.stringify(result, null, 2));
+  }
+  return lines.join('\n');
+}
+
+async function explainCommand(options: Options): Promise<string> {
+  if (!options.kind || !options.targetId) {
+    throw new Error('usage: axiom explain <action|query|workflow|state> <id> <modelFile>');
+  }
+  const agent = new AgentAPI(await loadGraph(options));
+  let result: Record<string, unknown> | undefined;
+  switch (options.kind) {
+    case 'action':
+      result = agent.explainAction(options.targetId as never) as unknown as Record<string, unknown> | undefined;
+      break;
+    case 'query':
+      result = agent.explainQuery(options.targetId as never) as unknown as Record<string, unknown> | undefined;
+      break;
+    case 'workflow':
+      result = agent.explainWorkflow(options.targetId as never) as unknown as Record<string, unknown>;
+      break;
+    case 'state':
+      result = agent.explainState(options.targetId as never) as unknown as Record<string, unknown> | undefined;
+      break;
+    default:
+      throw new Error(`explain: unknown kind "${options.kind}" (expected action, query, workflow or state)`);
+  }
+  if (!result) {
+    process.exitCode = 1;
+    return `No ${options.kind} node "${options.targetId}" in this graph`;
+  }
+  return options.json ? JSON.stringify(result, null, 2) : formatExplanation(options.kind, result);
+}
+
+async function analyzeCommand(options: Options): Promise<string> {
+  const agent = new AgentAPI(await loadGraph(options));
+  const summary = agent.explainGraph();
+  const capabilities = agent.analyzeCapabilities();
+  const native = agent.summarizeNativeOperations();
+  const authorization = agent.analyzeAuthorization();
+  if (options.json) {
+    return JSON.stringify({ summary, capabilities, native, unprotected: authorization.unprotected }, null, 2);
+  }
+  return [
+    `nodes by kind : ${Object.entries(summary.nodeCountsByKind).map(([k, v]) => `${k}=${v}`).join(', ') || 'none'}`,
+    `executable roots: ${summary.executableRoots.actions.length} client-invocable action(s), ${summary.executableRoots.workflows.length} workflow(s), ${summary.executableRoots.queries.length} quer(y/ies)`,
+    `security      : ${summary.securityBoundaries.protectedActions} protected / ${summary.securityBoundaries.publicActions} public action(s); ${summary.securityBoundaries.protectedQueries} protected / ${summary.securityBoundaries.publicQueries} public quer(y/ies)`,
+    `native ops    : ${native.count} (${native.opaqueCount} opaque — static analysis cannot see past them)`,
+    `capabilities  : ${capabilities.requiredCapabilities.join(', ') || 'none required'}`,
+    `unprotected   : ${authorization.unprotected.length} surface(s) with no explicit authorization boundary`,
+  ].join('\n');
+}
+
+async function diffCommand(options: Options): Promise<string> {
+  if (!options.against) {
+    throw new Error('diff needs a --against=<file> naming the graph to compare against');
+  }
+  const before = await loadGraphModule(options.against, options.againstExport);
+  const after = await loadGraph(options);
+  const diff = semanticDiff(before, after);
+  if (options.json) {
+    return JSON.stringify(diff, null, 2);
+  }
+  const lines = [
+    `${diff.entries.length} node change(s), ${diff.schema.entries.length} schema change(s)`,
+    ...diff.entries.map((entry) => `  ${entry.changeKind[0].toUpperCase()} ${entry.nodeKind} ${entry.nodeId} [${entry.categories.join(', ')}]`),
+    ...diff.schema.entries.map((entry) => `  ~ schema: ${entry.message}`),
+    '',
+    `semanticFingerprint changed : ${diff.compatibility.semanticFingerprintChanged}`,
+    `schemaFingerprint changed   : ${diff.compatibility.schemaFingerprintChanged}`,
+    `server contract             : ${diff.compatibility.serverContractBefore} -> ${diff.compatibility.serverContractAfter}`,
+  ];
+  return lines.join('\n');
+}
+
 async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2));
   if (!options) {
@@ -502,6 +641,9 @@ async function main(): Promise<void> {
         '  axiom migrate plan   <modelFile> [--export=name] [--from=<version>]',
         '  axiom migrate        <modelFile> [--export=name] [--from=<version>] [--approve=op1,op2] [--sqlite=<path>]',
         '  axiom migrate status <modelFile> --sqlite=<path>',
+        '  axiom explain <action|query|workflow|state> <id> <modelFile> [--json]',
+        '  axiom analyze <modelFile> [--json]',
+        '  axiom diff <modelFile> --against=<prevFile> [--export=name] [--against-export=name] [--json]',
       ].join('\n'),
     );
     process.exitCode = 1;
@@ -541,6 +683,15 @@ async function main(): Promise<void> {
     }
     case 'serve':
       await serve(options);
+      return;
+    case 'explain':
+      console.log(await explainCommand(options));
+      return;
+    case 'analyze':
+      console.log(await analyzeCommand(options));
+      return;
+    case 'diff':
+      console.log(await diffCommand(options));
       return;
     default:
       console.error(`Unknown command: ${options.command}`);

@@ -1,6 +1,6 @@
 # Authorization
 
-Axiom 0.15.0-alpha.3. The operational contract for **authorization completeness** — the 0.15
+Axiom 0.16.0-alpha.1. The operational contract for **authorization completeness** — the 0.15
 milestone (spec15). Whether a principal may perform a semantic operation is part of the
 graph's executable meaning — not a runtime concern, not UI visibility, not something that
 varies by transport, provider, process, retry path or authority topology. `axiom.server.v9`
@@ -11,8 +11,8 @@ prior contract.
 > outside portable application semantics. **Authorization** answers *may this principal
 > perform this semantic operation?* — that is what this document defines.
 
-0.15 landed in nine phases (A–I); `0.15.0-alpha.2` (spec15pt2) and `0.15.0-alpha.3`
-(spec15pt3) are corrective passes. **spec15pt2**: authorization **absent-value safety** (a
+0.15 landed in nine phases (A–I); spec15pt2 and spec15pt3 are corrective passes that
+followed. **spec15pt2**: authorization **absent-value safety** (a
 missing PRINCIPAL / RESOURCE field never grants authority), `validateGraph` totality over a
 malformed `allow` tree, a fail-closed `host.authenticate` exception boundary. **spec15pt3**:
 the same fail-closed absent-value semantics now also cover the **legacy

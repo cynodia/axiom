@@ -27,6 +27,8 @@ import type { AnyNode } from './types.js';
 import type { ApplicationGraph } from './graph.js';
 import type { RelationshipDef } from './relationships.js';
 import { queryExpressions } from './query.js';
+import { workflowActionIds, workflowEventIds } from './workflows.js';
+import { nodeAuthorizationPolicyRefs } from './authorization.js';
 
 /**
  * Ids a `ref` expression mentions anywhere in the tree.
@@ -283,10 +285,33 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
           new Map([...rootScope, [node.rowScopeId, statesByEntity.get(node.entityId) ?? []]]),
         );
         break;
+      case 'workflow':
+        // Workflow expressions are closed-scope (inputs / bindings / EVENT / PRINCIPAL —
+        // spec14 §—, never StateDef), so there is nothing to attribute as a state read here.
+        // What the graph *can* say is which actions a step may invoke and which events it
+        // waits on, which is exactly what dependency/impact analysis needs (spec16 §12).
+        for (const actionId of workflowActionIds(node)) {
+          link(node.id, actionId, 'invokes');
+        }
+        for (const eventId of workflowEventIds(node)) {
+          link(node.id, eventId, 'references');
+        }
+        break;
+      case 'authorization-policy':
       case 'integration':
       case 'event':
         break;
       default:
+    }
+  }
+
+  // Any node that references an `AuthorizationPolicyDef` (an action's or query's
+  // `authorizationPolicy`, a workflow's `startPolicy` / `instanceAccessPolicy`) depends on
+  // it — one generic pass over the closed set of policy-reference fields (spec15,
+  // spec16 §12), rather than a hand-maintained case per node kind that references one.
+  for (const node of nodes) {
+    for (const policyId of nodeAuthorizationPolicyRefs(node)) {
+      link(node.id, policyId as NodeId, 'references');
     }
   }
 

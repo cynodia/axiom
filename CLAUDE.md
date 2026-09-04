@@ -474,8 +474,47 @@ turn it into a working browser application whose generated JavaScript nobody rea
   `legacy-plus-policy-absent-conjunction`, memory + SQLite). New tests:
   `core/test/authorization.test.ts` (+14), `server/test/authorization-pt3.test.ts` (9),
   `server/test/authorization-identity.test.ts` (+5).
+* `specs/spec16.md` — the **0.16 tooling, explainability & AI authoring release**
+  (`0.16.0-alpha.1`). Not a new execution-semantics milestone: **no new graph/IR vocabulary,
+  Server IR stays `axiom.server.v9`** — every addition is inspection/analysis/authoring
+  tooling over the existing graph. Two real gaps in `core/derive-edges.ts` closed first
+  (needed for the dependency graph to be complete, not spec16 vocabulary per se): a
+  `WorkflowDef` now derives `invokes`/`references` edges to the actions/events its steps
+  name, and any node's `authorizationPolicy`/`startPolicy`/`instanceAccessPolicy` now
+  derives a `references` edge to that policy. **core**: `semantic-diff.ts`
+  (`semanticDiff(before, after)` — categorized add/remove/change across every node kind,
+  embedding `diffSchema` for entity/state/relationship/read-policy rather than duplicating
+  it, plus compatibility impact — does it move `semanticFingerprint`/`schemaFingerprint`/the
+  required Server IR contract); `authoring-schema.ts` (`authoringSchema()` /
+  `describeAuthoringKind()` / `listAuthorableKinds()` — one machine-readable descriptor per
+  `SEMANTIC_NODE_KINDS` member, deliberately excluding the nine UI kinds, which
+  `@cynodia/axiom-ui`'s existing `PATTERN_CATALOG.json` already covers);
+  `requiredServerContractForGraph` (server-ir.ts, no compiler dependency needed);
+  `stripNonSemanticMetadata` exported from `semantic-identity.ts` for reuse. **agent-api**:
+  `inventory()` (paginated semantic inventory); `getTransitiveDependencies`/`Dependents` +
+  `explainDependency` (cycle-safe, structural provenance); `explainAction` / `explainState` /
+  `explainQuery` (composes the existing `explainQuery` with authorization + live capability)
+  / `explainWorkflow` (composes `analyzeWorkflow` with authorization) / `explainGraph`;
+  `analyzeCapabilities` (an 11-member closed capability vocabulary with per-requirement
+  provenance, independent of `packages/server`'s `ProviderCapabilities` since `agent-api`
+  cannot depend on `server`); `listNativeOperations` / `summarizeNativeOperations`
+  (`opaque: true` exactly when a `NativeOperation` declares no effects — the boundary is
+  reported, never hidden); `explainAuthorizationDecision` (a concrete ALLOW/DENY through the
+  *same* `evaluateAuthorizationExpression`/`decideAuthorization` the authority uses — not a
+  second evaluator — zero mutation, zero effect, advisory only); `proposeEdit`/`acceptEdit`
+  (`graph-edit.ts` — the existing `GraphChange[]` vocabulary replayed onto a private clone,
+  preconditions, conflict detection, atomic edit sets, `semanticDiff` before acceptance,
+  never touching the caller's graph until accepted). **cli**: `axiom explain
+  <action|query|workflow|state> <id> <file>`, `axiom analyze <file>`, `axiom diff <file>
+  --against=<file>`, all with `--json`, all thin renderers over `AgentAPI`. New
+  **`axiom.conformance.v10`** tier, scoped to AgentAPI rather than Server IR execution since
+  AgentAPI has no execution semantics to check against a persistence backend
+  (`agent-api/src/tooling-conformance.ts`, 13 fixtures, hand-specified expected results).
+  Phase K (a dedicated adversarial/fuzz matrix) and Phase L (published-package blind external
+  validation) are **not** part of this checkout — see the report's phase table. Report:
+  `AXIOM_0_16_IMPLEMENTATION_REPORT.md`.
 
-Together, spec2–spec14 are the authority on design decisions — **except where the
+Together, spec2–spec16 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 

@@ -284,6 +284,8 @@ test('every validation code is documented, and every documented code exists', ()
     // Authorization completeness (0.15): exported vocabulary and closed-scope ref ids, not codes.
     'AUTHORIZATION_OPERATIONS', 'AUTHORIZATION_SCOPE_IDS', 'AUTHORIZATION_DEFAULT',
     'AUTHORIZATION_NONDETERMINISTIC_BUILTINS', 'RESOURCE', 'OPERATION',
+    // Tooling, explainability & AI authoring (0.16): exported vocabulary, not codes.
+    'REQUIRED_CAPABILITIES', 'SEMANTIC_DIFF_CATEGORIES',
   ]);
   assert.deepEqual([...invented].filter((name) => !notCodes.has(name)), []);
 });
