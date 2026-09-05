@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.16.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.16.0-alpha.2. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -663,9 +663,9 @@ await serveAxiomApplication({
 ```
 
 `GET /` is the page, `POST /axiom` the semantic endpoint. No route, controller, handler, SQL
-or client JavaScript is authored. **There is no published Axiom CLI.** The halves also run
-separately: `serveOverHttp({ server, port })` is the bare authority, and
-`createDirectTransport(server)` drives one in-process for tests.
+or client JavaScript is authored. `@cynodia/axiom-cli`'s `axiom serve` runs this same path
+ad hoc. The halves also run separately: `serveOverHttp({ server, port })` is the bare
+authority, and `createDirectTransport(server)` drives one in-process for tests.
 
 A remote invocation returns `{ ok: false, pending: true }` and its outcome arrives later,
 through the same action-outcome lifecycle a local refusal uses — so a `diagnostic` node
@@ -949,12 +949,12 @@ Providers: `createMemoryRowStore` + `createMemoryMigrationStore` (deterministic 
 `runMigrationConformanceFixture` over the `axiom.conformance.v5` fixtures in
 `conformance/migrations/`.
 
-There is **no published Axiom CLI**. Every schema/migration operation is a public library
-function — `inspectSchema`, `diffSchema`, `explainSchemaDiff`, `migrationImpact` (from
+Every schema/migration operation is also a public library function —
+`inspectSchema`, `diffSchema`, `explainSchemaDiff`, `migrationImpact` (from
 `@cynodia/axiom-agent-api`); `planMigration`, `explainMigration`, `executeMigration`,
-`getMigrationStatus` (from `@cynodia/axiom-server`). A host builds its own command around
-them. (The Axiom repository has a private, unpublished CLI over the same functions for
-maintainer use.)
+`getMigrationStatus` (from `@cynodia/axiom-server`) — for a host that builds its own
+command around them. `@cynodia/axiom-cli` publishes `axiom schema status` / `schema diff` /
+`migrate plan` / `migrate` / `migrate status` over the same functions.
 
 Diagnostics: `SCHEMA_MIGRATION_REQUIRED` `SCHEMA_INCOMPATIBLE` `MIGRATION_IN_PROGRESS`
 `MIGRATION_STATE_CORRUPTED` `MIGRATION_PATH_NOT_FOUND` `MIGRATION_APPROVAL_REQUIRED`

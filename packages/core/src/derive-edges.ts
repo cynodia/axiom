@@ -1,4 +1,5 @@
 import { constructedFieldIds, expressionDefsIn, expressionFieldIds, walkExpression } from './expressions.js';
+import { actionOperations, operationChildren } from './nodes.js';
 import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
 import type {
@@ -8,7 +9,6 @@ import type {
   EntityDef,
   ExpressionDef,
   GraphEdge,
-  MutationOperation,
   Operation,
   StateDef,
 } from './nodes.js';
@@ -327,17 +327,28 @@ export function deriveEdges(nodes: readonly AnyNode[]): GraphEdge[] {
   }));
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 /**
  * The states an expression ultimately draws its members from. Following `field` and calls
  * matters: a collection reached as `coalesce(field(ref(state), lines), [])` still comes
  * from that state, and its members' fields are still reads of it.
+ *
+ * Total over malformed input (spec16pt2 §12-24): a candidate expression can be
+ * AI-generated, deserialized or hand-tampered.
  */
 function statesOf(
-  expression: Expression,
+  expressionInput: unknown,
   scope: ScopeBindings,
   states: ReadonlySet<NodeId>,
   defs: Definitions = new Map(),
 ): NodeId[] {
+  if (!isPlainObject(expressionInput) || typeof expressionInput.kind !== 'string') {
+    return [];
+  }
+  const expression = expressionInput as unknown as Expression;
   switch (expression.kind) {
     case 'ref': {
       const bound = scope.get(expression.targetId);
@@ -469,7 +480,7 @@ function bind(scope: ScopeBindings, id: NodeId, targets: readonly NodeId[]): Sco
  * members came from.
  */
 function collectReads(
-  expression: Expression,
+  expressionInput: unknown,
   scope: ScopeBindings,
   states: ReadonlySet<NodeId>,
   found: Map<NodeId, Set<FieldId>> = new Map(),
@@ -483,6 +494,10 @@ function collectReads(
     found.set(stateId, entry);
   };
 
+  if (!isPlainObject(expressionInput) || typeof expressionInput.kind !== 'string') {
+    return found;
+  }
+  const expression = expressionInput as unknown as Expression;
   switch (expression.kind) {
     case 'ref':
       for (const stateId of statesOf(expression, scope, states, defs)) {
@@ -594,7 +609,7 @@ function linkAction(action: ActionDef, linker: Linker): void {
   for (const expression of [...(action.preconditions ?? []), ...(action.postconditions ?? [])]) {
     linker.reads(action.id, expression, linker.scope);
   }
-  linkOperations(action.id, action.operations ?? [], linker, linker.scope);
+  linkOperations(action.id, actionOperations(action), linker, linker.scope);
 }
 
 function linkOperations(
@@ -621,7 +636,7 @@ function linkOperations(
       case 'for-each': {
         linker.reads(actionId, operation.collection, scope);
         const inner = bind(scope, operation.scopeId, statesOf(operation.collection, scope, linker.states));
-        linkOperations(actionId, operation.operations as MutationOperation[], linker, inner);
+        linkOperations(actionId, operationChildren(operation), linker, inner);
         break;
       }
       case 'invoke':

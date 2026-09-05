@@ -390,8 +390,56 @@ export interface ForEachOperation {
   operations: MutationOperation[];
 }
 
-export function isMutationOperation(operation: Operation): operation is MutationOperation {
+/**
+ * Total over any input (spec16pt2 §12-19): a candidate `Operation` may arrive from
+ * AI generation, deserialization or hand-tampering, so the runtime type `Operation` is not
+ * proof of runtime shape. `null`/a primitive/an array safely reports `false` rather than
+ * throwing when `.kind` is read.
+ */
+export function isMutationOperation(operation: unknown): operation is MutationOperation {
+  if (!isPlainOperation(operation)) {
+    return false;
+  }
   return operation.kind === 'set' || operation.kind === 'insert' || operation.kind === 'remove';
+}
+
+/** A plain object carrying one of the closed `OPERATION_KINDS` — total, never throws. */
+export function isPlainOperation(operation: unknown): operation is Operation {
+  return (
+    !!operation &&
+    typeof operation === 'object' &&
+    !Array.isArray(operation) &&
+    (OPERATION_KINDS as readonly string[]).includes((operation as { kind?: unknown }).kind as string)
+  );
+}
+
+/**
+ * `value.operations` if it is genuinely an array, else `[]` — no per-element filtering.
+ * Exported for `validateGraph`, the one caller that must see every raw array element,
+ * malformed or not, in order to report each one structurally (spec16pt2 §20-21).
+ */
+export function rawOperations(value: unknown): readonly unknown[] {
+  const operations = (value as { operations?: unknown } | null | undefined)?.operations;
+  return Array.isArray(operations) ? operations : [];
+}
+
+/**
+ * `ActionDef.operations`, safe over malformed input (spec16pt2 §12-13): only a genuine
+ * array of well-formed operations is ever returned — never assumed from a truthy-but-non-array
+ * value like `{}` (exactly the shape `(action.operations ?? []).some(...)` treats as an array
+ * and crashes on), and never including a malformed array *element* either, so every consumer
+ * that just wants to reason about an action's real operations can iterate the result without
+ * its own defensive check. `validateGraph` is the one caller that must see and diagnose a
+ * malformed element rather than have it silently skipped, so it walks the raw array itself
+ * (`nodes.ts` is not the place that decides what gets reported — `validate.ts` is).
+ */
+export function actionOperations(action: unknown): Operation[] {
+  return rawOperations(action).filter(isPlainOperation);
+}
+
+/** A `for-each` operation's nested `operations`, equally total and equally filtered. */
+export function operationChildren(operation: unknown): MutationOperation[] {
+  return rawOperations(operation).filter(isMutationOperation);
 }
 
 export function forEach(

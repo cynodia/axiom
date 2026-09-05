@@ -42,13 +42,22 @@ export const SEMANTIC_DIFF_CATEGORIES = [
 ] as const;
 export type SemanticDiffCategory = (typeof SEMANTIC_DIFF_CATEGORIES)[number];
 
-/** Kinds `diffSchema` already classifies in full field-level detail; excluded from the generic node loop. */
-const SCHEMA_OWNED_KINDS: ReadonlySet<string> = new Set(['entity', 'state', 'relationship', 'read-policy']);
+/**
+ * Kinds `diffSchema` already classifies in full field-level detail; excluded from the
+ * generic node loop. `read-policy` is deliberately **not** here (spec16pt2 F3, §33, §37):
+ * `diffSchema`'s `ReadPolicyShape` only tracks which entity a policy governs — correctly,
+ * for `schemaFingerprint`'s persistence-relevant purpose — and never its `predicate`, so a
+ * rule edited from owner-only to public would otherwise produce no diff entry anywhere even
+ * though it moves `semanticFingerprint`. Routing it through the generic full-node loop
+ * instead catches exactly that, tagged `authorization`, at the cost of a redundant (never
+ * missing) second entry when `diffSchema` also reports the policy's entity moving.
+ */
+const SCHEMA_OWNED_KINDS: ReadonlySet<string> = new Set(['entity', 'state', 'relationship']);
 const PROVIDER_KINDS: ReadonlySet<string> = new Set(['integration', 'integration-operation', 'subscription', 'storage']);
 const PRESENTATION_KINDS: ReadonlySet<string> = new Set<string>([...UI_NODE_KINDS, 'route']);
 
 function kindCategory(kind: string): SemanticDiffCategory {
-  if (kind === 'authorization-policy') return 'authorization';
+  if (kind === 'authorization-policy' || kind === 'read-policy') return 'authorization';
   if (kind === 'query') return 'query';
   if (kind === 'workflow') return 'workflow';
   if (kind === 'migration') return 'schema';
@@ -58,7 +67,21 @@ function kindCategory(kind: string): SemanticDiffCategory {
 }
 
 /** Field names whose change on a node makes the change authorization-semantic too (spec16 §156). */
-const AUTHZ_FIELDS: readonly string[] = ['authorizationPolicy', 'authorization', 'startPolicy', 'instanceAccessPolicy'];
+/**
+ * Every field whose change makes a node's diff entry authorization-relevant (spec16pt2 F3,
+ * §32-42). `readPolicyId` closes the exact alpha.1 finding: attaching, detaching or
+ * replacing the row-level policy a `QueryDef` reads through controls **who may observe**
+ * its rows, which is authorization semantics by spec16pt2 §32's own test — the field name
+ * containing "Policy" is a coincidence this list must not rely on (§41 forbids matching by
+ * substring), so each entry here is a deliberate, individually-justified addition.
+ */
+const AUTHZ_FIELDS: readonly string[] = [
+  'authorizationPolicy',
+  'authorization',
+  'startPolicy',
+  'instanceAccessPolicy',
+  'readPolicyId',
+];
 
 export interface SemanticDiffEntry {
   changeKind: 'added' | 'removed' | 'changed';
@@ -144,22 +167,20 @@ export function semanticDiff(before: ApplicationGraph, after: ApplicationGraph):
       const categories = new Set<SemanticDiffCategory>();
       if (strippedEqual) {
         categories.add('metadata');
-      } else if (isPlainObject(previous) && isPlainObject(node)) {
-        const changedFields = new Set([...Object.keys(previous), ...Object.keys(node)].filter(
-          (key) => !equalJSON(previous[key], node[key]),
-        ));
-        const onlyAuthzFieldsChanged =
-          changedFields.size > 0 && [...changedFields].every((key) => AUTHZ_FIELDS.includes(key));
-        if (onlyAuthzFieldsChanged) {
-          categories.add('authorization');
-        } else {
-          categories.add(kindCategory(kind));
-          if ([...changedFields].some((key) => AUTHZ_FIELDS.includes(key))) {
+      } else {
+        // spec16pt2 §40: categories are additive, never exclusive. An authorization-bearing
+        // field change is tagged `authorization` *in addition to* the node's own kind
+        // category — never in its place — so `QueryDef.readPolicyId` detaching reads as
+        // `[query, authorization]`, not merely `[authorization]` (F3, §34).
+        categories.add(kindCategory(kind));
+        if (isPlainObject(previous) && isPlainObject(node)) {
+          const changedFields = [...new Set([...Object.keys(previous), ...Object.keys(node)])].filter(
+            (key) => !equalJSON(previous[key], node[key]),
+          );
+          if (changedFields.some((key) => AUTHZ_FIELDS.includes(key))) {
             categories.add('authorization');
           }
         }
-      } else {
-        categories.add(kindCategory(kind));
       }
       entries.push({
         changeKind: 'changed',

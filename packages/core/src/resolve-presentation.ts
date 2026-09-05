@@ -1,4 +1,5 @@
 import type { FieldId, NodeId } from './ids.js';
+import { actionOperations } from './nodes.js';
 import type { ActionDef, EntityDef } from './nodes.js';
 import type { AnyNode } from './types.js';
 import type { TypeRef } from './type-ref.js';
@@ -346,7 +347,7 @@ function semanticLayer(node: UINode, index: Index): Layer {
 
 /** Declared destructive intent, or a removal the graph performs. */
 export function isDestructiveAction(action: ActionDef): boolean {
-  return action.destructive === true || (action.operations ?? []).some((op) => op.kind === 'remove');
+  return action.destructive === true || actionOperations(action).some((op) => op.kind === 'remove');
 }
 
 /** Boolean and temporal values read better formatted than printed raw — §32, §33. */

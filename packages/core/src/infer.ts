@@ -2,6 +2,7 @@ import type { Expression } from './expressions.js';
 import type { FieldId, NodeId } from './ids.js';
 import type { EntityDef, ExpressionDef, StateDef } from './nodes.js';
 import type { FieldIndexEntry } from './graph.js';
+import { isPlainLocation } from './location.js';
 import type { Location } from './location.js';
 import { collectionType, entityType, groupType, optionalType, primitiveType } from './type-ref.js';
 import { GROUP_ITEMS_FIELD, GROUP_KEY_FIELD } from './group.js';
@@ -28,12 +29,23 @@ export interface LocationCapabilities {
   writable: boolean;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function unwrap(type: TypeRef | undefined): TypeRef | undefined {
   return type?.kind === 'optional' ? unwrap(type.valueType) : type;
 }
 
-/** The type of the value a location addresses, where it can be determined statically. */
-export function inferLocationType(location: Location, context: SemanticContext): TypeRef | undefined {
+/**
+ * The type of the value a location addresses, where it can be determined statically.
+ * Total over malformed input (spec16pt2 §12-20): a location that cannot be understood at
+ * all has no inferrable type, rather than a thrown error.
+ */
+export function inferLocationType(location: unknown, context: SemanticContext): TypeRef | undefined {
+  if (!isPlainLocation(location)) {
+    return undefined;
+  }
   switch (location.kind) {
     case 'state':
       return context.getState(location.stateId)?.valueType;
@@ -63,7 +75,7 @@ export function inferLocationType(location: Location, context: SemanticContext):
 }
 
 /** Derived state is readable but never writable; everything else follows its root. */
-export function locationCapabilities(location: Location, context: SemanticContext): LocationCapabilities {
+export function locationCapabilities(location: unknown, context: SemanticContext): LocationCapabilities {
   // A provider-backed record is canonical authoritative data: readable and writable by
   // definition, and never a derivation.
   if (locationProviderRoot(location)) {
@@ -76,7 +88,10 @@ export function locationCapabilities(location: Location, context: SemanticContex
   return { readable: true, writable: root.derivation === undefined };
 }
 
-function locationProviderRoot(location: Location): boolean {
+function locationProviderRoot(location: unknown): boolean {
+  if (!isPlainLocation(location)) {
+    return false;
+  }
   switch (location.kind) {
     case 'provider-record':
       return true;
@@ -89,7 +104,10 @@ function locationProviderRoot(location: Location): boolean {
   }
 }
 
-function rootState(location: Location, context: SemanticContext): StateDef | undefined {
+function rootState(location: unknown, context: SemanticContext): StateDef | undefined {
+  if (!isPlainLocation(location)) {
+    return undefined;
+  }
   switch (location.kind) {
     case 'state':
       return context.getState(location.stateId);
@@ -127,12 +145,18 @@ function withScope(scope: ScopeTypes | undefined, id: NodeId, type: TypeRef | un
  * iteration scopes are tracked so that projections and aggregations can be checked.
  */
 export function inferExpressionType(
-  expression: Expression,
+  expressionInput: unknown,
   context: SemanticContext,
   scope?: ScopeTypes,
   /** Definitions already being inferred, so a cyclic reference stops rather than recurses. */
   visiting: ReadonlySet<NodeId> = new Set(),
 ): TypeRef | undefined {
+  // spec16pt2 §12-24 — a malformed sub-expression (a deleted field, a tampered array
+  // element) has no inferrable type, rather than a thrown error reading `.kind`.
+  if (!isPlainObject(expressionInput)) {
+    return undefined;
+  }
+  const expression = expressionInput as unknown as Expression;
   switch (expression.kind) {
     case 'literal': {
       const value = expression.value;
@@ -384,7 +408,10 @@ export function isNonNumericCollection(type: TypeRef | undefined): boolean {
 }
 
 /** Renders a location for people. The stored representation stays id-based. */
-export function formatLocation(location: Location, context: SemanticContext): string {
+export function formatLocation(location: unknown, context: SemanticContext): string {
+  if (!isPlainLocation(location)) {
+    return 'unknown location';
+  }
   const name = (id: NodeId): string => context.getName?.(id) ?? id;
   const fieldName = (id: FieldId): string => context.getField(id)?.field.name ?? id;
 
@@ -395,14 +422,19 @@ export function formatLocation(location: Location, context: SemanticContext): st
       return `${formatLocation(location.target, context)} → ${fieldName(location.fieldId)}`;
     case 'collection-item': {
       const parent = formatLocation(location.collection, context);
+      if (!isPlainObject(location.selector)) {
+        return `${parent} → [invalid selector]`;
+      }
       if (location.selector.kind === 'identity') {
-        const value =
-          location.selector.value.kind === 'ref'
-            ? name(location.selector.value.targetId)
-            : location.selector.value.kind === 'literal'
-              ? JSON.stringify(location.selector.value.value)
+        const selectorValue = location.selector.value;
+        const value = !isPlainObject(selectorValue)
+          ? 'expression'
+          : selectorValue.kind === 'ref'
+            ? name(selectorValue.targetId as NodeId)
+            : selectorValue.kind === 'literal'
+              ? JSON.stringify(selectorValue.value)
               : 'expression';
-        return `${parent} → [${fieldName(location.selector.fieldId)} = ${value}]`;
+        return `${parent} → [${fieldName(location.selector.fieldId as FieldId)} = ${value}]`;
       }
       return `${parent} → [index]`;
     }

@@ -1,6 +1,6 @@
 # Semantic data access & the query layer
 
-Axiom 0.16.0-alpha.1. The operational contract for demand-driven reads over authoritative
+Axiom 0.16.0-alpha.2. The operational contract for demand-driven reads over authoritative
 data that is too large to materialize as a `StateDef` — 500,000 orders, 5,000,000 order
 lines, years of audit rows. `axiom.server.v6`.
 

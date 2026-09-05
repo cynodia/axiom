@@ -1,4 +1,5 @@
 import {
+  actionOperations,
   allowedInvocationSources,
   isClientInvocable as actionIsClientInvocable,
   isSystemOnlyAction,
@@ -193,7 +194,7 @@ export class GraphQueries {
   private analysisGaps(): string[] {
     const gaps: string[] = [];
     for (const action of this.graph.getNodesByKind('action')) {
-      for (const operation of action.operations ?? []) {
+      for (const operation of actionOperations(action)) {
         if (operation.kind === 'native' && (operation.declaredEffects ?? []).length === 0) {
           gaps.push(
             `${action.name ?? action.id} runs the native operation "${operation.implementationId}" without declaring its effects`,
@@ -214,7 +215,7 @@ export class GraphQueries {
       if (touchesState) {
         return true;
       }
-      return (action.operations ?? []).some((operation) =>
+      return actionOperations(action).some((operation) =>
         'value' in operation && operation.value.kind === 'object'
           ? operation.value.entityId === entityId
           : false,
@@ -275,7 +276,7 @@ export class GraphQueries {
       .filter(
         (action) =>
           action.destructive === true ||
-          (action.operations ?? []).some((operation) => operation.kind === 'remove'),
+          actionOperations(action).some((operation) => operation.kind === 'remove'),
       );
   }
 
@@ -886,7 +887,7 @@ export class GraphQueries {
     return this.graph
       .getNodesByKind('action')
       .filter((action) =>
-        (action.operations ?? []).some(
+        actionOperations(action).some(
           (operation) =>
             (operation.kind === 'blob-metadata' ||
               operation.kind === 'blob-commit' ||

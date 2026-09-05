@@ -1,5 +1,6 @@
 import {
   ApplicationGraph,
+  actionOperations,
   createFieldId,
   createNodeId,
   isUINode,
@@ -241,7 +242,10 @@ export class Transaction extends PresentationQueries {
     const updated: NodeId[] = [];
     for (const action of this.graph.getNodesByKind('action')) {
       let changed = false;
-      const operations = (action.operations ?? []).map((operation) => {
+      // spec16pt2 §12-20: a hand-tampered or AI-generated ActionDef.operations can be
+      // malformed (non-array, or hold a malformed entry). `actionOperations` establishes
+      // both before this ever iterates, rather than assuming the declared type holds.
+      const operations = actionOperations(action).map((operation) => {
         if (!('value' in operation) || operation.value.kind !== 'object') {
           return operation;
         }

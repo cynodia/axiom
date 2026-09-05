@@ -1,4 +1,5 @@
 import {
+  actionOperations,
   authorityCompatibilityKey,
   schemaFingerprint,
   semanticFingerprint,
@@ -70,7 +71,7 @@ const EFFECT_OP_KINDS = new Set(['integration-effect', 'blob-commit', 'blob-dele
 
 function actionsWithEffects(graph: ApplicationGraph): ActionDef[] {
   return (graph.getNodesByKind('action') as ActionDef[]).filter((action) =>
-    (action.operations ?? []).some((op) => EFFECT_OP_KINDS.has(op.kind)),
+    actionOperations(action).some((op) => EFFECT_OP_KINDS.has(op.kind)),
   );
 }
 

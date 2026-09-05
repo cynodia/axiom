@@ -12,7 +12,7 @@ mutations and persists them. Neither is written by hand: there is no route, cont
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
 **Status: experimental / alpha.** The API may change between alpha releases. This
-documentation describes 0.16.0-alpha.1.
+documentation describes 0.16.0-alpha.2.
 
 ## AI agents: read this first
 
@@ -179,7 +179,7 @@ Every release of this project is a pre-release and npm's `latest` tag points at 
 plain commands above install the current version. **There is no `alpha` dist-tag** — it was
 removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` fails with a
 404. Pin the exact version instead when one is needed:
-`npm install @cynodia/axiom@0.16.0-alpha.1`.
+`npm install @cynodia/axiom@0.16.0-alpha.2`.
 
 The server package is separate rather than re-exported, because it imports `node:http` and
 `node:sqlite` and a browser bundle must not.
@@ -560,8 +560,8 @@ npm install
 npm run build      # compiles every package and writes the three demo applications
 npm test           # unit, validation, runtime, presentation, agent, architecture, documentation
 
-# packages/cli is a private development tool of this repository. It is not published, and
-# nothing outside this checkout should depend on it.
+# packages/cli also publishes as @cynodia/axiom-cli (the `axiom` executable); this runs
+# it straight from the checkout, which is what a contributor working in this repo wants.
 node packages/cli/dist/index.js inspect  packages/demo/dist/order-system.js --export=createOrderSystemGraph
 node packages/cli/dist/index.js validate packages/demo/dist/order-system.js --export=createOrderSystemGraph
 node packages/cli/dist/index.js serve    packages/demo/dist/order-system.js --export=createOrderSystemGraph
@@ -573,8 +573,10 @@ the acceptance fixture for the 0.4 collection semantics and the 0.5 presentation
 order desk is the 0.6 fixture, with stock and orders owned by an authority, and is driven end
 to end through the generated page in `packages/demo/test/generated-page.test.ts`.
 
-There is no published Axiom CLI: `packages/cli` is a private development tool of this
-repository, and `serveAxiomApplication` is the supported way to run an application.
+`@cynodia/axiom-cli` publishes the `axiom` executable (`npm install -g @cynodia/axiom-cli`) —
+`inspect` / `validate` / `build` / `serve` plus the `explain` / `analyze` / `diff` tooling
+surface, all thin renderers over `AgentAPI`. `serveAxiomApplication` remains the supported
+way to run an application from your own Node process.
 
 Specifications live in `specs/`, in order: `spec.md`, `spec2.md`, `spec3.md`, `spec4.md`,
 `spec4.1.md`, `spec5.md`, `spec5.1.md`, `spec5.2.md`, `spec6.md`, `spec6.1.md`. `CLAUDE.md`

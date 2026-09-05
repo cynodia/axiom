@@ -1,9 +1,11 @@
 import type { FieldId, NodeId } from './ids.js';
+import { actionOperations, operationChildren } from './nodes.js';
 import type {
   ActionDef,
   ConstraintDef,
   EntityDef,
   ExpressionDef,
+  Operation,
   StateDef,
   TransitionConstraintDef,
 } from './nodes.js';
@@ -179,7 +181,7 @@ export function usesExternalIOVocabulary(ir: {
     return true;
   }
   return Object.values(ir.actions).some((action) =>
-    (action.operations ?? []).some((operation) =>
+    actionOperations(action).some((operation) =>
       SERVER_IR_V5_OPERATION_KINDS.includes(operation.kind),
     ),
   );
@@ -306,7 +308,7 @@ export function usesQueryVocabulary(ir: {
   }
   // A `query` operation inside an action is also v6 vocabulary.
   return Object.values(ir.actions).some((action) =>
-    (action.operations ?? []).some((operation) => operation.kind === 'query'),
+    actionOperations(action).some((operation) => operation.kind === 'query'),
   );
 }
 
@@ -441,7 +443,7 @@ function actionExpressions(action: ActionDef): Expression[] {
     ...(action.postconditions ?? []),
     ...(action.guards ?? []).map((guard) => guard.condition),
   ];
-  const walkOperations = (operations: readonly ActionDef['operations'][number][]): void => {
+  const walkOperations = (operations: readonly Operation[]): void => {
     for (const operation of operations) {
       switch (operation.kind) {
         case 'set':
@@ -450,7 +452,7 @@ function actionExpressions(action: ActionDef): Expression[] {
           break;
         case 'for-each':
           found.push(operation.collection);
-          walkOperations(operation.operations);
+          walkOperations(operationChildren(operation));
           break;
         case 'invoke':
           found.push(...Object.values(operation.arguments ?? {}));
@@ -480,7 +482,7 @@ function actionExpressions(action: ActionDef): Expression[] {
       }
     }
   };
-  walkOperations(action.operations ?? []);
+  walkOperations(actionOperations(action));
   return found;
 }
 

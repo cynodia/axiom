@@ -6,7 +6,7 @@ import type { RendererCapabilities } from './renderer-capabilities.js';
 import type { TriggerRuntimeCapabilities } from './trigger-capabilities.js';
 import type { ValidationIssue, ValidationResult } from './diagnostics.js';
 import type { LiteralValue } from './nodes.js';
-import { EDGE_KINDS, actionGuards, isMutationOperation } from './nodes.js';
+import { EDGE_KINDS, actionGuards, isMutationOperation, isPlainOperation, rawOperations } from './nodes.js';
 import type {
   ActionDef,
   ConstraintDef,
@@ -221,6 +221,10 @@ export function validateGraph(graph: ApplicationGraph, options: ValidateOptions 
   return { valid: errors.length === 0, errors, warnings };
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function validateNode(node: AnyNode, context: Context): void {
   if (isUINode(node)) {
     validateUiNode(node, context);
@@ -408,31 +412,67 @@ function validateAction(action: ActionDef, context: Context): void {
   for (const postcondition of action.postconditions ?? []) {
     validateExpression(postcondition, action.id, context, local);
   }
+  // spec16pt2 F1 — a candidate ActionDef.operations can arrive from AI generation,
+  // deserialization or hand-tampering, so its runtime shape is checked before it is ever
+  // iterated. A present-but-non-array value is a distinct, structural defect from "absent"
+  // (spec16pt2 §15): absent means no operations, non-array means the graph is malformed.
+  if (action.operations !== undefined && !Array.isArray(action.operations)) {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidOperationCollection,
+      message: `Action ${action.id} declares operations as ${describeOperationShape(action.operations)}, not an array`,
+      nodeId: action.id,
+    });
+  }
   let scoped: Scoped = local;
-  for (const operation of action.operations ?? []) {
+  for (const operation of rawOperations(action)) {
     scoped = validateOperation(operation, action, context, scoped);
   }
 }
 
+/** A short, safe description of a malformed value for a diagnostic message. Never throws. */
+function describeOperationShape(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'an array of the wrong shape';
+  if (typeof value === 'object') return 'an object';
+  return `a ${typeof value}`;
+}
+
 function validateOperation(
-  operation: Operation,
+  operation: unknown,
   action: ActionDef,
   context: Context,
   local: Scoped,
 ): Scoped {
+  // spec16pt2 F1/F2 — an operation entry (top-level, or nested inside a for-each) can itself
+  // be malformed: `null`, a primitive, or an object with no recognized `kind`. Establish
+  // shape before the switch below ever reads `.kind`/`.target`/`.value` (spec16pt2 §20).
+  if (!isPlainOperation(operation)) {
+    context.errors.push({
+      code: VALIDATION_CODES.invalidOperation,
+      message: `Action ${action.id} declares an operation that is ${describeOperationShape(operation)}, not a recognized operation`,
+      nodeId: action.id,
+    });
+    return local;
+  }
   switch (operation.kind) {
     case 'for-each': {
       validateExpression(operation.collection, action.id, context, local);
       requireCollection(operation.collection, action.id, context, local, 'for-each');
       const scoped = iterationScope(local, operation.scopeId, operation.collection, context, action.id);
-      if ((operation.operations ?? []).length === 0) {
+      if (operation.operations !== undefined && !Array.isArray(operation.operations)) {
+        context.errors.push({
+          code: VALIDATION_CODES.invalidOperationCollection,
+          message: `A for-each in ${action.id} declares operations as ${describeOperationShape(operation.operations)}, not an array`,
+          nodeId: action.id,
+        });
+      } else if (rawOperations(operation).length === 0) {
         context.warnings.push({
           code: VALIDATION_CODES.unsupportedOperation,
           message: `A for-each in ${action.id} performs no mutations`,
           nodeId: action.id,
         });
       }
-      for (const nested of operation.operations ?? []) {
+      for (const nested of rawOperations(operation)) {
         if (!isMutationOperation(nested)) {
           context.errors.push({
             code: VALIDATION_CODES.unsupportedOperation,
@@ -2257,12 +2297,25 @@ function iterationScope(
 }
 
 function validateExpression(
-  expression: Expression,
+  expressionInput: unknown,
   ownerId: NodeId,
   context: Context,
   local: Set<NodeId> | Scoped,
 ): void {
   const scope: Scoped = local instanceof Set ? emptyScope(local) : local;
+
+  // spec16pt2 §12-24 — a candidate expression can be malformed (a deleted/tampered field,
+  // an array-for-object mutation): establish shape before the switch below ever reads
+  // `.kind`, exactly like the operation/location totality fix above.
+  if (!isPlainObject(expressionInput) || typeof (expressionInput as { kind?: unknown }).kind !== 'string') {
+    context.errors.push({
+      code: VALIDATION_CODES.unsupportedExpression,
+      message: `${ownerId} contains an expression that is not a recognized structure`,
+      nodeId: ownerId,
+    });
+    return;
+  }
+  const expression = expressionInput as unknown as Expression;
 
   switch (expression.kind) {
     case 'literal':

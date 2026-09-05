@@ -3,8 +3,21 @@ import type { ValidationIssue } from './diagnostics.js';
 import type { NodeId } from './ids.js';
 import { inferExpressionType, inferLocationType, locationCapabilities } from './infer.js';
 import type { SemanticContext } from './infer.js';
-import { locationRootStateId } from './location.js';
+import { isPlainLocation, locationRootStateId } from './location.js';
 import type { Location } from './location.js';
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** A short, safe description of a malformed value for a diagnostic message. Never throws. */
+function describeShape(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (Array.isArray(value)) return 'an array';
+  if (typeof value === 'object') return 'an object with no recognized "kind"';
+  return `a ${typeof value}`;
+}
 
 export interface LocationValidationOptions {
   /** Node the location belongs to, for diagnostics. */
@@ -16,9 +29,14 @@ export interface LocationValidationOptions {
 /**
  * Structural validation of a location: does every state, field and selector it names
  * exist, do they fit together, and may it be written to?
+ *
+ * Total over malformed input (spec16pt2 §12-24): a candidate `Location` can arrive from AI
+ * generation, deserialization or hand-tampering. `walk` establishes shape before any
+ * dereference, so a `null`/primitive/malformed location is reported as one structured
+ * `ValidationIssue`, never a native exception.
  */
 export function validateLocation(
-  location: Location,
+  location: unknown,
   context: SemanticContext,
   options: LocationValidationOptions = {},
 ): ValidationIssue[] {
@@ -45,7 +63,14 @@ export function validateLocation(
 
 type Report = (code: string, message: string, extra?: Partial<ValidationIssue>) => void;
 
-function walk(location: Location, context: SemanticContext, report: Report): void {
+function walk(location: unknown, context: SemanticContext, report: Report): void {
+  if (!isPlainLocation(location)) {
+    report(
+      VALIDATION_CODES.unknownStateRef,
+      `Location is not a valid location structure: expected an object with a recognized "kind", got ${describeShape(location)}`,
+    );
+    return;
+  }
   switch (location.kind) {
     case 'state': {
       if (!context.getState(location.stateId)) {
@@ -112,6 +137,13 @@ function walk(location: Location, context: SemanticContext, report: Report): voi
         report(
           VALIDATION_CODES.selectorOnNonCollection,
           `An item selector was applied to a ${resolved.kind} value`,
+        );
+        return;
+      }
+      if (!isPlainObject(location.selector) || (location.selector.kind !== 'identity' && location.selector.kind !== 'index')) {
+        report(
+          VALIDATION_CODES.invalidSelectorType,
+          `Item selector is not a valid selector structure: expected { kind: 'identity' | 'index', ... }, got ${describeShape(location.selector)}`,
         );
         return;
       }

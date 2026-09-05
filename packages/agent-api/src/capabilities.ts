@@ -1,3 +1,4 @@
+import { actionOperations } from '@cynodia/axiom-core';
 import type { ApplicationGraph } from '@cynodia/axiom-core';
 import { analyzeLiveQuery } from './live-query.js';
 
@@ -88,7 +89,7 @@ export function analyzeCapabilities(graph: ApplicationGraph): CapabilityAnalysis
   }
 
   for (const action of actions) {
-    const effectOps = (action.operations ?? []).filter(
+    const effectOps = actionOperations(action).filter(
       (op) => op.kind === 'integration-effect' || op.kind === 'blob-commit' || op.kind === 'blob-delete',
     );
     if (effectOps.length > 0) {

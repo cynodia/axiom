@@ -1455,7 +1455,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
         const members = requireCollection(evaluate(operation.collection, scope), 'for-each');
         for (const member of members) {
           const iteration = childScope(scope, operation.scopeId, member);
-          for (const nested of operation.operations ?? []) {
+          for (const nested of Array.isArray(operation.operations) ? operation.operations : []) {
             executeOperation(nested, iteration, context, result);
           }
         }
@@ -1741,7 +1741,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
   }
 
   function actionHasAsyncQuery(action: ActionDef): boolean {
-    return (action.operations ?? []).some(
+    return (Array.isArray(action.operations) ? action.operations : []).some(
       (operation) =>
         operation.kind === 'integration-query' ||
         operation.kind === 'blob-metadata' ||
@@ -1776,7 +1776,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
       renderApplication();
       return { ok: false, diagnostics: [diagnostic] };
     };
-    for (const operation of action.operations ?? []) {
+    for (const operation of Array.isArray(action.operations) ? action.operations : []) {
       if (operation.kind === 'blob-metadata') {
         // A metadata lookup is the storage half of the same pre-transaction phase: a finite
         // question, answered before anything is mutated, whose result later operations read.
@@ -1999,7 +1999,7 @@ export function createAxiomRuntime(options: AxiomRuntimeOptions): AxiomRuntime {
     };
     const operationDiagnostics: RuntimeDiagnostic[] = [];
     const reportedBefore = collected.length;
-    for (const operation of action.operations ?? []) {
+    for (const operation of Array.isArray(action.operations) ? action.operations : []) {
       executeOperation(operation, scope, context, operationDiagnostics);
     }
 

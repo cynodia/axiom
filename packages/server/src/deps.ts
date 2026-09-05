@@ -82,6 +82,8 @@ export { PRINCIPAL, RUNTIME_DIAGNOSTIC_CODES, SERVER_IR_CONTRACT } from './runti
 export {
   MIGRATION_OLD_SCOPE,
   MIGRATION_OPERATION_KINDS,
+  actionOperations,
+  operationChildren,
   diffSchema,
   canonicalJSON,
   walkExpression,

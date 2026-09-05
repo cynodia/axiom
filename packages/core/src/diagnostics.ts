@@ -240,4 +240,12 @@ export const VALIDATION_CODES = {
   authorizationUnknownPolicy: 'AUTHORIZATION_UNKNOWN_POLICY',
   /** An `AuthorizationPolicyDef.allow` expression calls `now` / `uuid` / `random` — authorization must be deterministic (spec15 §34). */
   authorizationNondeterministic: 'AUTHORIZATION_NONDETERMINISTIC',
+
+  // Validation totality (0.16pt2, spec16pt2 §12-24). A candidate graph can be AI-generated,
+  // deserialized or hand-tampered, so `validateGraph` must reject a malformed runtime
+  // *shape* structurally — never assume TypeScript's compile-time types already hold.
+  /** `ActionDef.operations`, or a `for-each`'s nested `operations`, is present but not an array. */
+  invalidOperationCollection: 'INVALID_OPERATION_COLLECTION',
+  /** An operation array entry that is not a plain object with a recognized `kind`. */
+  invalidOperation: 'INVALID_OPERATION',
 } as const;

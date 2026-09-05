@@ -1,7 +1,7 @@
 import type { Expression } from './expressions.js';
 import { referencedIds } from './derive-edges.js';
 import type { NodeId } from './ids.js';
-import { actionGuards, isMutationOperation } from './nodes.js';
+import { actionGuards, actionOperations, isMutationOperation, operationChildren } from './nodes.js';
 import type {
   ActionDef,
   ConstraintDef,
@@ -169,7 +169,7 @@ function operationExpressions(operation: Operation): Expression[] {
   switch (operation.kind) {
     case 'for-each':
       found.push(operation.collection);
-      for (const nested of operation.operations ?? []) {
+      for (const nested of operationChildren(operation)) {
         found.push(...operationExpressions(nested));
       }
       break;
@@ -206,14 +206,14 @@ function operationExpressions(operation: Operation): Expression[] {
 
 /** Whether an action calls out to an integration anywhere in its top-level operations. */
 export function actionUsesIntegration(action: ActionDef): boolean {
-  return (action.operations ?? []).some(
+  return actionOperations(action).some(
     (operation) => operation.kind === 'integration-query' || operation.kind === 'integration-effect',
   );
 }
 
 /** Whether an action reaches an object store anywhere in its top-level operations. */
 export function actionUsesStorage(action: ActionDef): boolean {
-  return (action.operations ?? []).some(
+  return actionOperations(action).some(
     (operation) =>
       operation.kind === 'blob-metadata' ||
       operation.kind === 'blob-commit' ||
@@ -226,7 +226,7 @@ export function actionUsesStorage(action: ActionDef): boolean {
  * data provider, so an action that reads authoritative data through a query executes there.
  */
 export function actionUsesQuery(action: ActionDef): boolean {
-  return (action.operations ?? []).some((operation) => operation.kind === 'query');
+  return actionOperations(action).some((operation) => operation.kind === 'query');
 }
 
 /**
@@ -241,11 +241,11 @@ export function actionWritesProviderRecord(action: ActionDef): boolean {
         return locationProviderEntityId(operation.target) !== undefined;
       }
       if (operation.kind === 'for-each') {
-        return targets(operation.operations);
+        return targets(operationChildren(operation));
       }
       return false;
     });
-  return targets(action.operations ?? []);
+  return targets(actionOperations(action));
 }
 
 /** The states an action writes, following `for-each`, `invoke` and declared native effects. */
@@ -268,7 +268,7 @@ export function statesWrittenBy(
       }
       switch (operation.kind) {
         case 'for-each':
-          walk(operation.operations ?? []);
+          walk(operationChildren(operation));
           break;
         case 'invoke': {
           const target = context.actions.get(operation.actionId);
@@ -302,7 +302,7 @@ export function statesWrittenBy(
       }
     }
   };
-  walk(action.operations ?? []);
+  walk(actionOperations(action));
   return found;
 }
 
@@ -322,11 +322,11 @@ export function statesReadByAction(
     ...(action.postconditions ?? []),
     ...(action.authorization ? [action.authorization] : []),
   ];
-  for (const operation of action.operations ?? []) {
+  for (const operation of actionOperations(action)) {
     expressions.push(...operationExpressions(operation));
   }
   const found = statesReadBy(expressions, context);
-  for (const operation of action.operations ?? []) {
+  for (const operation of actionOperations(action)) {
     if (operation.kind === 'invoke') {
       const target = context.actions.get(operation.actionId);
       if (target) {

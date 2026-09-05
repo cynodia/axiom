@@ -1,6 +1,6 @@
 # Validation
 
-Axiom 0.16.0-alpha.1. Validation is authoring-time structural checking. It is not the same
+Axiom 0.16.0-alpha.2. Validation is authoring-time structural checking. It is not the same
 as runtime constraint evaluation — see [`CONSTRAINTS.md`](CONSTRAINTS.md) for the four
 layers of correctness.
 
@@ -70,7 +70,7 @@ non-numeric collections, and obviously incompatible assignments.
 
 | Code | Raised when |
 | --- | --- |
-| `UNKNOWN_STATE_REF` | A location naming a state that does not exist, or an unknown location kind. |
+| `UNKNOWN_STATE_REF` | A location naming a state that does not exist, an unknown location kind, or a location/selector that is not even a plain object (spec16pt2 F2). |
 | `DERIVED_STATE_WRITE` | A write target rooted in derived state. |
 | `FIELD_ON_NON_ENTITY` | A field selected on a value that has no fields. |
 | `FIELD_NOT_ON_ENTITY` | A field that belongs to a different entity than the one addressed. |
@@ -107,6 +107,15 @@ Recursive, with a `path` naming the position.
 | `UNSUPPORTED_OPERATION` | An operation kind outside `OPERATION_KINDS`, or a `for-each` containing something other than a mutation. |
 | `INVALID_ACTION_REF` | A button or form naming something that is not an action. |
 | `INVALID_STATE_REF` | A reference that must be a state but is not. |
+| `INVALID_OPERATION_COLLECTION` | `ActionDef.operations`, or a `for-each`'s nested `operations`, is present but not an array (spec16pt2 F1). |
+| `INVALID_OPERATION` | An operation array entry that is not a plain object with a recognized `kind` — `null`, a primitive, or a malformed object (spec16pt2 F1/F2). |
+
+A candidate graph can arrive from AI generation, deserialization or hand-tampering, so
+`validateGraph` establishes shape before it ever traverses an action's operations or a
+location — `{}` where `operations` should be an array, or `null` where a `set`/`insert`/
+`remove` target should be a `Location`, is a structured diagnostic (`INVALID_OPERATION_COLLECTION`,
+`INVALID_OPERATION`, or `UNKNOWN_STATE_REF` for a malformed location/selector), never a
+native exception.
 
 ### Constraints
 

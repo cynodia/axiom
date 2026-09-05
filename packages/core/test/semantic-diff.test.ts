@@ -104,7 +104,9 @@ test('attaching an authorization policy is classified as an authorization change
   assert.deepEqual(added!.categories, ['authorization']);
   const changed = diff.entries.find((e) => e.nodeId === A_INCREMENT);
   assert.ok(changed);
-  assert.deepEqual(changed!.categories, ['authorization']);
+  // spec16pt2 §40: categories are additive — an authorization-bearing field change adds
+  // `authorization` alongside the node's own kind category, never in its place.
+  assert.deepEqual(changed!.categories, ['semantic', 'authorization']);
   assert.equal(diff.compatibility.semanticFingerprintChanged, true);
   assert.equal(diff.compatibility.serverContractAfter, 'axiom.server.v9');
 });

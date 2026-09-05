@@ -81,6 +81,29 @@ try {
   run('npm', ['run', '--silent', 'start']);
 
   /**
+   * spec16pt2 D2 — the published CLI must be usable by a fresh consumer, from the
+   * documented npm mechanism alone, with no repository path involved. `node_modules/.bin`
+   * is exactly what `npm install @cynodia/axiom-cli` (or a project dependency on it)
+   * produces; invoking it directly is equivalent to what a shell finds after `npm link` or
+   * `npx @cynodia/axiom-cli`.
+   */
+  console.log('\nInvoking the installed axiom CLI against the compiled consumer graph:');
+  const axiomBin = path.join(project, 'node_modules', '.bin', 'axiom');
+  run(axiomBin, ['--help']);
+  run(axiomBin, ['validate', 'dist/counter.js', '--export=createCounterGraph']);
+  run(axiomBin, ['explain', 'action', 'action_increment', 'dist/counter.js', '--export=createCounterGraph', '--json']);
+  run(axiomBin, ['analyze', 'dist/counter.js', '--export=createCounterGraph', '--json']);
+  run(axiomBin, [
+    'diff',
+    'dist/counter.js',
+    '--export=createCounterGraph',
+    '--against=dist/counter.js',
+    '--against-export=createCounterGraph',
+    '--json',
+  ]);
+  console.log('The published CLI is installable and usable with no repository access.');
+
+  /**
    * The materialization gate.
    *
    * The pattern-built application has written its expanded graph to disk. Removing the

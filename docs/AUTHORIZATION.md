@@ -1,6 +1,6 @@
 # Authorization
 
-Axiom 0.16.0-alpha.1. The operational contract for **authorization completeness** — the 0.15
+Axiom 0.16.0-alpha.2. The operational contract for **authorization completeness** — the 0.15
 milestone (spec15). Whether a principal may perform a semantic operation is part of the
 graph's executable meaning — not a runtime concern, not UI visibility, not something that
 varies by transport, provider, process, retry path or authority topology. `axiom.server.v9`

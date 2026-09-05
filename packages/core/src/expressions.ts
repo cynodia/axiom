@@ -401,8 +401,22 @@ export function conditional(
   return { kind: 'conditional', condition, whenTrue, whenFalse };
 }
 
-/** Visits every sub-expression, parents before children. */
-export function walkExpression(expression: Expression, visit: (node: Expression) => void): void {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Visits every sub-expression, parents before children. Total over malformed input
+ * (spec16pt2 §12-24): a candidate expression tree can arrive from AI generation,
+ * deserialization or hand-tampering (a deleted field, a tampered array element), and this
+ * is the shared visitor most expression-derived analysis in the codebase is built on — a
+ * malformed node here simply is not visited, rather than throwing while reading `.kind`.
+ */
+export function walkExpression(expressionInput: unknown, visit: (node: Expression) => void): void {
+  if (!isPlainObject(expressionInput) || typeof expressionInput.kind !== 'string') {
+    return;
+  }
+  const expression = expressionInput as unknown as Expression;
   visit(expression);
   switch (expression.kind) {
     case 'field':
@@ -468,12 +482,17 @@ export function walkExpression(expression: Expression, visit: (node: Expression)
  * Field ids a constructed record assigns. Only the record's own entries count: the
  * expressions that compute those values are reads, not writes.
  */
-export function constructedFieldIds(expression: Expression): FieldId[] {
-  return expression.kind === 'object' ? expression.entries.map((entry) => entry.fieldId) : [];
+export function constructedFieldIds(expression: unknown): FieldId[] {
+  if (!isPlainObject(expression) || expression.kind !== 'object' || !Array.isArray(expression.entries)) {
+    return [];
+  }
+  return (expression.entries as Array<{ fieldId?: unknown }>)
+    .filter((entry) => isPlainObject(entry) && typeof entry.fieldId === 'string')
+    .map((entry) => entry.fieldId as FieldId);
 }
 
 /** Expression definitions an expression reaches directly, in tree order. */
-export function expressionDefsIn(expression: Expression): NodeId[] {
+export function expressionDefsIn(expression: unknown): NodeId[] {
   const found: NodeId[] = [];
   walkExpression(expression, (node) => {
     if (node.kind === 'expression-ref') {
@@ -484,7 +503,7 @@ export function expressionDefsIn(expression: Expression): NodeId[] {
 }
 
 /** Field ids an expression reads, including nested sources and constructed records. */
-export function expressionFieldIds(expression: Expression): FieldId[] {
+export function expressionFieldIds(expression: unknown): FieldId[] {
   const found: FieldId[] = [];
   walkExpression(expression, (node) => {
     // A group's own positions are not fields of any entity, so nothing may resolve them

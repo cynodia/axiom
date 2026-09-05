@@ -1,6 +1,6 @@
 # Agent API
 
-Axiom 0.16.0-alpha.1. The machine-facing interface. Agents query semantics and apply
+Axiom 0.16.0-alpha.2. The machine-facing interface. Agents query semantics and apply
 structural transformations; they never edit generated code.
 
 ```ts
@@ -30,6 +30,15 @@ agent.referencedBy(expression)         // ids an expression references
 
 Edge kinds: `contains` `reads` `writes` `invokes` `renders` `binds` `depends-on`
 `derives-from` `constrains` `routes-to` `references`.
+
+`getDependencies`/`getDependents` return **dependency edges resolved to nodes, not a
+deduplicated node set**: if two distinct edges of the requested kinds connect the same pair
+of nodes — an action that both reads and writes the same state, with no `kinds` filter
+narrowing it to one — the target node appears once per edge (spec16pt2 §112, intentional:
+provenance would otherwise be lost). De-duplicate by `id` where a unique node set is what
+you actually want. `getTransitiveDependencies`/`Dependents` (spec16) are the exception —
+they return a deduplicated id set by construction, since "reachable at all" is what a
+transitive closure answers.
 
 ## Dependency queries
 

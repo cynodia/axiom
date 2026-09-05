@@ -65,9 +65,9 @@ route, controller, handler or SQL statement is written by an application author.
 The Server IR contract is versioned. **`axiom.server.v1` is frozen** — its bytes and
 semantics never change — but it is **not the current contract**: a document declares the
 oldest contract that can carry its vocabulary, computed from the document. The current
-contract is **`axiom.server.v7`** (0.11 schema-evolution vocabulary); `v1`–`v6` are frozen
-and shipped for compatibility. This package ships what an implementation in another language
-needs to conform:
+contract is **`axiom.server.v9`** (0.15 authorization-policy vocabulary); `v1`–`v8` are
+frozen and shipped for compatibility. This package ships what an implementation in another
+language needs to conform:
 
 ```
 @cynodia/axiom-server/conformance                          the base fixture manifest
@@ -80,7 +80,9 @@ needs to conform:
 @cynodia/axiom-server/schema/server-ir.v4.schema.json      v4 (+ invocation source, structured effect outcome)
 @cynodia/axiom-server/schema/server-ir.v5.schema.json      v5 (+ subscriptions, storage, blob operations)
 @cynodia/axiom-server/schema/server-ir.v6.schema.json      v6 (+ queries, relationships, read policies)
-@cynodia/axiom-server/schema/server-ir.v7.schema.json      v7 (+ migrations, schema version + fingerprint) — current
+@cynodia/axiom-server/schema/server-ir.v7.schema.json      v7 (+ migrations, schema version + fingerprint)
+@cynodia/axiom-server/schema/server-ir.v8.schema.json      v8 (+ durable workflows)
+@cynodia/axiom-server/schema/server-ir.v9.schema.json      v9 (+ authorization policies) — current
 @cynodia/axiom-server/schema/protocol.v1.schema.json       JSON Schema for the protocol
 ```
 

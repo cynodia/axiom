@@ -619,27 +619,18 @@ test('the documentation names no package that is not published', () => {
   );
 });
 
-test('the documentation does not promise a CLI this project does not ship', () => {
-  // `packages/cli` is private. It may appear in the README's instructions for working in
-  // this repository, where it is what a contributor actually runs — but only alongside a
-  // statement that it is not published. It may not appear in the contract documentation at
-  // all: a reader of docs/ is a reader of the published packages.
-  const promises = /packages\/cli\/dist\/index\.js|npx @cynodia|\baxiom (serve|build|inspect|validate)\b/;
-  const promised: string[] = [];
+test('the documentation does not claim the CLI is unpublished (spec16pt2 D2)', () => {
+  // `@cynodia/axiom-cli` publishes since 0.16.0-alpha.2 (spec16pt2 D2 — the CLI is part of
+  // spec16's required tooling/discoverability surface). A document still claiming it is a
+  // private, unpublished repository tool is stale.
+  const staleClaim = /no published Axiom CLI|packages\/cli is a private development tool|packages\/cli.*\bnever (published|ships?)\b/i;
+  const offenders: string[] = [];
   for (const [file, source] of ALL_DOCS) {
-    if (file !== 'README.md' && promises.test(source)) {
-      promised.push(file);
+    if (staleClaim.test(source)) {
+      offenders.push(file);
     }
   }
-  assert.deepEqual(promised, [], 'contract documents referring to an unpublished CLI');
-
-  if (promises.test(README)) {
-    assert.match(
-      README,
-      /packages\/cli is a private development tool|There is no published Axiom CLI/,
-      'the README names the CLI without saying it is unpublished',
-    );
-  }
+  assert.deepEqual(offenders, [], 'documents that still claim the CLI is unpublished');
 });
 
 test('the conformance and schema subpaths a document names actually resolve', () => {

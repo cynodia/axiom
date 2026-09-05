@@ -1,6 +1,7 @@
 import { VALIDATION_CODES } from './diagnostics.js';
 import type { ValidationIssue } from './diagnostics.js';
 import type { FieldId, NodeId } from './ids.js';
+import { actionOperations } from './nodes.js';
 import type { ActionDef, EntityDef } from './nodes.js';
 import {
   ACTION_UX_ROLES,
@@ -887,7 +888,7 @@ function checkUnmarkedDestructiveActions(bag: Bag, index: Index, actions: Map<No
     if (!bound.has(action.id) || action.destructive === true) {
       continue;
     }
-    if ((action.operations ?? []).some((operation) => operation.kind === 'remove')) {
+    if (actionOperations(action).some((operation) => operation.kind === 'remove')) {
       bag.warnings.push({
         code: VALIDATION_CODES.destructiveActionUnmarked,
         message: `${action.name ?? action.id} removes data but does not declare "destructive"`,

@@ -15,6 +15,7 @@ import type {
   AuthorizationPolicyDef,
   EntityDef,
   QueryDef,
+  ReadPolicyDef,
   StateDef,
 } from '@cynodia/axiom-core';
 import { AgentAPI } from './api.js';
@@ -130,6 +131,42 @@ function fixtureGraph(): ApplicationGraph {
   return g;
 }
 
+/**
+ * A self-contained entity + query + (optionally referenced) read policies, for the F3
+ * attach/detach/replace fixtures. `declarePolicies` names every `ReadPolicyDef` node to
+ * declare (both, for a "replace" scenario), independent of which one `readPolicyId` points
+ * at, so the diff reflects only the reference change, not a policy node appearing/vanishing.
+ */
+function readPolicyFixtureGraph(readPolicyId: string | undefined, ...declarePolicies: string[]): ApplicationGraph {
+  const g = new ApplicationGraph('ct-read-policy-graph', 'Read Policy Fixture');
+  const entityId = nodeId('read_policy_entity');
+  const identityField = fieldId('read_policy_entity_id');
+  g.addNode<EntityDef>({
+    id: entityId,
+    kind: 'entity',
+    identityFieldId: identityField,
+    fields: [{ id: identityField, valueType: primitiveType('string'), required: true }],
+  });
+  for (const policyId of new Set([...(readPolicyId ? [readPolicyId] : []), ...declarePolicies])) {
+    g.addNode<ReadPolicyDef>({
+      id: nodeId(policyId),
+      kind: 'read-policy',
+      entityId,
+      rowScopeId: nodeId('read_policy_row'),
+      predicate: literal(true),
+    });
+  }
+  g.addNode<QueryDef>({
+    id: nodeId('read_policy_query'),
+    kind: 'query',
+    source: entityId,
+    rowScopeId: nodeId('read_policy_query_row'),
+    pagination: { strategy: 'offset', maxPageSize: 50 },
+    ...(readPolicyId ? { readPolicyId: nodeId(readPolicyId) } : {}),
+  } as QueryDef);
+  return g;
+}
+
 export function toolingConformanceFixtures(): ToolingConformanceFixture[] {
   return [
     {
@@ -203,7 +240,7 @@ export function toolingConformanceFixtures(): ToolingConformanceFixture[] {
     {
       id: 'semantic-diff-authorization-change-is-tagged',
       category: 'semantic-diff',
-      description: 'detaching a policy from an action is classified as an authorization change',
+      description: 'detaching a policy from an action is classified as an authorization change, additive with its own kind category (spec16pt2 §40)',
       run: () => {
         const before = fixtureGraph();
         const after = fixtureGraph();
@@ -213,7 +250,43 @@ export function toolingConformanceFixtures(): ToolingConformanceFixture[] {
         const diff = new AgentAPI(after).semanticDiff(before);
         return diff.entries.find((e) => e.nodeId === String(A_BUMP))?.categories;
       },
-      expected: ['authorization'],
+      expected: ['semantic', 'authorization'],
+    },
+    {
+      id: 'semantic-diff-read-policy-attach-is-authorization',
+      category: 'semantic-diff',
+      description: 'spec16pt2 F3/§34-35: attaching a QueryDef.readPolicyId is classified query + authorization',
+      run: () => {
+        const before = readPolicyFixtureGraph(undefined);
+        const after = readPolicyFixtureGraph('read_policy_owner');
+        const diff = new AgentAPI(after).semanticDiff(before);
+        return diff.entries.find((e) => e.nodeId === 'read_policy_query')?.categories;
+      },
+      expected: ['query', 'authorization'],
+    },
+    {
+      id: 'semantic-diff-read-policy-detach-is-authorization',
+      category: 'semantic-diff',
+      description: 'spec16pt2 F3 exact reproduction: detaching a QueryDef.readPolicyId is classified query + authorization',
+      run: () => {
+        const before = readPolicyFixtureGraph('read_policy_owner');
+        const after = readPolicyFixtureGraph(undefined);
+        const diff = new AgentAPI(after).semanticDiff(before);
+        return diff.entries.find((e) => e.nodeId === 'read_policy_query')?.categories;
+      },
+      expected: ['query', 'authorization'],
+    },
+    {
+      id: 'semantic-diff-read-policy-replace-is-authorization',
+      category: 'semantic-diff',
+      description: 'spec16pt2 §36: replacing one read policy reference for another is classified authorization',
+      run: () => {
+        const before = readPolicyFixtureGraph('read_policy_owner', 'read_policy_other');
+        const after = readPolicyFixtureGraph('read_policy_other', 'read_policy_other');
+        const diff = new AgentAPI(after).semanticDiff(before);
+        return diff.entries.find((e) => e.nodeId === 'read_policy_query')?.categories.includes('authorization');
+      },
+      expected: true,
     },
     {
       id: 'diagnostics-unresolved-reference-is-structured',

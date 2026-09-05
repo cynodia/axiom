@@ -629,23 +629,44 @@ async function diffCommand(options: Options): Promise<string> {
   return lines.join('\n');
 }
 
+/**
+ * The one usage text, printed both for `--help` (exit 0) and for missing/malformed
+ * arguments (exit 1) — a fresh consumer must be able to discover every command and its
+ * `--json` / exit behavior from this alone, without repository access (spec16pt2 §63-64).
+ */
+const USAGE = [
+  'axiom — inspect, validate, explain and analyze an Axiom application graph.',
+  '',
+  'Usage:',
+  '  axiom <build|inspect|serve> <modelFile> [--export=name] [--port=3000] [--store=state.db]',
+  '  axiom validate <modelFile> [--export=name] [--json]',
+  '  axiom schema status  <modelFile> [--export=name]',
+  '  axiom schema diff    <modelFile> --against=<prevFile> [--export=name] [--against-export=name]',
+  '  axiom migrate plan   <modelFile> [--export=name] [--from=<version>]',
+  '  axiom migrate        <modelFile> [--export=name] [--from=<version>] [--approve=op1,op2] [--sqlite=<path>]',
+  '  axiom migrate status <modelFile> --sqlite=<path>',
+  '  axiom explain <action|query|workflow|state> <id> <modelFile> [--json]',
+  '  axiom analyze <modelFile> [--json]',
+  '  axiom diff <modelFile> --against=<prevFile> [--export=name] [--against-export=name] [--json]',
+  '  axiom --help',
+  '',
+  '<modelFile> is a compiled (built) JavaScript module exporting an ApplicationGraph or a',
+  'function that builds one — see docs/AGENT_API.md and docs/AGENT_REFERENCE.md in',
+  '@cynodia/axiom for the semantic contract every command renders.',
+  '',
+  'Exit codes: 0 on success; nonzero on invalid input, an invalid graph, or a tooling failure.',
+].join('\n');
+
 async function main(): Promise<void> {
-  const options = parseArguments(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  if (argv.includes('--help') || argv.includes('-h') || argv.length === 0) {
+    console.log(USAGE);
+    return;
+  }
+
+  const options = parseArguments(argv);
   if (!options) {
-    console.error(
-      [
-        'Usage:',
-        '  axiom <build|inspect|validate|serve> <modelFile> [--export=name] [--port=3000] [--store=state.db]',
-        '  axiom schema status  <modelFile> [--export=name]',
-        '  axiom schema diff    <modelFile> --against=<prevFile> [--export=name] [--against-export=name]',
-        '  axiom migrate plan   <modelFile> [--export=name] [--from=<version>]',
-        '  axiom migrate        <modelFile> [--export=name] [--from=<version>] [--approve=op1,op2] [--sqlite=<path>]',
-        '  axiom migrate status <modelFile> --sqlite=<path>',
-        '  axiom explain <action|query|workflow|state> <id> <modelFile> [--json]',
-        '  axiom analyze <modelFile> [--json]',
-        '  axiom diff <modelFile> --against=<prevFile> [--export=name] [--against-export=name] [--json]',
-      ].join('\n'),
-    );
+    console.error(USAGE);
     process.exitCode = 1;
     return;
   }
@@ -675,7 +696,7 @@ async function main(): Promise<void> {
     }
     case 'validate': {
       const result = validateGraph(await loadGraph(options));
-      console.log(formatValidation(result));
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatValidation(result));
       if (!result.valid) {
         process.exitCode = 1;
       }

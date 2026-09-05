@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.16.0-alpha.1. How an application crosses the trust boundary.
+Axiom 0.16.0-alpha.2. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -596,8 +596,8 @@ The two halves also run separately. `serveOverHttp({ server, port })` is the bar
 and `createAxiomServer({ ir, persistence, host })` is the authority with no transport at all —
 which is what `createDirectTransport` drives in tests.
 
-**There is no published Axiom CLI.** `packages/cli` is a private development tool of this
-repository and is not on npm; the API above is the supported way to run an application.
+`@cynodia/axiom-cli` publishes an `axiom serve` command over this same API for ad hoc use;
+the API above remains the supported way to run an application from your own Node process.
 
 ## Conformance
 

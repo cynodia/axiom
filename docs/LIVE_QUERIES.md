@@ -1,6 +1,6 @@
 # Realtime — live canonical queries
 
-Axiom 0.16.0-alpha.1. The operational contract for **observing a `QueryDef` result over
+Axiom 0.16.0-alpha.2. The operational contract for **observing a `QueryDef` result over
 time**: subscribe once, receive an initial coherent result, then receive canonical changes
 as authoritative committed state moves — through any compatible authority, across
 reconnects. `axiom.server.v7` (0.13 adds no IR vocabulary).

@@ -1,4 +1,5 @@
-import type { ApplicationGraph, NativeEffect, NativeOperation } from '@cynodia/axiom-core';
+import { actionOperations, operationChildren } from '@cynodia/axiom-core';
+import type { ApplicationGraph, NativeEffect, NativeOperation, Operation } from '@cynodia/axiom-core';
 
 /**
  * `NativeOperation` inventory (spec16 §46-49). It remains the one controlled escape boundary
@@ -20,7 +21,7 @@ export interface NativeOperationOccurrence {
 export function listNativeOperations(graph: ApplicationGraph): NativeOperationOccurrence[] {
   const found: NativeOperationOccurrence[] = [];
   for (const action of graph.getNodesByKind('action')) {
-    for (const operation of collectNative(action.operations ?? [])) {
+    for (const operation of collectNative(actionOperations(action))) {
       found.push({
         actionId: action.id,
         implementationId: operation.implementationId,
@@ -34,13 +35,15 @@ export function listNativeOperations(graph: ApplicationGraph): NativeOperationOc
   return found.sort((a, b) => (a.actionId === b.actionId ? a.implementationId.localeCompare(b.implementationId) : a.actionId.localeCompare(b.actionId)));
 }
 
-function collectNative(operations: readonly { kind: string }[]): NativeOperation[] {
+function collectNative(operations: readonly Operation[]): NativeOperation[] {
   const found: NativeOperation[] = [];
   for (const operation of operations) {
     if (operation.kind === 'native') {
-      found.push(operation as NativeOperation);
+      found.push(operation);
     } else if (operation.kind === 'for-each') {
-      found.push(...collectNative((operation as unknown as { operations: { kind: string }[] }).operations ?? []));
+      // A valid for-each may only contain set/insert/remove (validateGraph enforces this),
+      // so this recursion only matters for an already-invalid graph — still total, never a crash.
+      found.push(...collectNative(operationChildren(operation)));
     }
   }
   return found;

@@ -513,8 +513,63 @@ turn it into a working browser application whose generated JavaScript nobody rea
   Phase K (a dedicated adversarial/fuzz matrix) and Phase L (published-package blind external
   validation) are **not** part of this checkout — see the report's phase table. Report:
   `AXIOM_0_16_IMPLEMENTATION_REPORT.md`.
+* `specs/spec16pt2.md` — the **0.16 corrective pass** (`0.16.0-alpha.2`) closing the
+  alpha.1 blind campaign's `D2 / E1 / S3` result (three HIGH release-blocking findings).
+  **F1/F2 — validation totality**: alpha.1's two reported native-`TypeError` crashes
+  (`ActionDef.operations` present-but-non-array; a `set`/`insert`/`remove` operation's
+  `target = null`) turned out to be one systemic pattern — many independent hand-rolled
+  recursive walkers over `Operation`/`Location`/`Expression` trees across `core`,
+  `agent-api`, `server` and `runtime` assumed the compile-time TypeScript shape held at
+  runtime. Fixed at the source in each module: `nodes.ts` gains the canonical
+  `actionOperations`/`operationChildren` (filtering, for every consumer) and `rawOperations`
+  (unfiltered, for `validateGraph` alone to see and diagnose a malformed element rather than
+  silently dropping it) plus a total `isPlainOperation`; `location.ts` gains `isPlainLocation`
+  guarding all five location-traversal exports; `infer.ts`, `validate-location.ts`,
+  `validate.ts`, `expressions.ts` (`walkExpression`, `constructedFieldIds`) and
+  `derive-edges.ts` (`statesOf`, `collectReads`) all gained the matching entry guard — the
+  last three found by a **deterministic, seeded (mulberry32) structural-mutation fuzz suite**
+  (`core/test/validate-fuzz.test.ts`, 1175 variants, 11 of spec's 17 mutation classes, 0
+  native exceptions after the fix), scoped to one action's own `operations` subtree (a
+  broader top-level-graph-container mutation surface found one more, unrelated crash class
+  in `ApplicationGraph.restore`, deliberately left as a documented known limitation rather
+  than silently expanding scope). Two new codes, `INVALID_OPERATION_COLLECTION` /
+  `INVALID_OPERATION` (`diagnostics.ts`, documented in `docs/VALIDATION.md`); a malformed
+  location reuses `UNKNOWN_STATE_REF`'s extended meaning rather than adding a third code.
+  **F3 — semantic-diff authorization completeness**: `core/semantic-diff.ts`'s
+  `AUTHZ_FIELDS` never included `readPolicyId` (exactly the field-name-omission spec16 §41
+  itself warns against), and `read-policy` was deferred entirely to `diffSchema`, whose
+  `ReadPolicyShape` deliberately excludes `predicate` (correct for `schemaFingerprint`'s
+  persistence-only purpose) — so a `ReadPolicyDef.predicate` edit produced no diff entry
+  anywhere despite already correctly moving `semanticFingerprint`. Fixed: `readPolicyId`
+  added to `AUTHZ_FIELDS`; `read-policy` removed from the schema-owned exclusion so it flows
+  through the generic full-node diff (category `authorization`, additive with `diffSchema`'s
+  own entity-move detection, never a replacement for it). **Categories are now purely
+  additive, never exclusive** (spec16pt2 §40) — corrected from alpha.1, which suppressed a
+  node's own kind category when every changed field was authorization-related; a
+  `QueryDef.readPolicyId` detach is `[query, authorization]`, not `[authorization]` alone.
+  Three new `axiom.conformance.v10` fixtures (read-policy attach/detach/replace); identifier
+  unchanged per spec16pt2 §72. **D2 — CLI publication**: `packages/cli` now publishes as
+  `@cynodia/axiom-cli` (this reverses the prior explicit "cli is private, never published"
+  decision — spec16 named the CLI required tooling/discoverability surface, and alpha.1's
+  D2 finding confirmed a private CLI did not satisfy a blind external campaign); gained a
+  `README.md`, `LICENSE`, a `files` whitelist and `publishConfig.access: "public"`; added to
+  `scripts/packages.mjs`'s `publishable` list (picked up automatically by every
+  `release:*` script) and to `scripts/consumer-test.mjs` (invokes the installed
+  `node_modules/.bin/axiom` directly — `--help`/`validate`/`explain`/`analyze`/`diff --json`
+  — against the consumer fixture, spec16pt2 §66). `--help`/`-h`/no-arguments now exit `0`
+  (previously fell through to the "unparseable arguments" exit `1`); `validate` gained
+  `--json` (previously silently ignored the flag). A stale-documentation sweep corrected six
+  more "no published Axiom CLI" claims across `README.md`, `docs/AGENT_REFERENCE.md` and
+  `docs/AUTHORITY.md`, and `packages/server/README.md`'s Server IR section (named `v7`,
+  current is `v9`; its schema-file listing omitted the already-shipping `v8`/`v9` files).
+  **No new execution semantics**: Server IR stays `axiom.server.v9`, conformance stays
+  `axiom.conformance.v10`, `axiom.authz.v3` and `semanticFingerprint` computation unchanged
+  for any graph that did not itself change. Full fast-tier suite (1661 tests, all seven
+  testable workspaces) green throughout. External blind validation (Phase L) remains this
+  session's explicit known gap, as it was for alpha.1. Report:
+  `AXIOM_0_16PT2_IMPLEMENTATION_REPORT.md`.
 
-Together, spec2–spec16 are the authority on design decisions — **except where the
+Together, spec2–spec16pt2 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 
@@ -603,7 +658,8 @@ npm run schema:generate      # rewrite packages/server/schema/*.json
 npm run toolkit:catalog      # rewrite packages/ui-toolkit/docs/PATTERN_CATALOG.json
 npm run toolkit:metrics      # re-measure authoring compression into packages/ui-toolkit/metrics.json
 
-# CLI (after a build) — a PRIVATE development tool of this repository, never published.
+# CLI (after a build). Published as `@cynodia/axiom-cli` since 0.16.0-alpha.2 (spec16pt2 D2)
+# — `npm install -g @cynodia/axiom-cli` gives the `axiom` executable; see packages/cli/README.md.
 # Takes a compiled module that exports a graph or a builder.
 node packages/cli/dist/index.js inspect  packages/demo/dist/inventory.js --export=createInventoryGraph
 node packages/cli/dist/index.js validate packages/demo/dist/issue-tracker.js --export=createIssueTrackerGraph
@@ -693,8 +749,15 @@ documenting it.
 
 ## Packaging and release
 
-Five packages are published to npm under the `@cynodia` scope; `cli` and `demo` are
-marked `private` and never ship. Everything is MIT, copyright AskTech AS.
+Six packages are published to npm under the `@cynodia` scope; `demo` is marked `private`
+and never ships. Everything is MIT, copyright AskTech AS.
+
+`cli` (`@cynodia/axiom-cli`) publishes since `0.16.0-alpha.2` (spec16pt2 D2): spec16
+requires the CLI as part of the tooling/discoverability surface, and a private,
+never-published tool did not satisfy a fresh external consumer's blind discoverability
+campaign (D2). It ships only `dist/**/*.js`, `dist/**/*.d.ts`, its own `README.md` and
+`LICENSE` — no `docs/` bundle of its own, since it is a renderer over `@cynodia/axiom`'s
+`AgentAPI` and points there for the semantic contract (spec16pt2 §53).
 
 - **Compiled output only.** `files` whitelists `dist/**/*.js`, `dist/**/*.d.ts`, the
   README and the LICENSE. Tests compile to `dist-test/`, not `dist/`, so the publishable
@@ -793,7 +856,7 @@ and tests resolve to source. Directory names stay short; npm names are scoped.
 | `runtime`   | `@cynodia/axiom-runtime` | State store, expression evaluation, the mutation subsystem, constraint checking, UI rendering, value formatting, routing. |
 | `ui-toolkit` | `@cynodia/axiom-ui` | **Semantic UI authoring**: the five patterns, expansion, provenance, ownership, drift, diff and the machine-readable catalogue. Depends on `core` **only**, and is build-time: nothing it produces reaches a runtime. The directory keeps its research-era name; the npm name is what ships. |
 | `axiom`     | `@cynodia/axiom` | The published facade: re-exports the four packages above. It deliberately does **not** re-export `@cynodia/axiom-ui` — an authoring dependency every application carried forever would make materialization untestable. |
-| `cli`       | *(private)* | Graph loading, `inspect` / `validate` / `build` / `serve`. |
+| `cli`       | `@cynodia/axiom-cli` | Graph loading, `inspect` / `validate` / `build` / `serve` / `explain` / `analyze` / `diff` — a thin renderer over `AgentAPI`, published since 0.16.0-alpha.2. |
 | `server`    | `@cynodia/axiom-server` | The authoritative runtime: Server IR execution, persistence adapters, integration/subscription/blob adapters, the semantic protocol, transports and the Node host. Depends on `core` and `runtime`. |
 | `demo`      | *(private)* | Four applications: `issue-tracker.ts`, `inventory.ts`, `order-system.ts` and `order-server.ts` — plus the real-browser conformance tests, which is why Playwright is a devDependency here and nowhere else. |
 

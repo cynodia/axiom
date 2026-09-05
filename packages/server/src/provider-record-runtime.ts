@@ -1,5 +1,5 @@
 import type { ActionDef, EntityDef, Expression, LiteralValue, NodeId, Operation } from './deps.js';
-import { PRINCIPAL } from './deps.js';
+import { PRINCIPAL, actionOperations, operationChildren } from './deps.js';
 import type { ProviderMutation } from './data-provider.js';
 import { evaluateQueryExpression } from './query-eval.js';
 
@@ -34,15 +34,18 @@ export function providerEntitiesWritten(action: ActionDef): NodeId[] {
           found.add(entityId);
         }
       } else if (operation.kind === 'for-each') {
-        walk(operation.operations);
+        walk(operationChildren(operation));
       }
     }
   };
-  walk(action.operations ?? []);
+  walk(actionOperations(action));
   return [...found];
 }
 
 function providerRootEntity(location: unknown): NodeId | undefined {
+  if (!location || typeof location !== 'object') {
+    return undefined;
+  }
   const node = location as { kind?: string; sourceEntityId?: NodeId; target?: unknown; collection?: unknown };
   if (node.kind === 'provider-record') {
     return node.sourceEntityId;
@@ -62,7 +65,7 @@ function providerRootEntity(location: unknown): NodeId | undefined {
  * expression. Everything else — guards, `for-each`, other operations — is untouched.
  */
 export function rewriteForStaging(action: ActionDef): ActionDef {
-  return { ...action, operations: (action.operations ?? []).map(rewriteOperation) };
+  return { ...action, operations: actionOperations(action).map(rewriteOperation) };
 }
 
 function rewriteOperation(operation: Operation): Operation {
@@ -76,12 +79,15 @@ function rewriteOperation(operation: Operation): Operation {
     return { ...operation, target: rewriteLocation(operation.target) as typeof operation.target };
   }
   if (operation.kind === 'for-each') {
-    return { ...operation, operations: operation.operations.map(rewriteOperation) as typeof operation.operations };
+    return { ...operation, operations: operationChildren(operation).map(rewriteOperation) as typeof operation.operations };
   }
   return operation;
 }
 
 function rewriteLocation(location: unknown): unknown {
+  if (!location || typeof location !== 'object') {
+    return location;
+  }
   const node = location as {
     kind: string;
     sourceEntityId?: NodeId;
@@ -124,7 +130,7 @@ export function identityValuesToLoad(
     for (const operation of operations) {
       if (operation.kind !== 'set' && operation.kind !== 'insert' && operation.kind !== 'remove') {
         if (operation.kind === 'for-each') {
-          walk(operation.operations);
+          walk(operationChildren(operation));
         }
         continue;
       }
@@ -140,13 +146,16 @@ export function identityValuesToLoad(
       byEntity.set(record.sourceEntityId, existing);
     }
   };
-  walk(action.operations ?? []);
+  walk(actionOperations(action));
   return byEntity;
 }
 
 function firstProviderRecord(
   location: unknown,
 ): { kind: 'provider-record'; sourceEntityId: NodeId; identityFieldId: string; identityValue: Expression } | undefined {
+  if (!location || typeof location !== 'object') {
+    return undefined;
+  }
   const node = location as {
     kind: string;
     sourceEntityId?: NodeId;

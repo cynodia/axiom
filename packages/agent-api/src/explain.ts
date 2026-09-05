@@ -1,4 +1,5 @@
 import {
+  actionOperations,
   type ActionDef,
   type ApplicationGraph,
   type NativeEffect,
@@ -92,13 +93,13 @@ export function explainAction(graph: ApplicationGraph, actionId: NodeId): Action
       runsQueries.push(target.id);
     }
   }
-  for (const operation of action.operations ?? []) {
+  for (const operation of actionOperations(action)) {
     if (operation.kind === 'blob-metadata' || operation.kind === 'blob-commit' || operation.kind === 'blob-delete') {
       storagesTouched.add(operation.storageId);
     }
   }
 
-  const nativeOperations = (action.operations ?? [])
+  const nativeOperations = actionOperations(action)
     .filter((operation): operation is Extract<typeof operation, { kind: 'native' }> => operation.kind === 'native')
     .map((operation) => ({ implementationId: operation.implementationId, declaredEffects: operation.declaredEffects ?? [] }));
   const analysisGaps = nativeOperations
@@ -155,7 +156,7 @@ export function explainAction(graph: ApplicationGraph, actionId: NodeId): Action
     invokedBy: { triggers: triggers.sort(), workflowSteps: workflowSteps.sort() },
     clientInvocable: queries.isClientInvocable(actionId),
     systemOnly: queries.isSystemOnly(actionId),
-    destructive: action.destructive === true || (action.operations ?? []).some((op) => op.kind === 'remove'),
+    destructive: action.destructive === true || actionOperations(action).some((op) => op.kind === 'remove'),
     analysisComplete: analysisGaps.length === 0,
     analysisGaps,
   };
@@ -286,7 +287,7 @@ export function explainGraph(graph: ApplicationGraph): GraphSummary {
   const queryOps = authz.operations.filter((op) => op.nodeKind === 'query');
   let opaqueBoundaries = 0;
   for (const action of graph.getNodesByKind('action')) {
-    opaqueBoundaries += (action.operations ?? []).filter((op) => op.kind === 'native').length;
+    opaqueBoundaries += actionOperations(action).filter((op) => op.kind === 'native').length;
   }
   return {
     nodeCountsByKind,

@@ -125,6 +125,27 @@ export function itemFieldLocation(
   );
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+const LOCATION_KINDS: readonly string[] = ['state', 'provider-record', 'field', 'collection-item'];
+
+/**
+ * A plain object carrying one of the four location kinds — total, never throws. A candidate
+ * `Location` can arrive from AI generation, deserialization or hand-tampering, so every
+ * traversal below checks this before reading `.kind` rather than trusting the compile-time
+ * `Location` type (spec16pt2 §12-20).
+ */
+export function isPlainLocation(value: unknown): value is Location {
+  return isPlainObject(value) && LOCATION_KINDS.includes(value.kind as string);
+}
+
+/** A plain object carrying a recognized `CollectionSelector.kind`, guarding `.selector` access. */
+function isPlainSelector(value: unknown): value is CollectionSelector {
+  return isPlainObject(value) && (value.kind === 'identity' || value.kind === 'index');
+}
+
 /**
  * The node every location is ultimately rooted in.
  *
@@ -133,8 +154,14 @@ export function itemFieldLocation(
  * entity id** instead. Callers that resolve the result as a state (`context.states.get`)
  * naturally get `undefined` and skip it, which is correct: nothing materialized holds the
  * record. Use `locationProviderEntityId` to detect the provider-backed case explicitly.
+ *
+ * Total over malformed input: an empty string (never a real `NodeId`) for a location that
+ * cannot be understood at all, rather than a thrown error (spec16pt2 §12-13).
  */
-export function locationRootStateId(location: Location): NodeId {
+export function locationRootStateId(location: unknown): NodeId {
+  if (!isPlainLocation(location)) {
+    return '' as NodeId;
+  }
   switch (location.kind) {
     case 'state':
       return location.stateId;
@@ -145,12 +172,15 @@ export function locationRootStateId(location: Location): NodeId {
     case 'collection-item':
       return locationRootStateId(location.collection);
     default:
-      throw new Error(`Unknown location kind "${(location as { kind: string }).kind}"`);
+      return '' as NodeId;
   }
 }
 
 /** The source entity of the `provider-record` a location is rooted in, or `undefined` if it is state-rooted. */
-export function locationProviderEntityId(location: Location): NodeId | undefined {
+export function locationProviderEntityId(location: unknown): NodeId | undefined {
+  if (!isPlainLocation(location)) {
+    return undefined;
+  }
   switch (location.kind) {
     case 'provider-record':
       return location.sourceEntityId;
@@ -167,7 +197,10 @@ export function locationProviderEntityId(location: Location): NodeId | undefined
  * Expressions embedded in a location — selector values, indexes and a provider-record's
  * identity value. These are read dependencies of whatever uses the location.
  */
-export function locationExpressions(location: Location): Expression[] {
+export function locationExpressions(location: unknown): Expression[] {
+  if (!isPlainLocation(location)) {
+    return [];
+  }
   switch (location.kind) {
     case 'state':
       return [];
@@ -176,8 +209,10 @@ export function locationExpressions(location: Location): Expression[] {
     case 'field':
       return locationExpressions(location.target);
     case 'collection-item': {
-      const own =
-        location.selector.kind === 'identity' ? [location.selector.value] : [location.selector.index];
+      if (!isPlainSelector(location.selector)) {
+        return locationExpressions(location.collection);
+      }
+      const own = location.selector.kind === 'identity' ? [location.selector.value] : [location.selector.index];
       return [...locationExpressions(location.collection), ...own];
     }
     default:
@@ -186,12 +221,18 @@ export function locationExpressions(location: Location): Expression[] {
 }
 
 /** Fields a write through this location touches, outermost first. */
-export function locationFieldIds(location: Location): FieldId[] {
+export function locationFieldIds(location: unknown): FieldId[] {
+  if (!isPlainLocation(location)) {
+    return [];
+  }
   return location.kind === 'field' ? [location.fieldId, ...locationFieldIds(location.target)] : [];
 }
 
 /** Fields a location reads in order to address itself, such as identity selectors. */
-export function locationSelectorFieldIds(location: Location): FieldId[] {
+export function locationSelectorFieldIds(location: unknown): FieldId[] {
+  if (!isPlainLocation(location)) {
+    return [];
+  }
   switch (location.kind) {
     case 'state':
       return [];
@@ -202,7 +243,9 @@ export function locationSelectorFieldIds(location: Location): FieldId[] {
     case 'collection-item':
       return [
         ...locationSelectorFieldIds(location.collection),
-        ...(location.selector.kind === 'identity' ? [location.selector.fieldId] : []),
+        ...(isPlainSelector(location.selector) && location.selector.kind === 'identity'
+          ? [location.selector.fieldId]
+          : []),
       ];
     default:
       return [];
