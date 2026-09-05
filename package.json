@@ -11,7 +11,7 @@
     "test:soak": "AXIOM_WF_TRIALS=50 AXIOM_WF_MIXED_TRIALS=25 AXIOM_AUTHZ_TRIALS=25 npm test --workspaces --if-present",
     "test:browser": "node scripts/browser-test.mjs",
     "release:clean": "node scripts/clean.mjs",
-    "release:pack": "npm run docs:sync && node scripts/pack.mjs",
+    "release:pack": "npm run toolkit:catalog && npm run docs:sync && node scripts/pack.mjs",
     "release:verify": "node scripts/verify-packages.mjs",
     "release:consumer-test": "node scripts/consumer-test.mjs",
     "release:probe": "node scripts/discoverability-probe.mjs",
