@@ -26,7 +26,8 @@ justified. That is framework debugging, not application authoring.
 ## Do not
 
 - **Do not clone or reverse-engineer the Axiom repository to learn normal usage.** Everything
-  needed to author an application is in this package. There is no published Axiom CLI.
+  needed to author an application is in this package. `@cynodia/axiom-cli` publishes an
+  `axiom` executable (`npm install -g @cynodia/axiom-cli`) for command-line inspection.
 - **Do not search the web or scrape npm for documentation.** This package is the primary
   source, and it describes this exact version.
 - **Do not read, edit or patch generated output.** The emitted JavaScript, HTML and CSS are

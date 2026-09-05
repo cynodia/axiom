@@ -619,13 +619,16 @@ test('the documentation names no package that is not published', () => {
   );
 });
 
-test('the documentation does not claim the CLI is unpublished (spec16pt2 D2)', () => {
+test('the documentation does not claim the CLI is unpublished (spec16pt2 D2, spec16pt3 F-DOC-CLI-INCONSISTENT)', () => {
   // `@cynodia/axiom-cli` publishes since 0.16.0-alpha.2 (spec16pt2 D2 — the CLI is part of
   // spec16's required tooling/discoverability surface). A document still claiming it is a
-  // private, unpublished repository tool is stale.
-  const staleClaim = /no published Axiom CLI|packages\/cli is a private development tool|packages\/cli.*\bnever (published|ships?)\b/i;
+  // private, unpublished repository tool is stale. Checked across every shipped document,
+  // including the facade's AGENTS.md/llms.txt entry points — spec16pt3 found a stale claim
+  // in AGENTS.md that a narrower check (ALL_DOCS only) had missed.
+  const staleClaim =
+    /no published (Axiom )?CLI|packages\/cli is a private development tool|packages\/cli.*\bnever (published|ships?)\b/i;
   const offenders: string[] = [];
-  for (const [file, source] of ALL_DOCS) {
+  for (const [file, source] of [...ALL_DOCS, ...PACKAGE_READMES, ...facadeEntryPoints]) {
     if (staleClaim.test(source)) {
       offenders.push(file);
     }

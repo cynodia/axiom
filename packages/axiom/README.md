@@ -33,7 +33,7 @@ Shorter forms of the same routing: [`AGENTS.md`](AGENTS.md) and [`llms.txt`](llm
 at this package's root.
 
 **Status: experimental / alpha.** The API may change between alpha releases. The
-documentation in `docs/` describes this exact version, `0.16.0-alpha.2`.
+documentation in `docs/` describes this exact version, `0.16.0-alpha.3`.
 
 ## Installation
 
@@ -47,7 +47,7 @@ Every release of this project is a pre-release and npm's `latest` tag points at 
 plain command above installs the current version. **There is no `alpha` dist-tag** — the tag
 was removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` now
 fails with a 404. Pin the exact version instead when one is needed:
-`npm install @cynodia/axiom@0.16.0-alpha.2`.
+`npm install @cynodia/axiom@0.16.0-alpha.3`.
 
 These are ES modules compiled to ES2022; import them with `import`, not `require`.
 `@cynodia/axiom-cli` (`npm install -g @cynodia/axiom-cli`) publishes the `axiom` executable
@@ -72,7 +72,7 @@ reports its absence rather than failing at import.
 | `Theme` | Translation of presentation intent into visual design. |
 | Renderer | Platform-specific materialization. Not part of the graph. |
 | `StateDef.authority` | Who may commit a value: the client, or the server. The one declaration the split follows from. |
-| `ServerIR` | The half an authority executes. Portable JSON. `axiom.server.v1` is frozen; the current contract is `axiom.server.v7`, computed from the document's vocabulary. |
+| `ServerIR` | The half an authority executes. Portable JSON. `axiom.server.v1` is frozen; the current contract is `axiom.server.v9`, computed from the document's vocabulary. |
 | Semantic protocol | What a client may ask for: named actions with arguments, never mutation programs. |
 | `PersistenceAdapter` | Where a decided value survives. Not part of the semantics. |
 

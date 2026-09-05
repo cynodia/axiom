@@ -157,5 +157,19 @@ console.log(
     `Install with: npm install @cynodia/axiom${tag === 'latest' ? '' : `@${tag}`}`,
 );
 
-// 7. Report where the tags now point, so the release is verifiable at a glance.
+// 7. Registry-backed verification (spec16pt3 §54-58). The publish command returning is not
+//    the publication boundary — confirm the real registry actually serves every package at
+//    this exact version before calling the release complete.
+console.log('\nVerifying registry availability...');
+try {
+  execFileSync('node', ['scripts/verify-registry.mjs'], { cwd: repoRoot, stdio: 'inherit' });
+} catch {
+  fail(
+    'registry-backed verification failed after publish (spec16pt3 §58) — the release is ' +
+      'incomplete even though "npm publish" returned. Re-run "npm run release:verify-registry" ' +
+      'once the registry has caught up, or investigate the package(s) it named.',
+  );
+}
+
+// 8. Report where the tags now point, so the release is verifiable at a glance.
 reportTags();

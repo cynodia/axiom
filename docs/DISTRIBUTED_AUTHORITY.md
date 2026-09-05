@@ -1,6 +1,6 @@
 # Distributed authority
 
-*This document describes Axiom `0.16.0-alpha.2`.*
+*This document describes Axiom `0.16.0-alpha.3`.*
 
 The authoritative runtime (`docs/AUTHORITY.md`) may run as **more than one process at the
 same time**, over one shared persistence provider, without any change to the
@@ -401,7 +401,8 @@ schedule firing, schedule reclaim, event deduplication, subscription cursor fenc
 revision visibility and mixed-build refusal. Each fixture is a deterministic step list
 against the memory reference providers with a fixed clock and token sequence; the public
 `runCoordinationConformanceFixture` / `runCoordinationConformanceSuite` runner executes them.
-Server IR stays `axiom.server.v7` — 0.12 adds no IR vocabulary.
+0.12 adds no Server IR vocabulary of its own — the required contract is whatever the rest
+of the graph already needs (currently up to `axiom.server.v9`).
 
 ## 19. Anti-patterns
 

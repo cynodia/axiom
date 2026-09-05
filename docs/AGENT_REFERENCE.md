@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.16.0-alpha.2. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.16.0-alpha.3. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -15,7 +15,9 @@ npm install @cynodia/axiom-server     # only if a StateDef declares server autho
 ```
 
 Everything is imported from `@cynodia/axiom`; the four re-exported packages need not be
-installed individually. There is no published CLI.
+installed individually. `@cynodia/axiom-cli` (`npm install -g @cynodia/axiom-cli`) publishes
+the `axiom` executable — `explain` / `analyze` / `diff` over `AgentAPI`, plus `inspect` /
+`validate` / `build` / `serve` — for command-line inspection.
 
 A complete runnable skeleton — graph, state, action, UI, route, compile, run — is the
 minimal application in [`../README.md`](../README.md). Read this document for the rules;
@@ -603,7 +605,7 @@ authoring an application that crosses the trust boundary.
 10. **FORM SUBMIT** — a declared submit button invokes with its own arguments, clicked or submitted.
 11. **IDEMPOTENCY** — a generated request id is unique across runtime instances; records are scoped by principal.
 12. **CHANGES** — `changes` names every observable state whose value moved, and no others.
-13. **PORTABILITY** — `axiom.server.v1` is frozen and language-independent. It is not the *current* contract: a document declares the oldest contract that carries its vocabulary; `axiom.server.v7` is current (migrations, schema identity).
+13. **PORTABILITY** — `axiom.server.v1` is frozen and language-independent. It is not the *current* contract: a document declares the oldest contract that carries its vocabulary; `axiom.server.v9` is current (authorization policies).
 14. **INTEGRATION** — external systems are accessed through typed integration operations.
 15. **QUERY** — an external query is explicit action/trigger execution, never a pure `Expression`.
 16. **EFFECT** — external effects are not rollback-capable state mutations.
@@ -1043,7 +1045,8 @@ Providers advertise capabilities (`distributed-lease`, `fencing`, `atomic-work-c
 `durable-retry`, `event-dedup`, `durable-subscription-cursor`, `revision-observation`); a
 missing one **fails explicitly**, never a silent single-node fallback. Portable
 `axiom.conformance.v6` fixtures (`conformance/distributed/`) + `runCoordinationConformanceSuite`.
-Server IR stays `axiom.server.v7`.
+Distributed authority adds no Server IR vocabulary of its own — the required contract is
+whatever the rest of the graph already needs (currently up to `axiom.server.v9`).
 
 Diagnostics: `WORK_IN_PROGRESS` `WORK_FENCED` `WORK_NOT_CLAIMABLE` `INCOMPATIBLE_AUTHORITY`
 `EVENT_ID_CONFLICT`.
@@ -1115,7 +1118,8 @@ pump the handle over any duplex frame channel (`open`/`resume`/`close` ⇄
 application code, not normative.
 
 Portable tier: `axiom.conformance.v7` (`conformance/live/`), `runLiveQueryConformanceFixture`
-/ `runLiveQueryConformanceSuite`. Server IR stays `axiom.server.v7`.
+/ `runLiveQueryConformanceSuite`. Live queries add no Server IR vocabulary of their own —
+`semanticFingerprint` is computed *from* the IR, not the other way around.
 
 Diagnostics: `LIVE_QUERY_NOT_CAPABLE` `LIVE_QUERY_CURSOR_INVALID`
 `LIVE_QUERY_CURSOR_INCOMPATIBLE` `LIVE_QUERY_EVALUATION_FAILED`

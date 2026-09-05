@@ -12,7 +12,7 @@ mutations and persists them. Neither is written by hand: there is no route, cont
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
 **Status: experimental / alpha.** The API may change between alpha releases. This
-documentation describes 0.16.0-alpha.2.
+documentation describes 0.16.0-alpha.3.
 
 ## AI agents: read this first
 
@@ -97,7 +97,7 @@ on-disk graph format and no semantic version control yet.
 | `Theme` | Translation of semantic presentation into visual design. |
 | Renderer | Platform-specific materialization. Not part of the graph. |
 | `StateDef.authority` | Who may commit a value: the client, or the server. The one declaration the split follows from. |
-| `ServerIR` | The half an authority executes. Portable JSON. `axiom.server.v1` is frozen; the current contract is `axiom.server.v7`, computed from the document's vocabulary. |
+| `ServerIR` | The half an authority executes. Portable JSON. `axiom.server.v1` is frozen; the current contract is `axiom.server.v9`, computed from the document's vocabulary. |
 | Semantic protocol | What a client may ask for: named actions with arguments, never mutation programs. |
 | `PersistenceAdapter` | Where a decided value survives. Not part of the semantics. |
 | `PRINCIPAL` | The caller, bound wherever an authority evaluates. Never sent by the client. |
@@ -179,7 +179,7 @@ Every release of this project is a pre-release and npm's `latest` tag points at 
 plain commands above install the current version. **There is no `alpha` dist-tag** — it was
 removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` fails with a
 404. Pin the exact version instead when one is needed:
-`npm install @cynodia/axiom@0.16.0-alpha.2`.
+`npm install @cynodia/axiom@0.16.0-alpha.3`.
 
 The server package is separate rather than re-exported, because it imports `node:http` and
 `node:sqlite` and a browser bundle must not.

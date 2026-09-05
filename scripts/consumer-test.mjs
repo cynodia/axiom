@@ -8,8 +8,14 @@ import { publishable, repoRoot, tarballPath, version } from './packages.mjs';
  * Builds a project outside the repository from the packed tarballs alone. It has no
  * workspace links, no path aliases and no relative imports into the monorepo, so if it
  * compiles and runs, the published packages are self-sufficient.
+ *
+ * `--from-registry` (spec16pt3 §56-57) installs `name@version` from the real public npm
+ * registry instead of local tarballs — the only thing that actually proves D1's "a fresh
+ * external consumer can install this" rather than "a local tarball is well-formed" (a local
+ * `npm pack` is necessary but not sufficient, spec16pt3 §106).
  */
 const keep = process.argv.includes('--keep');
+const fromRegistry = process.argv.includes('--from-registry');
 const fixture = path.join(repoRoot, 'scripts', 'consumer-fixture');
 const project = await mkdtemp(path.join(os.tmpdir(), 'axiom-consumer-'));
 
@@ -40,14 +46,18 @@ try {
   await cp(path.join(fixture, 'tsconfig.json'), path.join(project, 'tsconfig.json'));
   await cp(path.join(fixture, 'src'), path.join(project, 'src'), { recursive: true });
 
-  const tarballs = publishable.map(({ name }) => tarballPath(name));
-  console.log(`\nInstalling ${tarballs.length} tarballs plus a TypeScript compiler...`);
+  const sources = fromRegistry
+    ? publishable.map(({ name }) => `${name}@${version}`)
+    : publishable.map(({ name }) => tarballPath(name));
+  console.log(
+    `\nInstalling ${sources.length} package(s) ${fromRegistry ? 'from the public registry' : 'from local tarballs'} plus a TypeScript compiler...`,
+  );
   run('npm', [
     'install',
     '--no-audit',
     '--no-fund',
     '--loglevel=error',
-    ...tarballs,
+    ...sources,
     'typescript@^5.8.3',
     '@types/node@^22.15.30',
   ]);
@@ -90,7 +100,12 @@ try {
   console.log('\nInvoking the installed axiom CLI against the compiled consumer graph:');
   const axiomBin = path.join(project, 'node_modules', '.bin', 'axiom');
   run(axiomBin, ['--help']);
+  // spec16pt3 §57 — the documented per-command help surface, exit 0.
+  for (const command of ['validate', 'explain', 'analyze', 'diff']) {
+    run(axiomBin, [command, '--help']);
+  }
   run(axiomBin, ['validate', 'dist/counter.js', '--export=createCounterGraph']);
+  run(axiomBin, ['validate', 'dist/counter.js', '--export=createCounterGraph', '--json']);
   run(axiomBin, ['explain', 'action', 'action_increment', 'dist/counter.js', '--export=createCounterGraph', '--json']);
   run(axiomBin, ['analyze', 'dist/counter.js', '--export=createCounterGraph', '--json']);
   run(axiomBin, [

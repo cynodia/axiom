@@ -1,9 +1,9 @@
 # Realtime — live canonical queries
 
-Axiom 0.16.0-alpha.2. The operational contract for **observing a `QueryDef` result over
+Axiom 0.16.0-alpha.3. The operational contract for **observing a `QueryDef` result over
 time**: subscribe once, receive an initial coherent result, then receive canonical changes
 as authoritative committed state moves — through any compatible authority, across
-reconnects. `axiom.server.v7` (0.13 adds no IR vocabulary).
+reconnects. 0.13 adds no Server IR vocabulary of its own — current is `axiom.server.v9`.
 
 > **A live query is a persistent semantic observation of a canonical `QueryDef`.** It is not
 > a WebSocket, a database change feed, a Redis channel, a polling loop, or a stream of table

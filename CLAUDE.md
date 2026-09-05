@@ -568,8 +568,52 @@ turn it into a working browser application whose generated JavaScript nobody rea
   testable workspaces) green throughout. External blind validation (Phase L) remains this
   session's explicit known gap, as it was for alpha.1. Report:
   `AXIOM_0_16PT2_IMPLEMENTATION_REPORT.md`.
+* `specs/spec16pt3.md` — the **0.16 CLI-publication & documentation-consistency corrective
+  pass** (`0.16.0-alpha.3`), closing the alpha.2 blind campaign's two new findings.
+  **F-DOC-CLI-INCONSISTENT**: a live registry install of the already-published
+  `@cynodia/axiom@0.16.0-alpha.2` tarball still shipped `packages/axiom/AGENTS.md` — the
+  facade's vendor-neutral agent instruction file — claiming "There is no published Axiom
+  CLI"; `docs/AGENT_REFERENCE.md`'s own start-here section separately claimed "There is no
+  published CLI" (no word "Axiom" in the middle). Both slipped past spec16pt2's own
+  regression test because it scanned only `ALL_DOCS` (`README.md` + `docs/*.md`, never the
+  facade's `AGENTS.md`/`llms.txt`/package READMEs) with a regex requiring the literal
+  substring "Axiom CLI". Fixed both documents, and hardened the test itself
+  (`packages/demo/test/documentation.test.ts`) to scan `PACKAGE_READMES` and
+  `facadeEntryPoints` too, with a regex matching "no published CLI" with or without
+  "Axiom". A parallel sweep also corrected several stale "`axiom.server.v7` is current"
+  claims (`AGENT_REFERENCE.md` ×3 spots, `DISTRIBUTED_AUTHORITY.md`, `LIVE_QUERIES.md`,
+  both root and facade `README.md`'s `ServerIR` glossary row) to name `v9`, or — where the
+  claim was about a *feature adding no new vocabulary* rather than a fixed number — reworded
+  so it can't go stale again the next time an unrelated feature bumps the contract; several
+  other `v7` mentions were read and deliberately left alone as accurate (a complete
+  historical contract table, a migration/live-query floor requirement, an illustrative
+  anti-pattern value). **F-CLI-PACKAGE-NOT-PUBLISHED**: a registry check at the start of
+  this pass found `@cynodia/axiom-cli@0.16.0-alpha.2` already resolving from the public
+  registry with a correct `bin.axiom` mapping — the finding's literal alpha.2 premise had
+  already been overtaken by an out-of-session publish before this pass began. The pass adds
+  the registry-backed verification the finding shows was missing regardless: new
+  `scripts/verify-registry.mjs` (`npm run release:verify-registry`) queries the real
+  registry for every `publishable` package at the exact release version with bounded retry,
+  fails loudly on any package that doesn't resolve, and separately confirms
+  `@cynodia/axiom-cli`'s registry-visible manifest carries its `bin.axiom` entry; wired into
+  `scripts/publish.mjs` as an automatic post-publish gate (skipped only in `--dry-run`) so a
+  future publish cannot silently report success while the registry still 404s.
+  `scripts/consumer-test.mjs` gained `--from-registry` (`npm run
+  release:consumer-test-registry`), installing `name@version` from the real registry instead
+  of local tarballs — the local-tarball mode remains a necessary-but-not-sufficient
+  preflight, per the spec's own framing — plus per-command `axiom <cmd> --help` smoke checks
+  and a `--json` validate call. **No semantic change of any kind**: no edit to
+  `packages/*/src`; Server IR stays `axiom.server.v9`, `axiom.authz.v3`,
+  `axiom.conformance.v10`, `semanticFingerprint` untouched; full fast-tier suite (1661
+  tests) green throughout. **Actual `npm publish` of `0.16.0-alpha.3` was not performed in
+  this pass** — a real, externally-visible, materially-irreversible registry action under a
+  live account, held for explicit maintainer confirmation; every publish-independent step
+  (version bump, doc fixes, tooling, and a full local `pack`/`verify`/`consumer-test`/`probe`
+  preflight) is done and green. External blind validation (Phase L) remains this session's
+  explicit known gap, as for alpha.1 and alpha.2. Report:
+  `AXIOM_0_16PT3_IMPLEMENTATION_REPORT.md`.
 
-Together, spec2–spec16pt2 are the authority on design decisions — **except where the
+Together, spec2–spec16pt3 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 
