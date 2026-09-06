@@ -65,10 +65,32 @@ axiom --help
 
 ## Machine-readable output
 
-Pass `--json` on `explain`, `analyze` or `diff` for structured output — parseable,
-deterministic, and semantically identical to the corresponding `AgentAPI` result (no human
-terminal decoration reaches `--json` mode). Everything else prints a concise human-readable
-rendering.
+Pass `--json` on `explain`, `analyze`, `diff` or `validate` for structured output —
+parseable, deterministic, and (for `explain`/`analyze`/`diff`) semantically identical to
+the corresponding `AgentAPI` result (no human terminal decoration reaches `--json` mode).
+Everything else prints a concise human-readable rendering.
+
+**`--json` also governs failure, not only success.** Every CLI-owned error path — an
+unknown node id, a missing required flag, a model file that will not load, an unparseable
+command line — emits one JSON value on stdout instead of prose, and never a native stack
+trace:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "UNKNOWN_NODE",
+    "message": "No action node \"foo\" in this graph"
+  }
+}
+```
+
+`error.code` is one of `INVALID_ARGUMENTS`, `UNKNOWN_COMMAND`, `UNKNOWN_NODE`,
+`MISSING_ARGUMENT`, `MODEL_LOAD_FAILED` or `COMMAND_FAILED` (an uncategorized failure).
+Match on `code`, never on `message` — the same discipline as every other structured
+diagnostic in Axiom. Exit code is always nonzero on failure, in `--json` mode and out of
+it. Without `--json`, error text is unchanged prose on stderr (or, for a handful of
+pre-existing "not found"-style results, stdout — see the source), exactly as before.
 
 ## Exit codes
 

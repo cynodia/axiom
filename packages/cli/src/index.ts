@@ -52,6 +52,44 @@ const SUBCOMMANDS: Record<string, Set<string>> = {
   migrate: new Set(['plan', 'status']),
 };
 
+/**
+ * Stable machine-readable codes for a `--json` failure (spec16pt4 §4). A code names *why*
+ * the command failed; the message is for a human, the code is for a script that branches
+ * on the outcome without parsing prose.
+ */
+type CliErrorCode =
+  | 'INVALID_ARGUMENTS'
+  | 'UNKNOWN_COMMAND'
+  | 'UNKNOWN_NODE'
+  | 'MISSING_ARGUMENT'
+  | 'MODEL_LOAD_FAILED'
+  | 'COMMAND_FAILED';
+
+/** Thrown for a CLI-level failure that must carry one of the codes above under `--json`. */
+class CliError extends Error {
+  readonly code: CliErrorCode;
+  constructor(code: CliErrorCode, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+/**
+ * The one shape every CLI-owned failure takes under `--json` (spec16pt4 §4): structured,
+ * deterministic, machine-readable, and — unlike a bare thrown error reaching the top —
+ * carries no native stack trace. Printed to stdout, like every other `--json` result, so a
+ * caller parsing stdout as JSON never has to distinguish success from failure by channel.
+ * Human mode (`options.json` false) is untouched (spec16pt4 §6).
+ */
+function fail(json: boolean, code: CliErrorCode, message: string): void {
+  if (json) {
+    console.log(JSON.stringify({ ok: false, error: { code, message } }, null, 2));
+  } else {
+    console.error(message);
+  }
+  process.exitCode = 1;
+}
+
 function parseArguments(argv: string[]): Options | null {
   const positional: string[] = [];
   let exportName: string | undefined;
@@ -144,7 +182,15 @@ async function loadGraph(options: Options): Promise<ApplicationGraph> {
 async function loadGraphModule(modelFile: string, exportName?: string): Promise<ApplicationGraph> {
   const options = { modelFile, exportName } as Options;
   const resolved = path.resolve(process.cwd(), options.modelFile);
-  const module = (await import(pathToFileURL(resolved).href)) as Record<string, unknown>;
+  let module: Record<string, unknown>;
+  try {
+    module = (await import(pathToFileURL(resolved).href)) as Record<string, unknown>;
+  } catch (error) {
+    throw new CliError(
+      'MODEL_LOAD_FAILED',
+      `Could not load ${options.modelFile}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 
   const names = options.exportName
     ? [options.exportName]
@@ -168,7 +214,8 @@ async function loadGraphModule(modelFile: string, exportName?: string): Promise<
       }
     }
     if (builders.length > 1) {
-      throw new Error(
+      throw new CliError(
+        'MODEL_LOAD_FAILED',
         `${options.modelFile} exports several candidates. Choose one with --export=<name>: ${builders
           .map(([name]) => name)
           .join(', ')}`,
@@ -176,7 +223,7 @@ async function loadGraphModule(modelFile: string, exportName?: string): Promise<
     }
   }
 
-  throw new Error(`Could not load an application graph from ${options.modelFile}`);
+  throw new CliError('MODEL_LOAD_FAILED', `Could not load an application graph from ${options.modelFile}`);
 }
 
 const SECTIONS: Array<[string, NodeKind]> = [
@@ -561,7 +608,7 @@ function formatExplanation(kind: string, result: Record<string, unknown>): strin
 
 async function explainCommand(options: Options): Promise<string> {
   if (!options.kind || !options.targetId) {
-    throw new Error('usage: axiom explain <action|query|workflow|state> <id> <modelFile>');
+    throw new CliError('INVALID_ARGUMENTS', 'usage: axiom explain <action|query|workflow|state> <id> <modelFile>');
   }
   const agent = new AgentAPI(await loadGraph(options));
   let result: Record<string, unknown> | undefined;
@@ -579,11 +626,18 @@ async function explainCommand(options: Options): Promise<string> {
       result = agent.explainState(options.targetId as never) as unknown as Record<string, unknown> | undefined;
       break;
     default:
-      throw new Error(`explain: unknown kind "${options.kind}" (expected action, query, workflow or state)`);
+      throw new CliError(
+        'INVALID_ARGUMENTS',
+        `explain: unknown kind "${options.kind}" (expected action, query, workflow or state)`,
+      );
   }
   if (!result) {
+    const message = `No ${options.kind} node "${options.targetId}" in this graph`;
+    if (options.json) {
+      throw new CliError('UNKNOWN_NODE', message);
+    }
     process.exitCode = 1;
-    return `No ${options.kind} node "${options.targetId}" in this graph`;
+    return message;
   }
   return options.json ? JSON.stringify(result, null, 2) : formatExplanation(options.kind, result);
 }
@@ -609,7 +663,7 @@ async function analyzeCommand(options: Options): Promise<string> {
 
 async function diffCommand(options: Options): Promise<string> {
   if (!options.against) {
-    throw new Error('diff needs a --against=<file> naming the graph to compare against');
+    throw new CliError('MISSING_ARGUMENT', 'diff needs a --against=<file> naming the graph to compare against');
   }
   const before = await loadGraphModule(options.against, options.againstExport);
   const after = await loadGraph(options);
@@ -659,6 +713,11 @@ const USAGE = [
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+  // `--json` may be present even when parsing fails outright (a missing model file, an
+  // unparseable command line), so it is read directly from argv rather than from the
+  // `Options` parseArguments would otherwise have produced (spec16pt4 §3, "missing model
+  // file" / "invalid/missing command arguments").
+  const wantsJson = argv.includes('--json');
   if (argv.includes('--help') || argv.includes('-h') || argv.length === 0) {
     console.log(USAGE);
     return;
@@ -666,11 +725,23 @@ async function main(): Promise<void> {
 
   const options = parseArguments(argv);
   if (!options) {
-    console.error(USAGE);
-    process.exitCode = 1;
+    if (wantsJson) {
+      fail(true, 'INVALID_ARGUMENTS', 'Missing or invalid command-line arguments. Run "axiom --help" for usage.');
+    } else {
+      console.error(USAGE);
+      process.exitCode = 1;
+    }
     return;
   }
 
+  try {
+    await runCommand(options);
+  } catch (error) {
+    fail(options.json === true, error instanceof CliError ? error.code : 'COMMAND_FAILED', error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function runCommand(options: Options): Promise<void> {
   switch (options.command) {
     case 'schema status':
       console.log(schemaStatus(await loadGraph(options)));
@@ -715,12 +786,19 @@ async function main(): Promise<void> {
       console.log(await diffCommand(options));
       return;
     default:
-      console.error(`Unknown command: ${options.command}`);
-      process.exitCode = 1;
+      if (options.json) {
+        fail(true, 'UNKNOWN_COMMAND', `Unknown command: ${options.command}`);
+      } else {
+        console.error(`Unknown command: ${options.command}`);
+        process.exitCode = 1;
+      }
   }
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+  fail(
+    process.argv.slice(2).includes('--json'),
+    error instanceof CliError ? error.code : 'COMMAND_FAILED',
+    error instanceof Error ? error.message : String(error),
+  );
 });

@@ -612,8 +612,50 @@ turn it into a working browser application whose generated JavaScript nobody rea
   preflight) is done and green. External blind validation (Phase L) remains this session's
   explicit known gap, as for alpha.1 and alpha.2. Report:
   `AXIOM_0_16PT3_IMPLEMENTATION_REPORT.md`.
+* `specs/spec16pt4.md` — the **CLI JSON error contract corrective** (`0.16.0-alpha.4`),
+  closing the one non-blocking finding left after alpha.3 reached `D1 / E1 / S1`:
+  **F-CLI-JSON-NOT-HONORED-ON-ERROR** — several `packages/cli` error paths ignored
+  `--json` and printed plain prose, or let a raw `Error.message` reach the top-level
+  handler unwrapped (`explain` of an unknown node id; `analyze`/`explain`/`diff` on an
+  unresolvable `--export` or missing model file; `diff` with no `--against`; an unknown
+  command; a missing model-file argument, which `parseArguments` rejected before `--json`
+  was even consulted). Fix, entirely within `packages/cli/src/index.ts`: a `CliError`
+  (`code` ∈ `INVALID_ARGUMENTS` / `UNKNOWN_COMMAND` / `UNKNOWN_NODE` /
+  `MISSING_ARGUMENT` / `MODEL_LOAD_FAILED` / `COMMAND_FAILED`) thrown at every CLI-level
+  failure site instead of a bare `Error`, and one `fail(json, code, message)` that emits
+  `{ "ok": false, "error": { "code", "message" } }` on stdout under `--json` or the prior
+  plain-text stderr otherwise; `main()` now reads `--json` directly off `process.argv`
+  before parsing (so a parse failure still knows to answer in JSON) and routes the whole
+  command dispatch through a `try`/`catch` with `options.json` in scope, with the
+  top-level `.catch()` as a last-resort net using the same path. `loadGraphModule` — the
+  one loader every command uses — wraps its `import()` and throws `MODEL_LOAD_FAILED`
+  uniformly for a nonexistent file, an unresolvable `--export`, or an ambiguous module.
+  Human-mode output is byte-for-byte unchanged, including the pre-existing quirk of one
+  "not found" case landing on stdout rather than stderr (§6 explicitly permits this).
+  **No edit reaches `AgentAPI`, `validateGraph`, `semanticDiff`, authorization, workflow,
+  distributed or Server IR code**; `schema`/`migrate` commands were left without `--json`
+  wiring, as before — out of the spec's six required error cases, so out of scope.
+  `packages/cli` had **no test infrastructure at all** before this pass (silently skipped
+  by `npm test --workspaces --if-present`); added `tsconfig.test.json` +
+  `dist-test/**/*.test.js`, matching every other package, plus
+  `test/json-errors.test.ts` (9 tests) spawning the compiled CLI as a real subprocess
+  against two new fixtures (a valid graph, and one that loads but fails `validateGraph`) —
+  covering all six required error cases plus the unchanged-success-path parity requirement.
+  Every assertion parses the *entire* trimmed stdout as one JSON value, which is what
+  actually proves "no plain prose, no native stack trace" rather than merely "some JSON
+  appeared." Full fast-tier suite now 1671 tests (cli: 0 → 9), all eight testable
+  workspaces green. **No new graph/IR vocabulary**; Server IR stays `axiom.server.v9`,
+  `axiom.authz.v3`, `axiom.conformance.v10` unchanged. Version bump used the
+  `scripts/version-set.mjs` tool added between the pt3 and pt4 sessions (`npm run
+  version:set -- 0.16.0-alpha.4`, 123 files/147 substitutions) rather than a hand-rolled
+  sed pass. **Actual `npm publish` of `0.16.0-alpha.4` was not performed in this
+  pass** — held for explicit maintainer confirmation, as for every prior 0.16 corrective;
+  local `pack`/`verify`/`consumer-test` all green at the new version. Per spec16pt4 §10-11
+  this does not reopen the 0.16 semantic freeze or rerun the full blind campaign — only a
+  targeted CLI recheck against the eventually-published artifact is required before
+  0.16.0 stable packaging. Report: `AXIOM_0_16PT4_IMPLEMENTATION_REPORT.md`.
 
-Together, spec2–spec16pt3 are the authority on design decisions — **except where the
+Together, spec2–spec16pt4 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 
