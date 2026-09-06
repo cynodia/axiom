@@ -815,10 +815,20 @@ campaign (D2). It ships only `dist/**/*.js`, `dist/**/*.d.ts`, its own `README.m
   `file:`, `link:` or `workspace:` range ever reaches a tarball.
 - **Every package keeps its own LICENSE and README** — npm does not inherit them from the
   repository root. The verifier checks the packed copies have not drifted.
-- **Version bumps touch every manifest.** The publish script refuses to run if any is out
-  of step with the root.
+- **Version bumps touch every manifest — and every document, and two generated stamps.**
+  `npm run version:set 0.16.0-alpha.4` is the only supported way to do it: it rewrites the
+  root and every workspace manifest (including the `@cynodia/*` dependency pins), the version
+  line in `README.md` and all of `docs/`, each package README, `AGENTS.md` and `llms.txt`,
+  the `ApplicationGraph` default in `core/src/graph.ts`, and the `release` stamp in
+  `PATTERN_CATALOG.json` and all seven conformance manifests. `specs/`, `reports/` and this
+  file record the release a change landed in — they are history and are never rewritten.
+  Doing it by hand is what shipped a catalogue stamped for a superseded release, a conformance
+  suite two releases behind and a distributed manifest four behind; `npm test` now fails on
+  any of them (`every generated artifact is stamped with the current version`), rather than
+  `release:prepare` failing eight minutes in.
 
 ```bash
+npm run version:set 0.16.0-alpha.4   # the whole bump; then build, test and commit
 npm run release:prepare        # clean, build, test, pack, verify tarballs, consumer test
 npm run release:publish:dry-run
 npm run release:publish        # deliberate and manual; CI never publishes

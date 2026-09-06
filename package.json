@@ -27,7 +27,8 @@
     "conformance:run": "node scripts/run-conformance.mjs",
     "schema:generate": "node scripts/schema.mjs",
     "toolkit:metrics": "node scripts/toolkit-metrics.mjs",
-    "toolkit:catalog": "node scripts/pattern-catalog.mjs"
+    "toolkit:catalog": "node scripts/pattern-catalog.mjs",
+    "version:set": "node scripts/version-set.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

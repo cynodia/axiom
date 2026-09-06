@@ -572,6 +572,34 @@ test('every package manifest is at the root version', () => {
   assert.deepEqual(drifted, []);
 });
 
+test('every generated artifact is stamped with the current version', () => {
+  const version = JSON.parse(read('package.json')).version as string;
+  // A generated artifact copies the version out of the root manifest, so it can only ever be
+  // right by regeneration or by luck — and the copies no fast test guards drift silently. The
+  // catalogue shipped stamped for a superseded release inside two tarballs, and the whole
+  // conformance suite shipped stamped two releases behind, because the only check that could
+  // see it ran at the end of `release:prepare`. Repair with `npm run version:set <version>`,
+  // or by regenerating (`npm run toolkit:catalog`, `npm run conformance:generate`).
+  const conformance = path.join(repoRoot, 'packages/server/conformance');
+  const artifacts = [
+    'packages/ui-toolkit/docs/PATTERN_CATALOG.json',
+    ...[conformance, ...readdirSync(conformance, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(conformance, entry.name))]
+      .map((directory) => path.relative(repoRoot, path.join(directory, 'manifest.json')))
+      .filter((file) => existsSync(path.join(repoRoot, file))),
+  ];
+  // The suite has six manifests and a catalogue; a fixture tier that stopped being scanned
+  // would make this test pass by checking nothing.
+  assert.ok(artifacts.length >= 7, `only ${artifacts.length} generated artifacts were scanned`);
+  const stale: string[] = [];
+  for (const file of artifacts) {
+    const stamp = (JSON.parse(read(file)) as { release?: string }).release;
+    if (stamp !== version) stale.push(`${file} is stamped ${String(stamp)}, not ${version}`);
+  }
+  assert.deepEqual(stale, []);
+});
+
 test('a new graph is stamped with the release version', () => {
   const release = (JSON.parse(read('package.json')).version as string).replace(/-.*$/, '');
   assert.equal(new ApplicationGraph('v', 'V').version, release);
