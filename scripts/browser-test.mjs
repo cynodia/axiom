@@ -24,11 +24,27 @@ try {
   process.exit(1);
 }
 
-const output = execFileSync(
-  'node',
-  ['--test', 'dist-test/browser-dialog.test.js'],
-  { cwd: packageDir('demo'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] },
-);
+/**
+ * The child's stdout is captured rather than inherited, because the gate below has to read
+ * the summary out of it. That makes a failure silent unless it is printed here: `execFileSync`
+ * throws, and every line the run produced is on the thrown error rather than the terminal.
+ * A release that fails must say why, so the failing output is written before exiting.
+ */
+let output;
+try {
+  output = execFileSync(
+    'node',
+    ['--test', 'dist-test/browser-dialog.test.js'],
+    { cwd: packageDir('demo'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] },
+  );
+} catch (error) {
+  if (typeof error?.stdout === 'string') process.stdout.write(error.stdout);
+  const status = typeof error?.status === 'number' ? error.status : null;
+  console.error(
+    `\nThe browser conformance run failed (${error?.signal ? `signal ${error.signal}` : `exit ${status ?? 1}`}).`,
+  );
+  process.exit(status === null || status === 0 ? 1 : status);
+}
 process.stdout.write(output);
 
 // A skipped case is not a passing case. The gate is that the browser actually ran them.
