@@ -11,6 +11,7 @@
     "blob storage",
     "concurrent mutation",
     "constraints",
+    "conversions",
     "deduplication",
     "derived state",
     "effects",
@@ -355,6 +356,19 @@
       "invocations": 1
     },
     {
+      "name": "unknown-event-refused",
+      "file": "unknown-event-refused.json",
+      "covers": [
+        "events"
+      ],
+      "description": "An EventRequest for an eventId not defined in the graph is refused: ok=false, no event constructed, no trigger, no action, no state mutation, no effect. The diagnostic code is nonsemantic and not asserted.",
+      "conformance": "axiom.conformance.v2",
+      "contract": "axiom.server.v4",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 1
+    },
+    {
       "name": "verified-external-event-invokes-system-only-action",
       "file": "verified-external-event-invokes-system-only-action.json",
       "covers": [
@@ -640,6 +654,34 @@
       "concurrent": false,
       "restartAndReassert": true,
       "invocations": 0
+    },
+    {
+      "name": "conversion-text-to-number",
+      "file": "conversion-text-to-number.json",
+      "covers": [
+        "expression evaluation",
+        "conversions"
+      ],
+      "description": "spec17 SEM-1: text → number coercion (add(text, 0)) then canonical decimal text. Trimmed decimal, empty text (→ 0), exponent form, radix-prefixed 0x1F (→ 31), and unparseable text (→ NaN → \"NaN\") each map by the language-neutral rules in docs/EXPRESSIONS.md#conversions.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 7
+    },
+    {
+      "name": "conversion-number-to-text",
+      "file": "conversion-number-to-text.json",
+      "covers": [
+        "expression evaluation",
+        "conversions"
+      ],
+      "description": "spec17 SEM-1: number → canonical decimal string. Fixed notation within 1e-6 ≤ |x| < 1e21, exponential outside it, shortest round-trip digits, no trailing zeros — the ECMAScript Number::toString radix-10 algorithm restated language-neutrally in docs/EXPRESSIONS.md#conversions.",
+      "conformance": "axiom.conformance.v1",
+      "contract": "axiom.server.v1",
+      "concurrent": false,
+      "restartAndReassert": false,
+      "invocations": 5
     }
   ]
 }

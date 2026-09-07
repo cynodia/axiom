@@ -1,0 +1,204 @@
+{
+  "conformance": "axiom.conformance.v1",
+  "name": "conversion-text-to-number",
+  "covers": [
+    "expression evaluation",
+    "conversions"
+  ],
+  "description": "spec17 SEM-1: text → number coercion (add(text, 0)) then canonical decimal text. Trimmed decimal, empty text (→ 0), exponent form, radix-prefixed 0x1F (→ 31), and unparseable text (→ NaN → \"NaN\") each map by the language-neutral rules in docs/EXPRESSIONS.md#conversions.",
+  "principals": {},
+  "serverIR": {
+    "contract": "axiom.server.v1",
+    "id": "conformance-conversion",
+    "name": "Conformance conversion",
+    "version": "0.6.0",
+    "entities": [],
+    "fields": {},
+    "states": [
+      {
+        "id": "state_conv_log",
+        "kind": "state",
+        "name": "log",
+        "authority": "server",
+        "valueType": {
+          "kind": "collection",
+          "itemType": {
+            "kind": "primitive",
+            "primitive": "string"
+          }
+        },
+        "initialValue": []
+      }
+    ],
+    "actions": {
+      "action_text_to_number": {
+        "id": "action_text_to_number",
+        "kind": "action",
+        "name": "textToNumber",
+        "parameters": [
+          {
+            "id": "param_text",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "string"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "insert",
+            "target": {
+              "kind": "state",
+              "stateId": "state_conv_log"
+            },
+            "value": {
+              "kind": "call",
+              "function": "to-string",
+              "arguments": [
+                {
+                  "kind": "binary",
+                  "operator": "add",
+                  "left": {
+                    "kind": "ref",
+                    "targetId": "param_text"
+                  },
+                  "right": {
+                    "kind": "literal",
+                    "value": 0
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      },
+      "action_number_to_text": {
+        "id": "action_number_to_text",
+        "kind": "action",
+        "name": "numberToText",
+        "parameters": [
+          {
+            "id": "param_num",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ],
+        "operations": [
+          {
+            "kind": "insert",
+            "target": {
+              "kind": "state",
+              "stateId": "state_conv_log"
+            },
+            "value": {
+              "kind": "call",
+              "function": "to-string",
+              "arguments": [
+                {
+                  "kind": "ref",
+                  "targetId": "param_num"
+                }
+              ]
+            }
+          }
+        ],
+        "preconditions": [],
+        "failureModes": []
+      }
+    },
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_conv_log"
+    ]
+  },
+  "initialState": [
+    {
+      "stateId": "state_conv_log",
+      "value": [],
+      "revision": 1
+    }
+  ],
+  "invocations": [
+    {
+      "actionId": "action_text_to_number",
+      "arguments": {
+        "param_text": "  5  "
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "actionId": "action_text_to_number",
+      "arguments": {
+        "param_text": ""
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "actionId": "action_text_to_number",
+      "arguments": {
+        "param_text": "1e3"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "actionId": "action_text_to_number",
+      "arguments": {
+        "param_text": "-1.5"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "actionId": "action_text_to_number",
+      "arguments": {
+        "param_text": "0x1F"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "actionId": "action_text_to_number",
+      "arguments": {
+        "param_text": "1_000"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "actionId": "action_text_to_number",
+      "arguments": {
+        "param_text": "abc"
+      },
+      "expect": {
+        "ok": true
+      }
+    }
+  ],
+  "expectedState": {
+    "state_conv_log": [
+      "5",
+      "0",
+      "1000",
+      "-1.5",
+      "31",
+      "NaN",
+      "NaN"
+    ]
+  }
+}

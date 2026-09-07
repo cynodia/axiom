@@ -190,6 +190,15 @@ The controlled boundary for behavior the operation vocabulary cannot express.
 **Use it only where no semantic primitive exists.** A native operation is opaque to every
 analysis Axiom offers.
 
+**`NativeOperation` is not portable semantics.** It is a host-language extension point, not
+part of the portable semantic profile. A conforming runtime that has no compatible
+registered implementation for an encountered `NativeOperation` MUST report it as
+**unsupported / opaque** and refuse — it MUST NOT ignore the operation, skip it, substitute
+a no-op, or invent host behavior. A graph that *requires* a `NativeOperation` is outside the
+portable profile unless an explicitly declared runtime-specific extension defines it. That
+the reference full-stack host *can* run registered native operations does not make the
+construct portable, and does not change this requirement for any other runtime.
+
 ### `integration-query`
 
 ```ts

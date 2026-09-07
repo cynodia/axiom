@@ -44,12 +44,28 @@ An event reaches the semantic layer three ways, and all three funnel through the
 3. **The semantic protocol directly** — `EventRequest{ kind: 'event', eventId, payload }`,
    for a host that already trusts its own caller (an internal service, a test).
 
+## Unknown event id
+
+An `EventRequest` (or a webhook `decode` result, or a subscription delivery) whose `eventId`
+is **not an `EventDef` in the admitted application graph** MUST be **refused**. No `Event` is
+constructed, no trigger is dispatched, no `ActionDef` is invoked, no `WorkflowDef` is
+started, no application-state or provider mutation occurs, and no logical effect is created.
+The request is answered `ok: false`.
+
+The **exact diagnostic code** for an unknown `eventId` is **implementation-defined** unless
+a more specific public diagnostic contract applies: portable conformance compares the
+refusal and its zero side effects, not the code string. The reference runtime reuses
+`EVENT_PAYLOAD_INVALID` (an unknown event cannot have a conforming payload); another
+conforming runtime MAY report a distinct code such as `UNKNOWN_EVENT`. That difference is a
+non-semantic diagnostic-representation difference, not a behavioral disagreement.
+
 ## Payload validation
 
 Every event's payload is checked against its declared `EventDef.payloadType` — the same
 `validateValueAgainstType` walk that checks action arguments and seed data — **before any
 trigger's action runs**. A malformed payload never reaches trusted code:
-`EVENT_PAYLOAD_INVALID`, and no action is invoked.
+`EVENT_PAYLOAD_INVALID`, and no action is invoked, no state or provider mutates, and no
+effect is created.
 
 ## Webhooks
 

@@ -14,9 +14,24 @@ To describe *where* a value is written, see [`LOCATIONS.md`](LOCATIONS.md).
 
 ## Conversions
 
-Three coercions decide most edge cases. They are shared by every kind.
+Four coercions decide most edge cases. They are shared by every kind, and are defined here
+in **language-neutral** terms: a conforming runtime MUST implement these rules directly, not
+by delegating to a host language's `Number()`, `String()` or JSON serializer. Two runtimes
+in different languages must produce the same result for every input below.
 
-**Truthiness** (`and`, `or`, `not`, `conditional`, predicates, `visibleWhen`):
+### Number model
+
+Every Axiom number is an IEEE-754 64-bit binary floating-point value (binary64). `NaN` and
+the two infinities are numbers to the arithmetic below, but they are **not domain values**:
+a stored field, an `initialValue` or a query row that is non-finite is a schema-conformance
+failure (`INITIAL_VALUE_TYPE_MISMATCH` at authoring time; a mutation that would store one is
+rejected). `divide` by zero is `null`, never an infinity. An ordered comparison (`gt`,
+`gte`, `lt`, `lte`) in which either side is a non-finite number is **`false`**. Negative
+zero is not observably distinct from zero.
+
+### Truthiness
+
+`and`, `or`, `not`, `conditional`, predicates, `visibleWhen`.
 
 | Value | Truthy |
 | --- | --- |
@@ -24,24 +39,108 @@ Three coercions decide most edge cases. They are shared by every kind.
 | `[x]` | `true` |
 | `''` | `false` |
 | `'x'` | `true` |
-| `0` | `false` |
-| `null` / `undefined` | `false` |
-| `{}` | `true` |
+| `0` / negative zero | `false` |
+| `NaN` | `false` |
+| `null` / absent | `false` |
+| any other number | `true` |
+| `{}` (a record) | `true` |
 
 A collection is truthy only when non-empty. This is the one coercion most likely to
 surprise: use `count(...) > 0` when you mean "has members" and want it to read that way.
 
-**Text** (`concat`, `to-string`, `lowercase`, `trim`, `substring-before`, `substring-after`, comparison of non-numbers, rendering):
-`null`/`undefined` → `''`; string → itself; number/boolean → `String(v)`; anything else →
-`JSON.stringify(v)`.
+### Text form
 
-**Number** (`add`, `subtract`, `multiply`, `divide`, `negate`): `Number(value ?? 0)`. A
-non-numeric string therefore yields `NaN` rather than an error, and comparisons against
-`NaN` are false — a guard fails closed rather than passing on a value it could not compute.
+`concat`, `to-string`, `lowercase`, `trim`, `substring-before`, `substring-after`, `length`
+of a non-collection, the text side of a mixed-type `gt`/`lt` comparison, `contains` on
+text, and rendering.
 
-**Equality** (`eq`, `neq`, `contains`, `one-of`, identity selectors, transition-constraint
-change detection) is structural and key-order independent. `null` and `undefined` are
-equal to each other and to nothing else.
+| Value | Text form |
+| --- | --- |
+| `null` / absent | `""` |
+| a string | itself, unchanged |
+| `true` / `false` | `"true"` / `"false"` |
+| a number | its **canonical decimal string** (below) |
+| a record or collection | a JSON rendering — **outside the portable conversion grammar** (below) |
+
+**Canonical decimal string of a number** — the ECMAScript `Number::toString` radix-10
+algorithm, restated so any language reproduces it:
+
+- `0` and negative zero → `"0"`.
+- A negative finite number → `"-"` then the text form of its magnitude.
+- Choose the **shortest** decimal digit sequence that round-trips to the same binary64
+  value.
+- Use **fixed** notation when `1e-6 ≤ |value| < 1e21` (and for `0`): the integer digits,
+  then — only if a fractional part remains — `.` (U+002E) and the fraction digits. No
+  trailing zeros, no leading `+`, no exponent.
+- Otherwise use **exponential** notation: one mantissa digit, then (if more significant
+  digits remain) `.` and those digits with no trailing zeros, then `e`, then the exponent
+  sign (`+` or `-`), then the exponent digits with no leading zero. `1e21` → `"1e+21"`;
+  `1e-7` → `"1e-7"`; `1.5e300` → `"1.5e+300"`.
+- `NaN` → `"NaN"`; positive infinity → `"Infinity"`; negative infinity → `"-Infinity"`.
+
+**Structured value → text is not portable.** A record or collection has a text form only as
+a last resort (`to-string` of an object, comparing two records with `lt`). The reference
+runtime renders JSON with object members in **definition order** and no whitespace; a
+conforming runtime MAY differ, and a graph that depends on it is outside the portable
+profile. Where structural text genuinely matters — identity selectors, `group` keys,
+structural equality, `semanticFingerprint` — the runtime uses **canonical JSON** instead
+(object keys sorted by Unicode code point, recursively; no whitespace; `null` kept; absent
+members omitted; numbers in canonical decimal form), which every conforming runtime MUST
+reproduce byte-for-byte.
+
+### Numeric form
+
+`add`, `subtract`, `multiply`, `divide`, `negate`. (`sum` does **not** coerce — a
+non-numeric member fails the evaluation.)
+
+| Operand | Numeric form |
+| --- | --- |
+| `null` / absent | `0` |
+| a number | itself |
+| `true` / `false` | `1` / `0` |
+| `[]` | `0` |
+| `[x]` | the numeric form of `x` |
+| a collection of two or more | `NaN` |
+| a record | `NaN` |
+| a string | **portable numeric text** (below), else `NaN` |
+
+A `NaN` operand propagates: the result is `NaN`, which then fails every ordered comparison
+and cannot be stored — a guard fails closed rather than passing on a value it could not
+compute.
+
+**Portable numeric text.** The string is first stripped of leading and trailing whitespace
+(U+0009, U+000A, U+000B, U+000C, U+000D, U+0020, and the Unicode space separators), then:
+
+| Trimmed string | Result |
+| --- | --- |
+| empty (originally empty or all whitespace) | `0` |
+| `Infinity` or `+Infinity` | positive infinity |
+| `-Infinity` | negative infinity |
+| a **canonical decimal literal** (below) | that value |
+| a radix-prefixed integer — `0x`/`0X`, `0o`/`0O`, `0b`/`0B` then digits of that radix | that integer |
+| anything else — `"NaN"`, `"1_000"`, `"1,5"`, `"abc"`, `"1abc"`, a lone `.`, `"1e"`, `"5%"` | `NaN` |
+
+A **canonical decimal literal** is an optional sign (`+` / `-`), then digits with an
+optional single `.` (at least one digit on one side — `.5` and `1.` are both accepted),
+then an optional exponent: `e` / `E`, an optional sign, one or more digits.
+
+> **The radix-prefixed and `Infinity` forms are accepted for host-behaviour compatibility
+> but are discouraged.** A portable graph should coerce only **canonical decimal** text. A
+> future contract version MAY narrow the accepted grammar to canonical decimal; it will not
+> silently widen it. Coercion never yields "implementation-defined" — every string maps to a
+> number, `NaN`, or an infinity by the table above.
+
+### Equality and ordering
+
+**Equality** (`eq`, `neq`, `contains` on a collection, `one-of`, identity selectors,
+transition-constraint change detection) is **structural** and key-order independent. `null`
+and absent are equal to each other and to nothing else. Two numbers are equal when they are
+the same binary64 value (so `-0` equals `0`; `NaN` equals nothing, including itself).
+
+**Ordering** (`gt`, `gte`, `lt`, `lte`, `sort`): **numeric** when both sides are numbers,
+otherwise by the **Unicode code point** sequence of the two text forms (not the host
+language's string comparison, not locale collation). A comparison with a non-finite number
+on either side is `false`.
 
 ## Expression kinds
 
@@ -93,15 +192,15 @@ object([
 | Operator | Semantics |
 | --- | --- |
 | `eq` / `neq` | Structural equality, key-order independent. |
-| `gt` `gte` `lt` `lte` | Numeric when **both** sides are numbers; otherwise lexicographic on their text form. |
+| `gt` `gte` `lt` `lte` | Numeric when **both** sides are numbers; otherwise by Unicode code point of their [text form](#text-form). A non-finite number on either side → `false`. |
 | `and` / `or` | Truthiness, short-circuiting. Output is a boolean. |
-| `add` `subtract` `multiply` | `Number(x ?? 0)` arithmetic. |
-| `divide` | Division by zero yields **`null`**, not an error and not `Infinity`. |
+| `add` `subtract` `multiply` | Binary64 arithmetic on the [numeric form](#numeric-form) of each side (absent → `0`). |
+| `divide` | As above; division by zero yields **`null`**, not an error and not `Infinity`. |
 
 ### `unary(operator, operand)`
 
-- `not` → `!truthy(operand)`.
-- `negate` → `-Number(operand ?? 0)`.
+- `not` → the boolean negation of the operand's [truthiness](#truthiness).
+- `negate` → the arithmetic negation of the operand's [numeric form](#numeric-form) (absent → `0`).
 
 > **An expression evaluated as an authorization decision evaluates differently for a
 > missing security field.** Both `AuthorizationPolicyDef.allow` **and** the legacy

@@ -1,10 +1,40 @@
 # Semantic contract
 
 Axiom 0.17.0-alpha.1. Runtime guarantees, stated formally. This file defines behavior; it
-does not teach. Where this file and any specification in `../specs/` disagree, this file
-describes the implementation and is authoritative.
+does not teach.
 
 `MUST` / `MUST NOT` describe guaranteed behavior. `MAY` describes a documented option.
+
+## Normative precedence
+
+For a **portable semantic rule** — one whose result can change what an application means to
+an observer — the order of authority is:
+
+1. The formal specification (`specs/spec*.md`) for a rule it states explicitly.
+2. This semantic contract and the topic documents under `docs/` — the consolidated
+   normative statement of portable runtime behavior.
+3. The public JSON Schemas (`@cynodia/axiom-server/schema/*`) — structural validity and
+   discriminators only.
+4. The public type declarations (`*.d.ts`) — structural shape only; they never override
+   prose meaning.
+5. The runtime-neutral conformance fixtures — normative **evidence** of the rules above.
+   They test specified semantics; they do not invent them. A fixture that exercises a
+   behavior no normative artifact describes is a **specification gap**, not a new rule.
+
+**Reference-runtime behavior is evidence, not authority.** Where the reference runtime
+disagrees with 1–5, the reference runtime is **defective** and is corrected to the
+contract — never the contract to the runtime. Where two of 1–5 disagree, that is a
+specification defect resolved explicitly, not silently by convention or by observing a
+runtime. Where the contract is **silent** on a portable behavior, it is filled by an
+explicit contract change.
+
+This inverts the pre-0.17 "the implementation is authoritative" rule, which held only while
+the portable contract was still incomplete. That rule survives **only** for
+**non-portable implementation detail** — rendering internals, storage layout,
+process/thread model, private diagnostics, performance, physical retry counts — none of
+which is portable semantics and none of which cross-runtime conformance compares. For those,
+`docs/` describes the reference implementation and the reference implementation is
+authoritative.
 
 ## State
 
@@ -177,9 +207,10 @@ location.
 - Nothing returns a plausible value alongside a failure diagnostic.
 - Collection operators are strict about their source: `null` fails, `[]` behaves normally.
 - `sum` fails if any member is not a finite number.
-- Values are cloned with `structuredClone`, never a JSON round trip, so `NaN` is not disguised as `null`.
+- Values are cloned structurally, never via a JSON round trip, so `NaN` is not disguised as `null`.
+- Truthiness, text form, numeric form, equality and ordering are defined **language-neutrally** and MUST NOT be delegated to a host language's conversion functions. Axiom numbers are IEEE-754 binary64; `divide` by zero is `null`; an ordered comparison with a non-finite operand is `false`; `NaN` and the infinities are not storable domain values. Number → text is the canonical decimal string (ECMAScript `Number::toString` radix 10, restated); text → number accepts trimmed canonical decimal literals (empty → `0`, unparseable → `NaN`), with radix-prefixed and `Infinity` forms accepted for compatibility but discouraged. Text coercion of a **structured** value is outside the portable grammar; structural identity/keys/fingerprints use canonical (code-point-sorted) JSON.
 
-Full per-kind semantics: [`EXPRESSIONS.md`](EXPRESSIONS.md).
+Full per-kind semantics and the full conversion tables: [`EXPRESSIONS.md`](EXPRESSIONS.md#conversions).
 
 ## Authority
 

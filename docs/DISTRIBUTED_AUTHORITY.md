@@ -201,6 +201,22 @@ A stable id is **never synthesised** from a receive timestamp, an authority inst
 random UUID. The window per source is bounded; an id that has fallen out of the window is
 treated as new (bounded, not exactly-once).
 
+**Ownership and scope.** External-event deduplication is owned by the **ingestion boundary** —
+it runs before any `Event` is constructed and therefore before any trigger, action or
+workflow. Neither the trigger dispatcher nor the action runtime deduplicates: by the time a
+delivery reaches a trigger it is already a single accepted occurrence. The **identity** is
+always an external one the provider supplies (`source + externalEventId`); Axiom never
+invents it. The **scope** is whatever backs the check:
+
+| Mechanism | Layer | Identity | Durable? | Scope |
+| --- | --- | --- | --- | --- |
+| Webhook `deliveryId` window (`docs/EVENTS.md`) | HTTP webhook decode | `decode`'s `deliveryId` | no (bounded in-memory, per route) | one process |
+| `ExternalEventDedupStore` | event ingestion | `source + externalEventId` + payload fingerprint | yes | cluster-wide when the store is shared; per-authority otherwise |
+| `SubscriptionDef.delivery.deduplicateBy` (`docs/SUBSCRIPTIONS.md`) | subscription delivery | a named payload field | restart-durable when the adapter implements `hasDelivery` | per subscription |
+
+A runtime that does not implement a durable store gets the bounded, in-process window and
+MUST say so — it MUST NOT claim exactly-once.
+
 ## 12. Subscriptions
 
 A `SubscriptionDef` separates three things: the semantic subscription (durable), the

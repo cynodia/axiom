@@ -695,7 +695,7 @@ do not conflate them under one "contract" name):
 | --- | --- |
 | `manifest.conformance` | The **fixture-format** version (`axiom.conformance.v1`/`v2`) — the shape of the JSON documents themselves: what top-level keys a fixture may have (`invocations` vs `steps`/`externalAdapters`, and so on). |
 | `manifest.baseContract` | The **oldest** Server IR contract any fixture in this manifest may use — `axiom.server.v1`, always, since new fixtures are added without ever raising this floor. It does **not** describe what the newest fixture needs. |
-| `manifest.fixtures[].contract` | The Server IR contract **that specific fixture** requires — this is what is authoritative for what running it needs. The suite ships fixtures spanning `v1` through `v4` simultaneously, each correctly labelled. |
+| `manifest.fixtures[].contract` | The Server IR contract **that specific fixture** requires — this is what is authoritative for what running it needs. The root suite ships fixtures spanning `v1` through `v5` simultaneously (and the sub-tiers reach `v9`), each correctly labelled. |
 | `manifest.release` | The `@cynodia/axiom` package version this snapshot of the suite shipped with — unrelated to either version above. |
 
 Before 8.2 the manifest's top-level field was named `contract` and fixed at
@@ -734,10 +734,15 @@ are tested against the same expectation.
 ## Machine-readable contracts
 
 ```
-@cynodia/axiom-server/schema/server-ir.v1.schema.json
+@cynodia/axiom-server/schema/server-ir.v1.schema.json   ← frozen, byte-stable
 @cynodia/axiom-server/schema/server-ir.v2.schema.json
 @cynodia/axiom-server/schema/server-ir.v3.schema.json
 @cynodia/axiom-server/schema/server-ir.v4.schema.json
+@cynodia/axiom-server/schema/server-ir.v5.schema.json
+@cynodia/axiom-server/schema/server-ir.v6.schema.json
+@cynodia/axiom-server/schema/server-ir.v7.schema.json
+@cynodia/axiom-server/schema/server-ir.v8.schema.json
+@cynodia/axiom-server/schema/server-ir.v9.schema.json   ← current
 @cynodia/axiom-server/schema/protocol.v1.schema.json
 ```
 

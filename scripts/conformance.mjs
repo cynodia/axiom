@@ -309,6 +309,82 @@ if (!lateQueryValidation.valid) {
 }
 const lateQueryServerIR = compiler.compileToServerIR(lateQueryGraph);
 
+// --------------------------------------------------------------------------------------
+// spec17 pre-freeze SEM-1: language-neutral value conversion. A conforming runtime must
+// implement text form / numeric form itself, not delegate to a host language's Number() /
+// String(). These fixtures pin the representative edges from docs/EXPRESSIONS.md#conversions.
+// --------------------------------------------------------------------------------------
+const CONV_STATE_LOG = nodeId('state_conv_log');
+const CONV_A_TEXT_TO_NUMBER = nodeId('action_text_to_number');
+const CONV_A_NUMBER_TO_TEXT = nodeId('action_number_to_text');
+const CONV_P_TEXT = nodeId('param_text');
+const CONV_P_NUM = nodeId('param_num');
+
+function buildConversionGraph() {
+  const graph = new ApplicationGraph('conformance-conversion', 'Conformance conversion', '0.6.0');
+  graph.addNode({ id: CONV_STATE_LOG, kind: 'state', name: 'log', authority: 'server',
+    valueType: collectionType(primitiveType('string')), initialValue: [] });
+  // to-string(add(text, 0)) — text → number → canonical decimal string.
+  graph.addNode({ id: CONV_A_TEXT_TO_NUMBER, kind: 'action', name: 'textToNumber',
+    parameters: [{ id: CONV_P_TEXT, valueType: primitiveType('string'), required: true }],
+    operations: [{ kind: 'insert', target: stateLocation(CONV_STATE_LOG),
+      value: call('to-string', binary('add', ref(CONV_P_TEXT), literal(0))) }] });
+  // to-string(number) — canonical decimal string, round-trip form.
+  graph.addNode({ id: CONV_A_NUMBER_TO_TEXT, kind: 'action', name: 'numberToText',
+    parameters: [{ id: CONV_P_NUM, valueType: primitiveType('number'), required: true }],
+    operations: [{ kind: 'insert', target: stateLocation(CONV_STATE_LOG),
+      value: call('to-string', ref(CONV_P_NUM)) }] });
+  return graph;
+}
+const conversionGraph = buildConversionGraph();
+const conversionValidation = validateGraph(conversionGraph);
+if (!conversionValidation.valid) {
+  console.error(conversionValidation.errors.map((e) => `[${e.code}] ${e.message}`).join('\n'));
+  process.exit(1);
+}
+const conversionServerIR = compiler.compileToServerIR(conversionGraph);
+
+const conversionFixtures = [
+  {
+    name: 'conversion-text-to-number',
+    conformance: 'axiom.conformance.v1',
+    serverIR: conversionServerIR,
+    principals: {},
+    covers: ['expression evaluation', 'conversions'],
+    description:
+      'spec17 SEM-1: text → number coercion (add(text, 0)) then canonical decimal text. Trimmed decimal, empty text (→ 0), exponent form, radix-prefixed 0x1F (→ 31), and unparseable text (→ NaN → "NaN") each map by the language-neutral rules in docs/EXPRESSIONS.md#conversions.',
+    initialState: [{ stateId: String(CONV_STATE_LOG), value: [], revision: 1 }],
+    invocations: [
+      { actionId: String(CONV_A_TEXT_TO_NUMBER), arguments: { [String(CONV_P_TEXT)]: '  5  ' }, expect: { ok: true } },
+      { actionId: String(CONV_A_TEXT_TO_NUMBER), arguments: { [String(CONV_P_TEXT)]: '' }, expect: { ok: true } },
+      { actionId: String(CONV_A_TEXT_TO_NUMBER), arguments: { [String(CONV_P_TEXT)]: '1e3' }, expect: { ok: true } },
+      { actionId: String(CONV_A_TEXT_TO_NUMBER), arguments: { [String(CONV_P_TEXT)]: '-1.5' }, expect: { ok: true } },
+      { actionId: String(CONV_A_TEXT_TO_NUMBER), arguments: { [String(CONV_P_TEXT)]: '0x1F' }, expect: { ok: true } },
+      { actionId: String(CONV_A_TEXT_TO_NUMBER), arguments: { [String(CONV_P_TEXT)]: '1_000' }, expect: { ok: true } },
+      { actionId: String(CONV_A_TEXT_TO_NUMBER), arguments: { [String(CONV_P_TEXT)]: 'abc' }, expect: { ok: true } },
+    ],
+    expectedState: { [String(CONV_STATE_LOG)]: ['5', '0', '1000', '-1.5', '31', 'NaN', 'NaN'] },
+  },
+  {
+    name: 'conversion-number-to-text',
+    conformance: 'axiom.conformance.v1',
+    serverIR: conversionServerIR,
+    principals: {},
+    covers: ['expression evaluation', 'conversions'],
+    description:
+      'spec17 SEM-1: number → canonical decimal string. Fixed notation within 1e-6 ≤ |x| < 1e21, exponential outside it, shortest round-trip digits, no trailing zeros — the ECMAScript Number::toString radix-10 algorithm restated language-neutrally in docs/EXPRESSIONS.md#conversions.',
+    initialState: [{ stateId: String(CONV_STATE_LOG), value: [], revision: 1 }],
+    invocations: [
+      { actionId: String(CONV_A_NUMBER_TO_TEXT), arguments: { [String(CONV_P_NUM)]: 123456789 }, expect: { ok: true } },
+      { actionId: String(CONV_A_NUMBER_TO_TEXT), arguments: { [String(CONV_P_NUM)]: 0.5 }, expect: { ok: true } },
+      { actionId: String(CONV_A_NUMBER_TO_TEXT), arguments: { [String(CONV_P_NUM)]: 1e21 }, expect: { ok: true } },
+      { actionId: String(CONV_A_NUMBER_TO_TEXT), arguments: { [String(CONV_P_NUM)]: 1e-7 }, expect: { ok: true } },
+      { actionId: String(CONV_A_NUMBER_TO_TEXT), arguments: { [String(CONV_P_NUM)]: 1000000 }, expect: { ok: true } },
+    ],
+    expectedState: { [String(CONV_STATE_LOG)]: ['123456789', '0.5', '1e+21', '1e-7', '1000000'] },
+  },
+];
+
 const principals = {
   clerk: { [F_USER_ID]: 'u1', [F_USER_ROLE]: 'clerk' },
   admin: { [F_USER_ID]: 'u2', [F_USER_ROLE]: 'admin' },
@@ -697,6 +773,27 @@ const integrationFixtures = [
     steps: [
       { kind: 'event', eventId: INT_EVENT_SUCCEEDED, payload: 'not-a-valid-outcome',
         expect: { ok: false, diagnosticCodes: ['EVENT_PAYLOAD_INVALID'] } },
+    ],
+    expectedState: { [INT_STATE_MESSAGE]: '' },
+  },
+  {
+    name: 'unknown-event-refused',
+    conformance: 'axiom.conformance.v2',
+    serverIR: integrationServerIR,
+    principals: {},
+    covers: ['events'],
+    // spec17 pre-freeze SEM-2 / FIND-C1-1: an EventRequest whose eventId is not an EventDef
+    // in the admitted graph is refused with no side effects. The exact diagnostic code is
+    // implementation-defined (the reference reuses EVENT_PAYLOAD_INVALID; another runtime
+    // may report UNKNOWN_EVENT) — this fixture asserts the refusal and the absence of any
+    // mutation, NOT a code.
+    description:
+      'An EventRequest for an eventId not defined in the graph is refused: ok=false, no event constructed, no trigger, no action, no state mutation, no effect. The diagnostic code is nonsemantic and not asserted.',
+    initialState: [{ stateId: INT_STATE_MESSAGE, value: '', revision: 1 }],
+    externalAdapters: { [INT_INTEGRATION]: {} },
+    steps: [
+      { kind: 'event', eventId: 'event_not_in_this_graph', payload: { anything: true },
+        expect: { ok: false } },
     ],
     expectedState: { [INT_STATE_MESSAGE]: '' },
   },
@@ -1281,7 +1378,7 @@ for (const existing of await readdir(directory).catch(() => [])) {
 
 const written = [];
 const manifestEntries = [];
-for (const fixture of [...fixtures, ...integrationFixtures, ...externalIoFixtures]) {
+for (const fixture of [...fixtures, ...integrationFixtures, ...externalIoFixtures, ...conversionFixtures]) {
   const document = {
     conformance: fixture.conformance ?? 'axiom.conformance.v1',
     name: fixture.name,
@@ -1340,7 +1437,7 @@ const manifest = {
     '"conformance" above is the fixture-FORMAT version (axiom.conformance.v1/v2); each ' +
     'fixture entry\'s own "contract" is the Server IR contract THAT fixture requires — the ' +
     'two are independent axes and neither implies the other.',
-  areas: [...new Set([...fixtures, ...integrationFixtures, ...externalIoFixtures].flatMap((fixture) => fixture.covers))].sort(),
+  areas: [...new Set([...fixtures, ...integrationFixtures, ...externalIoFixtures, ...conversionFixtures].flatMap((fixture) => fixture.covers))].sort(),
   fixtures: manifestEntries,
 };
 await writeFile(

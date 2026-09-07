@@ -580,8 +580,12 @@ way to run an application from your own Node process.
 
 Specifications live in `specs/`, in order: `spec.md`, `spec2.md`, `spec3.md`, `spec4.md`,
 `spec4.1.md`, `spec5.md`, `spec5.1.md`, `spec5.2.md`, `spec6.md`, `spec6.1.md`. `CLAUDE.md`
-orients work in the codebase. **The implementation is authoritative over the specifications for existing
-behavior**; where they disagree, the documentation above describes the implementation.
+orients work in the codebase. For **portable semantic meaning** the public contract is
+authoritative and the reference runtime is one conforming implementation of it — where they
+disagree, the runtime is defective (see
+[`docs/SEMANTIC_CONTRACT.md`](docs/SEMANTIC_CONTRACT.md#normative-precedence)). For
+**non-portable implementation detail** the documentation above describes the reference
+implementation, and the implementation is authoritative.
 
 ## Releasing
 

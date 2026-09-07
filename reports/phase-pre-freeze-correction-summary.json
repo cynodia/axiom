@@ -1,0 +1,46 @@
+{
+  "milestone": "0.17",
+  "phase": "pre-freeze-contract-correction",
+  "version": "0.17.0-alpha.1",
+  "trackAReopened": false,
+  "serverIR": "axiom.server.v9",
+  "authz": "axiom.authz.v3",
+  "semanticFingerprintChanged": false,
+  "runtimeSourceChanged": false,
+  "newGraphVocabulary": false,
+  "newRuntimeCapability": false,
+  "findings": {
+    "SEM-1": "RESOLVED — CONTRACT CLARIFIED",
+    "SEM-2": "RESOLVED — DIAGNOSTIC DECLARED NONSEMANTIC",
+    "SEM-3": "RESOLVED — EDITORIAL",
+    "SEM-4": "RESOLVED — CONTRACT CLARIFIED",
+    "precedence-inconsistency": "RESOLVED — CONSISTENCY",
+    "stale-schema-listing": "RESOLVED — CONSISTENCY",
+    "stale-fixture-span-reference": "RESOLVED — CONSISTENCY"
+  },
+  "conformance": {
+    "newFixtures": [
+      "conversion-text-to-number",
+      "conversion-number-to-text",
+      "unknown-event-refused"
+    ],
+    "rootSuite": "46/46 passed via public runConformanceFixture",
+    "identifierUnchanged": "axiom.conformance.v1 (root tier), v10 (tooling) preserved"
+  },
+  "targetedVerification": {
+    "reference": "PASS",
+    "independent": "PENDING — to be run by the independent Python runtime maintainer",
+    "crossRuntime": "PENDING"
+  },
+  "fullFastTierSuite": { "tests": 1707, "failed": 0, "workspaces": 8 },
+  "coldSanityCheck": "PASS",
+  "remainingSemanticGaps": 0,
+  "remainingFreezeBlockers": 0,
+  "freezeReady": {
+    "referenceAndContractSide": true,
+    "pending": [
+      "independent Python runtime re-runs conversion-text-to-number / conversion-number-to-text / unknown-event-refused and reports MATCH (spec §17, §51, §58)"
+    ]
+  },
+  "freezeStamped": false
+}

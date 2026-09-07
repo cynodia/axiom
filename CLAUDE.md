@@ -702,10 +702,41 @@ turn it into a working browser application whose generated JavaScript nobody rea
   (§82), and the external D/E/S validation (§92) — all subsequent / out-of-repo phases. The
   0.17 semantic freeze (§90, §95) is not claimed. Report:
   `AXIOM_0_17_IMPLEMENTATION_REPORT.md`.
+  * `specs/spec17.md` also carries a **Pre-Freeze Contract Correction** pass (same
+    `0.17.0-alpha.1`), resolving the Track B non-blocking findings **with zero
+    `packages/*/src` changes** — documentation plus three runtime-neutral conformance
+    fixtures that pass against the unchanged reference runtime. **SEM-1** — `docs/EXPRESSIONS.md`
+    "Conversions" rewritten language-neutrally (IEEE-754 binary64; canonical decimal
+    string = ECMAScript `Number::toString` radix-10 restated; portable numeric-text grammar
+    — trimmed / empty→0 / canonical decimal / radix-prefixed & `Infinity` accepted-but-
+    discouraged / else `NaN`; structured→text explicitly non-portable; `Number()`/`String()`/
+    `JSON.stringify()` gone from all normative prose); fixtures `conversion-text-to-number`,
+    `conversion-number-to-text`. **SEM-2** — `docs/EVENTS.md` "Unknown event id": an
+    `EventRequest` for an undefined `eventId` is refused with zero side effects; the exact
+    diagnostic code is **implementation-defined / non-semantic** (reference reuses
+    `EVENT_PAYLOAD_INVALID`, another runtime may use `UNKNOWN_EVENT`); fixture
+    `unknown-event-refused` asserts the refusal, not a code. **SEM-3** —
+    `docs/DISTRIBUTED_AUTHORITY.md` §11: dedup is owned by the ingestion boundary, keyed by
+    the provider's `source + externalEventId`, scoped process-local / cluster-wide / per-
+    subscription. **SEM-4** — `docs/ACTIONS_TRANSACTIONS.md`: `NativeOperation` is a
+    host-language extension point, not portable semantics; a runtime with no implementation
+    MUST refuse it, never approximate. **Precedence** — `docs/SEMANTIC_CONTRACT.md` new
+    "Normative precedence" section: for portable meaning the public contract wins (spec →
+    docs → schema → `.d.ts` → fixtures); **reference-runtime behavior is evidence, not
+    authority** — a conflict is a runtime defect; the old "implementation is authoritative"
+    rule survives only for non-portable implementation detail; `README.md` aligned. Stale
+    `AUTHORITY.md` schema/fixture-span listings corrected (`v1..v9`). Server IR `v9`, authz
+    `v3`, `semanticFingerprint` all confirmed unchanged; Track A **not reopened** (§45).
+    Full fast-tier suite green (1707 tests). Cold sanity check (§47) PASS. The `FROZEN` stamp
+    itself waits only on the independent Python runtime re-running the three new fixtures and
+    reporting `MATCH` (§58). Report: `AXIOM_0_17_PRE_FREEZE_CORRECTION_REPORT.md`,
+    `reports/phase-pre-freeze-correction-summary.json`, `reports/results/pre-freeze-*.md`.
 
 Together, spec2–spec17 are the authority on design decisions — **except where the
-implementation already differs**. For existing behaviour the implementation is
-authoritative, and `docs/` describes the implementation.
+implementation already differs**. For portable semantic meaning the public contract is
+authoritative and the reference runtime is one conforming implementation of it
+(`docs/SEMANTIC_CONTRACT.md` → "Normative precedence"); for non-portable implementation
+detail the implementation is authoritative and `docs/` describes it.
 
 A handful of rules govern almost every decision:
 
