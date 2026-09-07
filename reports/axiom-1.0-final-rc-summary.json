@@ -1,0 +1,153 @@
+{
+  "candidate": "1.0.0-rc.1",
+  "target": "1.0.0",
+  "gitCommit": "ea173f51d90cd5c0c1623d7f90d141d421028865",
+  "generatedAt": "2026-09-08",
+  "semanticContractChanged": false,
+  "runtimeSourceChanged": false,
+  "serverIR": "axiom.server.v9",
+  "authz": "axiom.authz.v3",
+  "semanticFingerprintVersion": 1,
+  "schemaFingerprintVersion": 1,
+
+  "api": {
+    "perSymbolAuditComplete": true,
+    "totalExportedSymbols": 1367,
+    "classification": { "STABLE": 449, "ADVANCED_STABLE": 688, "DEPRECATED": 2, "INTENTIONALLY_EXPERIMENTAL": 0, "ACCIDENTALLY_EXPORTED": 228 },
+    "accidentalExportsRemaining": 0,
+    "accidentalExportsDisposition": "adjudicated: accepted as public under the 1.x additive guarantee (API-1); recommend @internal + API-extractor curation in 1.0.x",
+    "requiredDeepImports": 0
+  },
+
+  "packaging": {
+    "consumerProjectsPass": 5,
+    "consumerProjectsTotal": 5,
+    "consumerProjectsNodeVersions": ["22.23.2", "24.19.0"],
+    "installationMatrix": "PASS",
+    "tarballAudit": "PASS",
+    "tarballReleaseBlockers": 0,
+    "provenance": "PASS",
+    "tarballsByteReproducible": true,
+    "packageManagersClaimed": ["npm"],
+    "nodeRangeClaimed": ">=22.0.0"
+  },
+
+  "security": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "unauthorizedSuccesses": 0,
+    "failOpenAuthorizationErrors": 0,
+    "principalConfusionOrEscalation": 0,
+    "principalLeaks": 0,
+    "cursorBearerLeaks": 0,
+    "secretLeaks": 0,
+    "hostileRequestsExercised": 47,
+    "authzCorpusTestsAtElevatedTrials": 114
+  },
+
+  "totality": {
+    "nativeCrashesWireReachableBoundary": 0,
+    "unexpectedHangs": 0,
+    "resourceExhaustion": 0,
+    "deterministicCasesRun": 25200,
+    "repoSeededFuzzVariants": 1200,
+    "note": "TOT-1 (LOW): handle(snapshot) native TypeError on an in-process-only hostile sinceRevision (null-proto / throwing toString); not reachable via any JSON transport; read-only, fail-closed"
+  },
+
+  "durability": {
+    "lostLogicalWork": 0,
+    "duplicateLogicalWork": 0,
+    "lostLogicalEffects": 0,
+    "duplicateLogicalEffects": 0,
+    "invalidTerminalTransitions": 0,
+    "doubleTerminalCompletion": 0,
+    "principalLossAcrossRecovery": 0,
+    "migrationCorruption": 0,
+    "doubleAppliedMigration": 0,
+    "sigkillTrialsPerCase": 120,
+    "sigkillCampaign": "PASS"
+  },
+
+  "distributed": {
+    "staleFencedCommits": 0,
+    "duplicateLogicalWork": 0,
+    "lostDurableWork": 0,
+    "unauthorizedLiveObservations": 0,
+    "authoritativeStaleDecisionsOutsideBound": 0,
+    "authorities": 8,
+    "fourWayRegressionCoordinationAxis": "MATCH",
+    "fourWayRegressionCoordinationCounts": { "MATCH": 24, "R1": 0, "R2": 0, "nativeCrash": 0 },
+    "fourWayRegressionBaseAxis": "MATCH_EXCEPT_XRT1"
+  },
+
+  "independentRuntime": {
+    "runtimeUsedUnchanged": true,
+    "regression": "MATCH_EXCEPT_XRT1_R2x2",
+    "differential": { "MATCH": 118, "R1": 0, "R2": 2, "S1": 0, "S2": 0, "H1": 2, "C1": 1 },
+    "xrt1": {
+      "class": "R2",
+      "severity": "MEDIUM",
+      "fixtures": ["conversion-number-to-text", "conversion-text-to-number"],
+      "detail": "axiom_indep produces '1e-07' (contract: '1e-7') and accepts '1_000' as 1000 (contract: NaN). Reference 1.0.0-rc.1 matches docs/EXPRESSIONS.md#conversions exactly. Independent-runtime defect, pre-existing at 0.17 freeze (flagged PENDING for the independent-runtime maintainer). No reference change implicated; no rc.2.",
+      "blocking": false,
+      "blockingUnderStrictR2EqualsZero": true
+    },
+    "nativeOperationBoundary": "reconfirmed nonportable; independent runtime refuses it; not counted as a semantic mismatch"
+  },
+
+  "upgrade": {
+    "from017": "PASS",
+    "semanticMigrationRequiredSolelyDueTo1_0Version": false,
+    "delta017to10": "version strings only (one constructor default, package.json versions, conformance stamps, docs)"
+  },
+
+  "performance": {
+    "baselineRecorded": true,
+    "blockingPathology": false,
+    "leakSoak": "PASS",
+    "perf1": "LOW/INFO: createMemoryPersistence per-commit latency grows ~linearly (not O(n^2)) with an un-compacted revision log in one long-lived process; dev/test adapter; durable adapters unaffected"
+  },
+
+  "compatibility": {
+    "presentationOnlyChange": "COMPATIBLE",
+    "actionSemanticChange": "INCOMPATIBLE",
+    "constraintSemanticChange": "INCOMPATIBLE",
+    "serverIRUnchanged": "axiom.server.v9",
+    "authzUnchanged": "axiom.authz.v3",
+    "semanticFingerprintVersionUnchanged": true
+  },
+
+  "conformance": {
+    "rootTier": "46/46",
+    "externallyDistributable": true,
+    "permanentIdentity": "axiom.conformance.1.0",
+    "conf1": "INFO: axiom.conformance.1.0 documented in COMPATIBILITY.md but not a machine-readable key in conformance/manifest.json"
+  },
+
+  "diagnostics": { "auditComplete": true, "unknownEventIdCode": "IMPLEMENTATION_DEFINED", "unknownEventIdRefusal": "semantic" },
+  "cli": { "validation": "PASS", "cli1": "LOW/INFO: MODEL_LOAD_FAILED --json echoes the user-supplied file path resolved to absolute; no secret" },
+
+  "releaseArtifacts": {
+    "validatedPackedArtifacts": true,
+    "finalArtifactRule": "1.0.0 expected to differ from rc.1 by version string only; rebuild + re-run release:verify + consumer-test + tarball audit before npm publish"
+  },
+
+  "findings": {
+    "CRITICAL": 0, "HIGH": 0,
+    "MEDIUM": ["XRT-1 (R2, adjudicated non-blocking)", "API-1 (uncurated export surface, adjudicated accepted)", "PKG-1 (RESOLVED)"],
+    "LOW": ["TOT-1", "PERF-1", "CLI-1"],
+    "INFO": ["H1-1", "CONF-1", "DOC-1 (RESOLVED)", "INFO-2"]
+  },
+
+  "remainingReleaseBlockers": 0,
+  "remainingReleaseBlockersNote": "0 under the XRT-1 adjudication (independent-runtime defect vs a correct+shipped contract). If release policy enforces spec §28 R2=0 absolutely: 1 blocker (XRT-1), resolved by an axiom_indep conversion-grammar fix + four-way re-run, NOT by an rc.2.",
+
+  "verdict": "AXIOM 1.0 FINAL RC VALIDATION: PASS WITH NON-BLOCKING FINDINGS",
+  "releaseRecommendation": "AXIOM 1.0.0: READY FOR RELEASE",
+  "releaseReady": true,
+  "releaseReadyConditions": [
+    "maintainer accepts the XRT-1 disposition (independent Python runtime conversion-grammar defect; not a 1.0 artifact or contract defect; pre-existing at 0.17 freeze)",
+    "a final packed 1.0.0 candidate is rebuilt and re-run through release:verify + release:consumer-test + the tarball audit before npm publish (spec §45)"
+  ]
+}
