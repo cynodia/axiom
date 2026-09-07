@@ -114,7 +114,7 @@
     "contract": "axiom.server.v9",
     "id": "authz-conformance",
     "name": "Authorization Conformance",
-    "version": "0.16.0-alpha.4",
+    "version": "0.17.0-alpha.1",
     "entities": [
       {
         "id": "entity_user",

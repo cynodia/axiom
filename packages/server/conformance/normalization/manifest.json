@@ -1,0 +1,83 @@
+{
+  "conformance": "axiom.conformance.v11",
+  "baseContract": "axiom.server.v1",
+  "protocol": "axiom.protocol.v1",
+  "release": "0.17.0-alpha.1",
+  "description": "Portable Server IR admission / normalization conformance fixtures (axiom.conformance.v11, spec17 §15-§19, §62, §80). Each file carries a serialized Server IR and the required admission outcome: admissible, or rejected before any semantic execution with a stable SERVER_IR_* code and zero mutation. A conforming runtime performs its own structural admission and compares. Running one needs nothing from this implementation; the reference runner is runNormalizationConformanceFixture in @cynodia/axiom-server.",
+  "fixtures": [
+    {
+      "name": "valid-control",
+      "covers": [
+        "admission"
+      ],
+      "description": "The untampered compiled Server IR is admitted."
+    },
+    {
+      "name": "non-object-ir",
+      "covers": [
+        "admission",
+        "totality"
+      ],
+      "description": "A serialized Server IR that is not a JSON object is rejected."
+    },
+    {
+      "name": "non-array-required-collection",
+      "covers": [
+        "admission",
+        "totality"
+      ],
+      "description": "The `states` collection is an object rather than an array."
+    },
+    {
+      "name": "null-node-map-entry",
+      "covers": [
+        "admission",
+        "totality",
+        "F1-B"
+      ],
+      "description": "The `actions` map carries a `null` value under a present key."
+    },
+    {
+      "name": "primitive-node-map-entry",
+      "covers": [
+        "admission",
+        "totality",
+        "F1-B"
+      ],
+      "description": "The `actions` map carries the number `7` under a present key."
+    },
+    {
+      "name": "null-node-array-entry",
+      "covers": [
+        "admission",
+        "totality",
+        "F1-B"
+      ],
+      "description": "The `constraints` array carries a `null` element."
+    },
+    {
+      "name": "null-operation",
+      "covers": [
+        "admission",
+        "totality"
+      ],
+      "description": "An action carries a `null` element in its `operations` array."
+    },
+    {
+      "name": "non-normalized-extra-guard",
+      "covers": [
+        "normalization",
+        "F2"
+      ],
+      "description": "An action declares two guards but only one lowered precondition."
+    },
+    {
+      "name": "non-normalized-mismatched-guard",
+      "covers": [
+        "normalization",
+        "F2"
+      ],
+      "description": "An action`s preconditions[0] is a different expression from guards[0].condition."
+    }
+  ]
+}

@@ -11,8 +11,14 @@ export {
   SERVER_IR_CONTRACT,
   SERVER_IR_CONTRACTS,
   SERVER_IR_LATEST_CONTRACT,
+  SERVER_IR_ADMISSION_CODES,
+  ServerIRError,
+  assertAdmissibleServerIR,
+  serverIRStructuralProblems,
+  serverIRNormalizationProblems,
   PRINCIPAL,
 } from '@cynodia/axiom-core';
+export type { ServerIRAdmissionCode, ServerIRStructuralProblem } from '@cynodia/axiom-core';
 export * from './protocol.js';
 export * from './persistence.js';
 export * from './sqlite-persistence.js';
@@ -91,6 +97,7 @@ export * from './workflows.js';
 export * from './workflow-conformance.js';
 export * from './live-query-conformance.js';
 export * from './authorization-conformance.js';
+export * from './normalization-conformance.js';
 export * from './triggers.js';
 export * from './server.js';
 export * from './conformance-runner.js';

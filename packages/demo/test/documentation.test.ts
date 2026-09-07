@@ -249,6 +249,9 @@ test('every validation code is documented, and every documented code exists', ()
     // spec14pt3/pt4: the structured `WorkflowIRError.code` for tampered workflow IR — a
     // server-side error family, not a `VALIDATION_CODES` / `RUNTIME_DIAGNOSTIC_CODES` member.
     'WORKFLOW_INVALID_IR',
+    // spec17: the exported map of Server IR structural-admission codes, not a code itself.
+    // Its members ARE in SERVER_DIAGNOSTIC_CODES and are checked there.
+    'SERVER_IR_ADMISSION_CODES',
     // Integrations, effects, triggers and events (0.8): exported vocabulary, not codes.
     'INTEGRATION_OPERATION_MODES', 'RETRY_POLICY_KINDS', 'TRIGGER_KINDS',
     'TRIGGER_OVERLAP_POLICIES', 'LIFECYCLE_EVENTS', 'MAX_EVENT_DISPATCH_DEPTH',

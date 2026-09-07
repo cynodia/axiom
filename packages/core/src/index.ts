@@ -42,5 +42,6 @@ export * from './derive-edges.js';
 export * from './authority.js';
 export * from './ir.js';
 export * from './server-ir.js';
+export * from './server-ir-admission.js';
 export * from './authoring-schema.js';
 export * from './semantic-diff.js';

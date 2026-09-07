@@ -655,7 +655,55 @@ turn it into a working browser application whose generated JavaScript nobody rea
   targeted CLI recheck against the eventually-published artifact is required before
   0.16.0 stable packaging. Report: `AXIOM_0_16PT4_IMPLEMENTATION_REPORT.md`.
 
-Together, spec2–spec16pt4 are the authority on design decisions — **except where the
+* `specs/spec17.md` — the **0.17 independent runtime & cross-runtime conformance milestone**
+  (`0.17.0-alpha.1`): Axiom application semantics are defined by public, runtime-neutral
+  contracts, not by the TypeScript reference runtime. Primarily a conformance milestone —
+  **no new application-level semantic primitive, no new IR vocabulary**; Server IR stays
+  `axiom.server.v9`, `axiom.authz.v3`, `semanticFingerprint` unchanged for every graph. This
+  checkout lands **Phase B** — the two Phase A specification findings — plus the contract
+  consolidation the milestone requires. **F1-B** — serialized Server IR structural admission
+  is now **total** over untrusted input: `packages/core/src/server-ir-admission.ts`
+  (`serverIRStructuralProblems` / `serverIRNormalizationProblems` / `assertAdmissibleServerIR`,
+  pure, never-throwing, exported from `core`) and `createAxiomServer`'s new first step reject
+  a non-object document, a non-array required collection, or a `null` / primitive / non-object
+  where a semantic node or an `operation` belongs (in a node **map** — `actions`,
+  `integrationOperations`, `expressionDefs` — a node **array** — `entities`, `states`,
+  `constraints`, `queries`, `authorizationPolicies`, `readPolicies`, … — or an action's
+  `operations`, at any depth) with a thrown `ServerIRError` carrying `problems[]` (stable
+  `SERVER_IR_NOT_OBJECT` / `SERVER_IR_INVALID_COLLECTION` / `SERVER_IR_INVALID_NODE`, merged
+  into `SERVER_DIAGNOSTIC_CODES`), before any state read/write, provider call, effect, event
+  or workflow — never a native `TypeError`, never a partial start (spec17 §15-§19, §62, §80).
+  `workflows` keeps its own richer `WorkflowIRError` / `WORKFLOW_INVALID_IR` path (spec14pt3-pt6),
+  deliberately untouched. **F2** — the guard-normalization invariant is now explicit and
+  enforced: `ActionDef.guards` is authoring-level; compilation owns lowering it into aligned
+  `preconditions` / `failureModes` (`meaning(guards) == meaning(lowered)`); the authority
+  evaluates the normalized form and does **not** also execute `guards[]`. A serialized Server
+  IR whose guard semantics are not represented in the aligned executable form
+  (`guards.length` exceeds the lowered `preconditions.length`, or `preconditions[i]` is not
+  `guards[i].condition` — `canonicalJSON` equality) is refused fail-closed with
+  `SERVER_IR_NOT_NORMALIZED`; no silent lowering at execution time, no dropped guard, no
+  invented failure mode (spec17 §10-§14). The rule is consolidated into the **primary
+  contract** — `docs/AUTHORITY.md` gains load-bearing invariant 22 (**ADMISSION**) and a
+  `## Server IR admission` section; `docs/SEMANTIC_CONTRACT.md`, `docs/ACTIONS_TRANSACTIONS.md`
+  and `docs/AGENT_REFERENCE.md` state it where they already discuss guards / Server IR
+  (spec17 §66). **Runtime-neutral corpus** — new `axiom.conformance.v11` tier
+  `packages/server/conformance/normalization/` (9 fixtures, generator
+  `scripts/normalization-conformance.mjs` in `conformance:generate`, reference runner
+  `runNormalizationConformanceFixture` in `@cynodia/axiom-server`): each fixture carries a
+  serialized Server IR and the required admission outcome plus its **normative `semanticRule`
+  provenance**, not golden reference output (spec17 §58-§60, §68). `axiom.conformance.v10`
+  (0.16 AgentAPI/tooling tier) is untouched and remains the validated baseline (§69). New
+  tests: `packages/core/test/server-ir-admission.test.ts` (+12, totality over junk),
+  `packages/server/test/server-ir-admission.test.ts` (+21, admission gate + the v11 tier).
+  Full fast-tier suite green (1704 tests, up from 1671). **Not in this checkout, and stated
+  so:** the independent Python runtime and the cross-runtime differential/fuzz campaign
+  (spec17 §2, §63, §77-§79, §89), the machine-readable per-runtime capability declaration and
+  formal conformance result (§23, §88), Phase C capability expansion into the C1 domains
+  (§82), and the external D/E/S validation (§92) — all subsequent / out-of-repo phases. The
+  0.17 semantic freeze (§90, §95) is not claimed. Report:
+  `AXIOM_0_17_IMPLEMENTATION_REPORT.md`.
+
+Together, spec2–spec17 are the authority on design decisions — **except where the
 implementation already differs**. For existing behaviour the implementation is
 authoritative, and `docs/` describes the implementation.
 

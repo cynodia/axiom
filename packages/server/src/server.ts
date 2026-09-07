@@ -12,7 +12,10 @@ import {
   OPERATION,
   PRINCIPAL,
   RESOURCE,
+  SERVER_IR_ADMISSION_CODES,
   SERVER_IR_CONTRACTS,
+  ServerIRError,
+  assertAdmissibleServerIR,
   allowedInvocationSources,
   decideAuthorization,
   evaluateAuthorizationExpression,
@@ -162,6 +165,13 @@ export const SERVER_DIAGNOSTIC_CODES = {
   CONCURRENCY_CONFLICT: 'CONCURRENCY_CONFLICT',
   /** The request itself was malformed, or spoke an unknown protocol. */
   MALFORMED_REQUEST: 'MALFORMED_REQUEST',
+  /**
+   * The serialized Server IR handed to this authority is structurally invalid or not
+   * normalized (spec17 §15-§19, §80). Reported by `createAxiomServer` as a thrown
+   * `ServerIRError` before any semantic execution — no state, provider, effect, event or
+   * workflow is touched. Members mirror `core`'s `SERVER_IR_ADMISSION_CODES`.
+   */
+  ...SERVER_IR_ADMISSION_CODES,
   /** The authority could not be reached, or did not answer. */
   AUTHORITY_UNREACHABLE: 'AUTHORITY_UNREACHABLE',
   /** An external effect's adapter reported failure after exhausting its retry policy. */
@@ -599,6 +609,15 @@ function disclosable(diagnostic: RuntimeDiagnostic): RuntimeDiagnostic {
 
 
 export function createAxiomServer(options: AxiomServerOptions): AxiomServer {
+  // spec17 §17-§19, §80 F1-B / F2 — the totality boundary. Before the contract label is
+  // even read, a serialized Server IR that is not a JSON object, carries a `null` /
+  // primitive where a semantic node belongs, has a non-array required collection, or
+  // carries un-normalized action guards is refused with a structured `ServerIRError`
+  // (stable `SERVER_IR_*` codes) — never a native `TypeError`, never a silently skipped
+  // check, never a partial start. `workflows` keeps its own richer `WorkflowIRError` path
+  // below.
+  assertAdmissibleServerIR(options.ir);
+
   if (!(SERVER_IR_CONTRACTS as readonly string[]).includes(String(options.ir.contract))) {
     throw new Error(
       `Unsupported Server IR contract "${String(options.ir.contract)}"; this runtime executes ${SERVER_IR_CONTRACTS.join(', ')}`,

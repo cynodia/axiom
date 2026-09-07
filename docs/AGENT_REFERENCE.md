@@ -1,6 +1,6 @@
 # Agent reference
 
-Axiom 0.16.0-alpha.4. Compressed operational contract. Read this plus the `.d.ts`
+Axiom 0.17.0-alpha.1. Compressed operational contract. Read this plus the `.d.ts`
 declarations before authoring or modifying an Axiom application.
 
 Formal guarantees: [`SEMANTIC_CONTRACT.md`](SEMANTIC_CONTRACT.md). Mistakes that compile:
@@ -285,7 +285,11 @@ Absent `initialValue`, a state starts at the default for its type: `optional` �
 
 Prefer `guards: [{ condition, failureMode }]`. The older parallel `preconditions` /
 `failureModes` arrays align **by position** — `failureModes[2]` reports
-`preconditions[2]` — and the compiler normalizes `guards` into them.
+`preconditions[2]` — and the compiler normalizes `guards` into them. Compilation owns that
+lowering: a runtime evaluates the aligned `preconditions` / `failureModes` and does **not**
+also execute `guards[]`. An authority handed serialized Server IR whose guards are not
+represented in the lowered form rejects it fail-closed (`SERVER_IR_NOT_NORMALIZED`) — see
+[`AUTHORITY.md`](AUTHORITY.md#server-ir-admission).
 
 Lifecycle, exactly:
 
@@ -753,6 +757,16 @@ Boundary diagnostics: `UNKNOWN_SERVER_ACTION` `ARGUMENT_TYPE_MISMATCH` `AUTHORIZ
 `INVOCATION_SOURCE_NOT_ALLOWED` `CONCURRENCY_CONFLICT` `MALFORMED_REQUEST`
 `AUTHORITY_UNREACHABLE`, plus `SERVER_STATE_WRITE` and `REMOTE_ACTION_UNAVAILABLE` on the
 client.
+
+Serialized Server IR is structurally admitted before any execution (`createAxiomServer`
+throws `ServerIRError`, zero mutation): `SERVER_IR_NOT_OBJECT`,
+`SERVER_IR_INVALID_COLLECTION` (a required collection is not its array/object container),
+`SERVER_IR_INVALID_NODE` (a `null` / primitive where a semantic node or operation belongs —
+a present key does not make an invalid value a node), `SERVER_IR_NOT_NORMALIZED` (guards not
+represented in the lowered `preconditions` / `failureModes`). Total over untrusted input —
+never a native exception. `serverIRStructuralProblems` / `serverIRNormalizationProblems`
+(`@cynodia/axiom-core`) compute the same decision for tooling. `workflows` keep the richer
+`WorkflowIRError` path.
 
 ## SUBSCRIPTIONS AND STORAGE
 

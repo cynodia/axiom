@@ -1,6 +1,6 @@
 # Authority
 
-Axiom 0.16.0-alpha.4. How an application crosses the trust boundary.
+Axiom 0.17.0-alpha.1. How an application crosses the trust boundary.
 
 Until 0.5.x an Axiom application executed locally. 0.6 adds an **authority**: a generic
 runtime that owns state, decides mutations and persists them. The same semantic graph
@@ -40,6 +40,7 @@ describes both halves, so there is no backend to write.
 19. **EVENT** — an event is a typed fact, validated against its declared payload type before any action sees it; an action is where work happens. See [External events](#external-events).
 20. **SECRET** — integration credentials live in host configuration, never in `ApplicationGraph`. See [External systems](#external-systems).
 21. **INVOCATION SOURCE** — a system-originated invocation (trigger, event, effect outcome) and an anonymous client request are distinct authoritative facts; a client cannot forge the former, and an action may restrict which it accepts independently of caller identity. See [Invocation source](#invocation-source).
+22. **ADMISSION** — serialized Server IR is structurally admitted before any semantic execution: a malformed semantic-node entry or a non-normalized guard representation is refused fail-closed with a structured `SERVER_IR_*` diagnostic, never a native exception and never a partial run. See [Server IR admission](#server-ir-admission).
 
 ## Authority and persistence are different questions
 
@@ -151,6 +152,51 @@ document**, computed from the document rather than asserted: see
 
 Guards are normalized into aligned `preconditions` / `failureModes`, exactly as in the
 client IR, so an authority that read one and not the other cannot silently skip a check.
+See [Server IR admission](#server-ir-admission) for the structural and normalization
+requirements an authority enforces before it executes anything.
+
+## Server IR admission
+
+An authority is handed **serialized** Server IR — JSON that a compiler, an agent, a network
+peer or a persisted artifact produced. A TypeScript type is not proof of runtime shape, so
+`createAxiomServer` performs a total structural admission **before any semantic execution**:
+no state is read or written, no provider is touched, no effect is created, no event is
+dispatched, no workflow advances. A malformed document is refused with a thrown
+`ServerIRError` carrying `problems[]` — stable `code` + `path` + `message` — never a native
+`TypeError`, panic or partial start. The codes are `SERVER_IR_ADMISSION_CODES` in
+`@cynodia/axiom-core`, and `serverIRStructuralProblems(ir)` / `serverIRNormalizationProblems(ir)`
+compute them for any tool that needs the same decision without constructing an authority.
+
+### Structural validity
+
+- The document MUST be a JSON object (`SERVER_IR_NOT_OBJECT`).
+- A required collection present but not the container its contract defines — `states`,
+  `entities`, `constraints`, `transitionConstraints`, `observableStateIds` as arrays;
+  `actions`, `fields` as objects — is refused (`SERVER_IR_INVALID_COLLECTION`).
+- Every entry of a semantic-node collection MUST be a JSON object carrying a string `id`. A
+  `null`, a primitive, or an array where a node belongs is refused (`SERVER_IR_INVALID_NODE`)
+  — **a key being present does not make an invalid value a valid node**. This covers the
+  node maps (`actions`, `integrationOperations`, `expressionDefs`), the node arrays
+  (`entities`, `states`, `constraints`, `queries`, `authorizationPolicies`, `readPolicies`,
+  and the rest) and the `operations` array inside an action, at any depth. `workflows` keeps
+  its own richer admission path (`WorkflowIRError` / `WORKFLOW_INVALID_IR`).
+
+### Guard normalization
+
+`ActionDef.guards` is an **authoring-level** representation. Compilation owns lowering it
+into aligned executable `preconditions` / `failureModes`, preserving meaning and declaration
+order: `meaning(guards) == meaning(lowered preconditions + failureModes)` for every
+successfully compiled action. The authority evaluates the **normalized** preconditions /
+failure modes and does **not** independently execute `guards[]` in addition — there is one
+executable action lifecycle, not two.
+
+An authority receiving Server IR in which an action's guard semantics are not represented in
+the aligned executable form — `guards.length` exceeds the lowered `preconditions.length`, or
+`preconditions[i]` is not `guards[i].condition` — MUST reject it fail-closed
+(`SERVER_IR_NOT_NORMALIZED`): no action execution, no mutation, no external effect. It MUST
+NOT lower guards at execution time, drop the unmatched guards, invent a missing failure
+mode, or execute the action while skipping the check. The runtime either executes valid
+normalized semantics or refuses the input.
 
 ## Client IR
 
@@ -470,6 +516,10 @@ does for a local failure.
 | `AUTHORIZATION_DENIED` | The caller may not invoke this action / read this query / start or cancel this workflow, or the rule could not be evaluated. spec15 Phase C covers `ActionDef.authorizationPolicy`, Phase D `QueryDef.authorizationPolicy` (`query.read` — including a live query whose caller is revoked mid-subscription, Phase F, delivered as a live-query error message carrying this code), Phase E `WorkflowDef.startPolicy` / `instanceAccessPolicy` (`workflow.start` / `.cancel`); `details.operation` names the canonical operation and `details.reason` is a non-secret machine reason (`policy-denied` / `policy-error` / `legacy-denied` / `legacy-error` / `owner-mismatch`). A denied `workflow.inspect` / `workflow.history` returns nothing instead (no existence leak). |
 | `CONCURRENCY_CONFLICT` | Another transaction committed the same state first. Nothing was applied. |
 | `MALFORMED_REQUEST` | The request was not an Axiom semantic request, or spoke an unknown protocol. |
+| `SERVER_IR_NOT_OBJECT` | The serialized Server IR handed to `createAxiomServer` is not a JSON object. Thrown as `ServerIRError` at construction, before any semantic execution (spec17 §17). |
+| `SERVER_IR_INVALID_COLLECTION` | A required Server IR collection is present but is not the array / object container its contract defines (e.g. `states` as an object). Refused structurally (spec17 §15, §62). |
+| `SERVER_IR_INVALID_NODE` | An entry of a semantic-node collection — a node map, a node array, or an action's `operations` — is `null`, a primitive or otherwise not a JSON object with a string `id`. A present key does not make an invalid value a valid node (spec17 §16, §80 F1-B). |
+| `SERVER_IR_NOT_NORMALIZED` | An executable action's authoring `guards` are not represented in the aligned, lowered `preconditions` / `failureModes` (`guards.length` exceeds the lowered count, or a lowered precondition does not match its guard's condition). The authority refuses fail-closed rather than execute the action while skipping the unmatched check (spec17 §10-§14, §80 F2). |
 | `AUTHORITY_UNREACHABLE` | The authority could not be reached, timed out, or answered with a transport error. |
 | `EFFECT_FAILED` | An external effect's adapter reported failure after exhausting its retry policy. |
 | `TRIGGER_INVOCATION_FAILED` | A trigger's target action reported failure, or its arguments failed to evaluate. |
@@ -660,6 +710,26 @@ resolver.
 Every fixture is executed against the reference runtime by this repository's own test suite,
 and its expectations are exhaustive — a fixture that says which states changed must name all
 of them and no others. No fixture is permitted to disagree with the shipped runtime.
+
+### Runtime-neutral sub-tiers
+
+Later releases add sub-tiers under `conformance/<area>/`, each with its own manifest,
+`conformance` version and reference runner, so a runtime can claim a profile without
+claiming the whole suite:
+
+| Directory | Version | Runner | Covers |
+| --- | --- | --- | --- |
+| `conformance/queries/` | `axiom.conformance.v4` | `runQueryConformanceFixture` | `QueryDef` semantics |
+| `conformance/migrations/` | `axiom.conformance.v5` | `runMigrationConformanceFixture` | schema migrations |
+| `conformance/distributed/` | `axiom.conformance.v6` | `runCoordinationConformanceSuite` | coordination primitives |
+| `conformance/live/` | `axiom.conformance.v7` | `runLiveQueryConformanceFixture` | live queries |
+| `conformance/workflow/` | `axiom.conformance.v8` | `runWorkflowConformanceFixture` | `WorkflowDef` execution |
+| `conformance/authorization/` | `axiom.conformance.v9` | `runAuthorizationConformanceFixture` | authorization decisions |
+| `conformance/normalization/` | `axiom.conformance.v11` | `runNormalizationConformanceFixture` | Server IR structural admission + guard normalization (spec17 §15-§19, §62, §80) |
+
+Each fixture records its **normative provenance** (`semanticRule`) rather than being golden
+against reference-runtime output, so both the reference runtime and an independent runtime
+are tested against the same expectation.
 
 ## Machine-readable contracts
 

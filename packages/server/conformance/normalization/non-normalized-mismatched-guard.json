@@ -1,0 +1,112 @@
+{
+  "conformance": "axiom.conformance.v11",
+  "name": "non-normalized-mismatched-guard",
+  "covers": [
+    "normalization",
+    "F2"
+  ],
+  "semanticRule": "spec17 §12 — a lowered precondition that does not match its guard condition means the executable form omits a declared check.",
+  "description": "An action`s preconditions[0] is a different expression from guards[0].condition.",
+  "serverIR": {
+    "contract": "axiom.server.v1",
+    "id": "normalization-conformance",
+    "name": "Normalization Conformance",
+    "version": "0.17.0-alpha.1",
+    "entities": [],
+    "fields": {},
+    "states": [
+      {
+        "id": "state_count",
+        "kind": "state",
+        "name": "count",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "number"
+        },
+        "initialValue": 0
+      }
+    ],
+    "actions": {
+      "action_bump": {
+        "id": "action_bump",
+        "kind": "action",
+        "name": "bump",
+        "parameters": [
+          {
+            "id": "param_amount",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ],
+        "guards": [
+          {
+            "condition": {
+              "kind": "binary",
+              "operator": "gt",
+              "left": {
+                "kind": "ref",
+                "targetId": "param_amount"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 0
+              }
+            },
+            "failureMode": {
+              "code": "amount-not-positive",
+              "message": "The amount must be above zero."
+            }
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [
+          {
+            "kind": "literal",
+            "value": true
+          }
+        ],
+        "failureModes": [
+          {
+            "code": "amount-not-positive",
+            "message": "The amount must be above zero."
+          }
+        ]
+      }
+    },
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_count"
+    ]
+  },
+  "expect": {
+    "admissible": false,
+    "admissionCodes": [
+      "SERVER_IR_NOT_NORMALIZED"
+    ]
+  }
+}

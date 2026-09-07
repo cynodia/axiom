@@ -1,0 +1,123 @@
+{
+  "conformance": "axiom.conformance.v11",
+  "name": "null-node-array-entry",
+  "covers": [
+    "admission",
+    "totality",
+    "F1-B"
+  ],
+  "semanticRule": "spec17 §16, §62 — a `null` entry in a semantic-node array collection is a structured diagnostic.",
+  "description": "The `constraints` array carries a `null` element.",
+  "serverIR": {
+    "contract": "axiom.server.v1",
+    "id": "normalization-conformance",
+    "name": "Normalization Conformance",
+    "version": "0.17.0-alpha.1",
+    "entities": [],
+    "fields": {},
+    "states": [
+      {
+        "id": "state_count",
+        "kind": "state",
+        "name": "count",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "number"
+        },
+        "initialValue": 0
+      }
+    ],
+    "actions": {
+      "action_bump": {
+        "id": "action_bump",
+        "kind": "action",
+        "name": "bump",
+        "parameters": [
+          {
+            "id": "param_amount",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ],
+        "guards": [
+          {
+            "condition": {
+              "kind": "binary",
+              "operator": "gt",
+              "left": {
+                "kind": "ref",
+                "targetId": "param_amount"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 0
+              }
+            },
+            "failureMode": {
+              "code": "amount-not-positive",
+              "message": "The amount must be above zero."
+            }
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [
+          {
+            "kind": "binary",
+            "operator": "gt",
+            "left": {
+              "kind": "ref",
+              "targetId": "param_amount"
+            },
+            "right": {
+              "kind": "literal",
+              "value": 0
+            }
+          }
+        ],
+        "failureModes": [
+          {
+            "code": "amount-not-positive",
+            "message": "The amount must be above zero."
+          }
+        ]
+      }
+    },
+    "constraints": [
+      null
+    ],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_count"
+    ]
+  },
+  "expect": {
+    "admissible": false,
+    "admissionCodes": [
+      "SERVER_IR_INVALID_NODE"
+    ]
+  }
+}

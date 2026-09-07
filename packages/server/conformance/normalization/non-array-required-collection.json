@@ -1,0 +1,108 @@
+{
+  "conformance": "axiom.conformance.v11",
+  "name": "non-array-required-collection",
+  "covers": [
+    "admission",
+    "totality"
+  ],
+  "semanticRule": "spec17 §15, §62 — a required collection present but not an array is rejected.",
+  "description": "The `states` collection is an object rather than an array.",
+  "serverIR": {
+    "contract": "axiom.server.v1",
+    "id": "normalization-conformance",
+    "name": "Normalization Conformance",
+    "version": "0.17.0-alpha.1",
+    "entities": [],
+    "fields": {},
+    "states": {},
+    "actions": {
+      "action_bump": {
+        "id": "action_bump",
+        "kind": "action",
+        "name": "bump",
+        "parameters": [
+          {
+            "id": "param_amount",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ],
+        "guards": [
+          {
+            "condition": {
+              "kind": "binary",
+              "operator": "gt",
+              "left": {
+                "kind": "ref",
+                "targetId": "param_amount"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 0
+              }
+            },
+            "failureMode": {
+              "code": "amount-not-positive",
+              "message": "The amount must be above zero."
+            }
+          }
+        ],
+        "operations": [
+          {
+            "kind": "set",
+            "target": {
+              "kind": "state",
+              "stateId": "state_count"
+            },
+            "value": {
+              "kind": "binary",
+              "operator": "add",
+              "left": {
+                "kind": "ref",
+                "targetId": "state_count"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 1
+              }
+            }
+          }
+        ],
+        "preconditions": [
+          {
+            "kind": "binary",
+            "operator": "gt",
+            "left": {
+              "kind": "ref",
+              "targetId": "param_amount"
+            },
+            "right": {
+              "kind": "literal",
+              "value": 0
+            }
+          }
+        ],
+        "failureModes": [
+          {
+            "code": "amount-not-positive",
+            "message": "The amount must be above zero."
+          }
+        ]
+      }
+    },
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_count"
+    ]
+  },
+  "expect": {
+    "admissible": false,
+    "admissionCodes": [
+      "SERVER_IR_INVALID_COLLECTION"
+    ]
+  }
+}

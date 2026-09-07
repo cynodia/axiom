@@ -1,0 +1,46 @@
+{
+  "conformance": "axiom.conformance.v11",
+  "name": "null-node-map-entry",
+  "covers": [
+    "admission",
+    "totality",
+    "F1-B"
+  ],
+  "semanticRule": "spec17 §16, §80 F1-B — a `null` entry in a semantic-node map is a structured diagnostic, not a native TypeError.",
+  "description": "The `actions` map carries a `null` value under a present key.",
+  "serverIR": {
+    "contract": "axiom.server.v1",
+    "id": "normalization-conformance",
+    "name": "Normalization Conformance",
+    "version": "0.17.0-alpha.1",
+    "entities": [],
+    "fields": {},
+    "states": [
+      {
+        "id": "state_count",
+        "kind": "state",
+        "name": "count",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "number"
+        },
+        "initialValue": 0
+      }
+    ],
+    "actions": {
+      "action_bump": null
+    },
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_count"
+    ]
+  },
+  "expect": {
+    "admissible": false,
+    "admissionCodes": [
+      "SERVER_IR_INVALID_NODE"
+    ]
+  }
+}

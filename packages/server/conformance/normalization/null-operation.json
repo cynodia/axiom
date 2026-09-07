@@ -1,0 +1,102 @@
+{
+  "conformance": "axiom.conformance.v11",
+  "name": "null-operation",
+  "covers": [
+    "admission",
+    "totality"
+  ],
+  "semanticRule": "spec17 §14, §62 — a `null` operation is a structured diagnostic, never a value silently dropped at execution.",
+  "description": "An action carries a `null` element in its `operations` array.",
+  "serverIR": {
+    "contract": "axiom.server.v1",
+    "id": "normalization-conformance",
+    "name": "Normalization Conformance",
+    "version": "0.17.0-alpha.1",
+    "entities": [],
+    "fields": {},
+    "states": [
+      {
+        "id": "state_count",
+        "kind": "state",
+        "name": "count",
+        "authority": "server",
+        "valueType": {
+          "kind": "primitive",
+          "primitive": "number"
+        },
+        "initialValue": 0
+      }
+    ],
+    "actions": {
+      "action_bump": {
+        "id": "action_bump",
+        "kind": "action",
+        "name": "bump",
+        "parameters": [
+          {
+            "id": "param_amount",
+            "valueType": {
+              "kind": "primitive",
+              "primitive": "number"
+            },
+            "required": true
+          }
+        ],
+        "guards": [
+          {
+            "condition": {
+              "kind": "binary",
+              "operator": "gt",
+              "left": {
+                "kind": "ref",
+                "targetId": "param_amount"
+              },
+              "right": {
+                "kind": "literal",
+                "value": 0
+              }
+            },
+            "failureMode": {
+              "code": "amount-not-positive",
+              "message": "The amount must be above zero."
+            }
+          }
+        ],
+        "operations": [
+          null
+        ],
+        "preconditions": [
+          {
+            "kind": "binary",
+            "operator": "gt",
+            "left": {
+              "kind": "ref",
+              "targetId": "param_amount"
+            },
+            "right": {
+              "kind": "literal",
+              "value": 0
+            }
+          }
+        ],
+        "failureModes": [
+          {
+            "code": "amount-not-positive",
+            "message": "The amount must be above zero."
+          }
+        ]
+      }
+    },
+    "constraints": [],
+    "transitionConstraints": [],
+    "observableStateIds": [
+      "state_count"
+    ]
+  },
+  "expect": {
+    "admissible": false,
+    "admissionCodes": [
+      "SERVER_IR_INVALID_NODE"
+    ]
+  }
+}

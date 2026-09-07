@@ -1,6 +1,6 @@
 # Actions and transactions
 
-Axiom 0.16.0-alpha.4. An action is behavior expressed as data, executed as a transaction.
+Axiom 0.17.0-alpha.1. An action is behavior expressed as data, executed as a transaction.
 
 ```ts
 {
@@ -39,6 +39,17 @@ result.diagnostics[0].details  // { preconditionIndex: 2, failureMode: 'insuffic
 ```
 
 `actionGuards(action)` returns the conditions however they were written.
+
+**Compilation owns guard lowering, and there is one executable lifecycle.** `guards` is an
+authoring-level representation. `compileToIR` and `compileToServerIR` lower it into aligned
+`preconditions` / `failureModes` preserving meaning and declaration order —
+`meaning(guards) == meaning(lowered preconditions + failureModes)` for every compiled
+action. A runtime — client or authority — evaluates the **normalized** preconditions /
+failure modes; it does **not** also evaluate `guards[]` on top. An authority handed
+serialized Server IR whose guard semantics are not represented in the aligned executable
+form rejects it fail-closed (`SERVER_IR_NOT_NORMALIZED`) rather than lowering at execution
+time or skipping the unmatched check — see
+[Server IR admission](./AUTHORITY.md#server-ir-admission).
 
 ### Guards evaluate in order, and the first failure stops
 

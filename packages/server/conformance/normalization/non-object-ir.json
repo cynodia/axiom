@@ -1,0 +1,17 @@
+{
+  "conformance": "axiom.conformance.v11",
+  "name": "non-object-ir",
+  "covers": [
+    "admission",
+    "totality"
+  ],
+  "semanticRule": "spec17 §17-§18, §62 — a non-object serialized Server IR fails structurally, never as a native exception.",
+  "description": "A serialized Server IR that is not a JSON object is rejected.",
+  "serverIR": null,
+  "expect": {
+    "admissible": false,
+    "admissionCodes": [
+      "SERVER_IR_NOT_OBJECT"
+    ]
+  }
+}

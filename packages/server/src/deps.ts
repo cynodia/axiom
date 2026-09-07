@@ -68,6 +68,8 @@ export type {
   WorkflowBinding,
   WorkflowDuration,
   WorkflowStructuralProblem,
+  ServerIRAdmissionCode,
+  ServerIRStructuralProblem,
 } from '@cynodia/axiom-core';
 
 export type {
@@ -159,4 +161,9 @@ export {
   subscriptionQueueLimit,
   subscriptionReconnectPolicy,
   subscriptionSourceName,
+  SERVER_IR_ADMISSION_CODES,
+  ServerIRError,
+  assertAdmissibleServerIR,
+  serverIRStructuralProblems,
+  serverIRNormalizationProblems,
 } from '@cynodia/axiom-core';
