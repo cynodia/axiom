@@ -32,8 +32,10 @@ documentation above was missed.
 Shorter forms of the same routing: [`AGENTS.md`](AGENTS.md) and [`llms.txt`](llms.txt), both
 at this package's root.
 
-**Status: experimental / alpha.** The API may change between alpha releases. The
-documentation in `docs/` describes this exact version, `1.0.0-rc.1`.
+**Status: stable — 1.0.0.** The portable semantic contract is frozen (Axiom 0.17) and the
+public API follows the `1.x` compatibility policy in
+[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md). The documentation in `docs/` describes
+this exact version, `1.0.0`.
 
 ## Installation
 
@@ -43,11 +45,10 @@ npm install @cynodia/axiom-ui         # semantic UI authoring patterns (build ti
 npm install @cynodia/axiom-server     # only if the application has an authority
 ```
 
-Every release of this project is a pre-release and npm's `latest` tag points at it, so the
-plain command above installs the current version. **There is no `alpha` dist-tag** — the tag
-was removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` now
-fails with a 404. Pin the exact version instead when one is needed:
-`npm install @cynodia/axiom@1.0.0-rc.1`.
+npm's `latest` tag points at the current release, so the plain command above installs it.
+**There is no `alpha` dist-tag** — the tag was removed once it stopped tracking releases,
+and `npm install @cynodia/axiom@alpha` now fails with a 404. Pin the exact version instead
+when one is needed: `npm install @cynodia/axiom@1.0.0`.
 
 These are ES modules compiled to ES2022; import them with `import`, not `require`.
 `@cynodia/axiom-cli` (`npm install -g @cynodia/axiom-cli`) publishes the `axiom` executable

@@ -759,6 +759,22 @@ turn it into a working browser application whose generated JavaScript nobody rea
     accidental-export removal also outstanding (spec §8-§9). Reports:
     `AXIOM_1_0_RELEASE_HARDENING_REPORT.md`, `reports/axiom-1.0-release-summary.json`,
     `reports/1.0-*.md`.
+  * **`XRT-1` closed** (independent-runtime-only): the independent Python runtime
+    `axiom_indep` (`~/src/asktech/axiom-tests/test17/independent-runtime/`) diverged from
+    the frozen conversion grammar on two cases — `1e-7 → "1e-07"` and `"1_000" → 1000`.
+    Fixed in `axiom_indep/values.py` (rule-based: `_js_number_to_string` reimplemented as
+    ECMAScript `Number::toString` radix-10; `to_number` validates the canonical-decimal
+    grammar before `float()`), new `conversion_regression.py` guard. **Reference repo: 0
+    `packages/*/src` changes.** Cross-runtime differential now `MATCH 120, R1 0, R2 0`;
+    four-way distributed `24/24 MATCH`. Record: `reports/AXIOM_1_0_XRT1_CLOSURE.md`.
+  * **Promoted to `1.0.0` stable.** `scripts/version-set.mjs` and `scripts/publish.mjs`
+    relaxed to accept a `1.x+` release with no pre-release suffix (a bare `0.x` is still
+    refused); `npm run version:set 1.0.0` (133 files); package/root/facade README status
+    lines changed from "experimental / alpha" to "stable — 1.0.0" pointing at
+    `docs/COMPATIBILITY.md`. **No `packages/*/src` change**; Server IR `axiom.server.v9`,
+    `axiom.authz.v3`, `semanticFingerprint` unchanged; full fast-tier suite green (1707);
+    `release:pack` / `release:verify` / `release:probe` / `release:consumer-test` all pass
+    at `1.0.0`. `release:publish` is the remaining deliberate manual step.
 
 Together, spec2–spec17 are the authority on design decisions — **except where the
 implementation already differs**. For portable semantic meaning the public contract is
@@ -985,11 +1001,12 @@ npm run release:dist-tag       # only to move a tag by hand
 ```
 
 **One publish sets one tag.** `npm publish` accepts a single `--tag`, so maintaining a
-second one costs another registry call per package — whichever order you choose. Every
-version of this project is a pre-release, so a separate `alpha` tag would only ever point
-where `latest` already points and would carry no information. `release:publish` therefore
-publishes as `latest` and nothing follows it; the pre-release signal is the version string
-and each README's status line.
+second one costs another registry call per package — whichever order you choose. Through
+0.x every version was a pre-release and a separate `alpha` tag would only ever point where
+`latest` already points; from `1.0.0` the line is stable and `latest` is the release.
+Either way a *second* tag carries no information for the extra round trip. `release:publish`
+therefore publishes as `latest` and nothing follows it; before `1.0.0` the pre-release
+signal was the version string and each README's status line.
 
 Note that npm claims `latest` on a package's first publish whatever `--tag` says, and will
 not let it be deleted — so `latest` exists regardless. Publishing to it directly is simply
@@ -1016,8 +1033,9 @@ directory from the tarballs alone — no workspace links, no path aliases, no re
 imports into the repo — and runs a Counter application written against the public API. If
 you change what a package exports, that test is what proves an outside consumer can still
 use it. `release:publish` additionally requires a clean git tree (`--allow-dirty` to
-override), `npm whoami` to be `cynodia`, and a pre-release version, and publishes the
-verified tarballs as `latest` — see **One publish sets one tag** above.
+override), `npm whoami` to be `cynodia`, and either a pre-release version or a `1.x+` stable
+version (a bare `0.x` is still refused), and publishes the verified tarballs as `latest` —
+see **One publish sets one tag** above.
 
 **Two-factor authentication.** The npm account has 2FA, so publishing *and* moving a
 dist-tag are both write operations that need it. Let npm authenticate on its own terms:

@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom-cli",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "description": "Command line tools for inspecting, validating and serving Axiom applications.",
   "license": "MIT",
   "author": "AskTech AS",
@@ -34,10 +34,10 @@
     "axiom": "./dist/index.js"
   },
   "dependencies": {
-    "@cynodia/axiom-core": "1.0.0-rc.1",
-    "@cynodia/axiom-compiler": "1.0.0-rc.1",
-    "@cynodia/axiom-server": "1.0.0-rc.1",
-    "@cynodia/axiom-agent-api": "1.0.0-rc.1"
+    "@cynodia/axiom-core": "1.0.0",
+    "@cynodia/axiom-compiler": "1.0.0",
+    "@cynodia/axiom-server": "1.0.0",
+    "@cynodia/axiom-agent-api": "1.0.0"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",

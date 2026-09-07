@@ -1,6 +1,6 @@
 # Semantic contract
 
-Axiom 1.0.0-rc.1. Runtime guarantees, stated formally. This file defines behavior; it
+Axiom 1.0.0. Runtime guarantees, stated formally. This file defines behavior; it
 does not teach.
 
 `MUST` / `MUST NOT` describe guaranteed behavior. `MAY` describes a documented option.

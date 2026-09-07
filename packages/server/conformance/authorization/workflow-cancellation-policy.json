@@ -109,7 +109,7 @@
     "contract": "axiom.server.v9",
     "id": "authz-conformance",
     "name": "Authorization Conformance",
-    "version": "1.0.0-rc.1",
+    "version": "1.0.0",
     "entities": [
       {
         "id": "entity_user",

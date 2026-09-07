@@ -1,6 +1,6 @@
 # Graph model
 
-Axiom 1.0.0-rc.1. The `ApplicationGraph` is the authoritative representation of an
+Axiom 1.0.0. The `ApplicationGraph` is the authoritative representation of an
 application. Everything else — the IR, the page, the DOM — is derived from it and is never
 edited.
 

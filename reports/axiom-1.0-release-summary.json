@@ -26,30 +26,38 @@
   "upgradeValidation": "DESIGNED_NOT_EXECUTED",
   "releaseArtifactValidation": "NOT_RUN",
   "rcProduced": true,
-  "rcTestedFromPackedArtifacts": false,
-  "independentRuntimeRegression": "NOT_RUN",
-  "distributedFourWayRegression": "NOT_RUN",
+  "note": "This file is the RC-prep snapshot; the Final RC Validation campaign gate ledger is reports/1.0-findings.md (authoritative). Fields below updated only for the XRT-1 closure.",
+  "independentRuntimeRegression": {
+    "baseAxis": "MATCH 120 / R1 0 / R2 0 / S1 0 / S2 0",
+    "harness": "axiom-tests/test-rc1/xruntime/differential.mjs vs @cynodia/axiom-server@1.0.0-rc.1 (black box) + axiom_indep",
+    "note": "was MATCH 118 / R2 2 (XRT-1); independent-runtime-only fix landed"
+  },
+  "distributedFourWayRegression": "MATCH 24/24 (coordination axis) / R1 0 / R2 0 / crash 0",
+  "xrt1": {
+    "status": "RESOLVED — INDEPENDENT RUNTIME DEFECT FIXED",
+    "referenceRepoChanges": 0,
+    "contractChanges": 0,
+    "fixtureChanges": 0,
+    "targetCases": { "1e-7 -> text": "\"1e-7\"", "\"1_000\" -> number": "NaN" },
+    "record": "reports/AXIOM_1_0_XRT1_CLOSURE.md"
+  },
   "findings": {
     "SEMANTIC": 0,
     "SEC_CRITICAL": 0,
     "SEC_HIGH": 0,
-    "PKG_MEDIUM": 1,
-    "PKG_MEDIUM_fixed": 1,
-    "campaignBacklogItems": 12
+    "MEDIUM_XRT1": "RESOLVED",
+    "MEDIUM_API1": "accepted (additive-safe)",
+    "MEDIUM_PKG1": "resolved"
   },
-  "remainingReleaseBlockers": [
-    "dedicated authorization/security audit (spec §24-26, §64-65)",
-    "totality soak + deterministic fuzz harness with seed ledger (spec §22-23)",
-    "provider contract hardening + failure-injection campaign (spec §27-29)",
-    "durability/distributed/fencing hardening at soak counts + SIGKILL campaign (spec §30-40, §66-67)",
-    "per-symbol public API classification + accidental-export removal (spec §8-9)",
-    "performance baseline + resource/leak characterization (spec §55-59)",
-    "installation matrix + 5 audience consumer projects + tarball/provenance audit (spec §50-54, §84-85)",
-    "RC validation from packed artifacts (spec §78, §84)",
-    "cross-runtime + 4-way distributed regression MATCH with the independent Python runtime (spec §79-82)",
+  "remainingBeforePublish": [
+    "build final 1.0.0 tarballs",
+    "npm run release:verify",
+    "npm run release:consumer-test",
+    "tarball / provenance audit",
     "external D/E/S validation (spec §92)"
   ],
   "releaseReady": false,
-  "freezeStatement": "AXIOM 0.17 SEMANTIC CONTRACT: FROZEN — preserved unchanged by this pass",
-  "conclusion": "AXIOM 1.0 RELEASE HARDENING: IN PROGRESS — RC PRODUCED"
+  "releaseBlockers": 0,
+  "freezeStatement": "AXIOM 0.17 SEMANTIC CONTRACT: FROZEN — preserved unchanged",
+  "conclusion": "XRT-1 RESOLVED; 1.0.0 may proceed to final packed-artifact verification"
 }

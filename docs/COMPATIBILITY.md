@@ -1,6 +1,6 @@
 # Compatibility and the 1.0 contract
 
-Axiom 1.0.0-rc.1. **Normative.** This document states what Axiom 1.0 guarantees across the
+Axiom 1.0.0. **Normative.** This document states what Axiom 1.0 guarantees across the
 `1.x` line and how those guarantees are allowed to change.
 
 ## Axiom 1.0 portable semantics ARE the frozen 0.17 semantic contract

@@ -1,6 +1,6 @@
 # Distributed authority
 
-*This document describes Axiom `1.0.0-rc.1`.*
+*This document describes Axiom `1.0.0`.*
 
 The authoritative runtime (`docs/AUTHORITY.md`) may run as **more than one process at the
 same time**, over one shared persistence provider, without any change to the

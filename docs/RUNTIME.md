@@ -1,6 +1,6 @@
 # Runtime
 
-Axiom 1.0.0-rc.1. The runtime executes an `ApplicationIR`. It is domain-independent: it
+Axiom 1.0.0. The runtime executes an `ApplicationIR`. It is domain-independent: it
 contains no knowledge of any application.
 
 ## Constructing

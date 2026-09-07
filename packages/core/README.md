@@ -3,7 +3,7 @@
 Part of [Axiom](https://github.com/cynodia/axiom), an AI-native semantic web application
 framework.
 
-**Status: experimental / alpha.** The API may change between alpha releases.
+**Status: stable (1.0.0).** The public API and portable semantics follow the 1.x compatibility policy (`docs/COMPATIBILITY.md`, shipped in @cynodia/axiom).
 
 The Application Graph and its semantic model: nodes, fields, structured types,
 expressions, **locations** (addressable writable positions), edge derivation, validation

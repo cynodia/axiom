@@ -1,6 +1,6 @@
 # Storage and blobs
 
-Axiom 1.0.0-rc.1. How an application stores, references, serves and deletes binary data —
+Axiom 1.0.0. How an application stores, references, serves and deletes binary data —
 an attachment, a document, a photograph, a diagnostic log — with no filesystem path, no
 upload route and no download route anywhere in it.
 

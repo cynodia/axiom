@@ -49,7 +49,7 @@
     "contract": "axiom.server.v8",
     "id": "workflow-conformance",
     "name": "Workflow Conformance",
-    "version": "1.0.0-rc.1",
+    "version": "1.0.0",
     "entities": [
       {
         "id": "entity_pay",

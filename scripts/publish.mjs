@@ -54,10 +54,15 @@ for (const { directory, name } of publishable) {
 }
 console.log(`Releasing ${version} under the "${tag}" tag.`);
 
-// 2. This project has no stable line yet, so a version without a pre-release suffix is
-//    almost certainly a mistake rather than a deliberate 1.0.
-if (!/-(alpha|beta|rc)\./.test(version)) {
-  fail(`${version} does not look like a pre-release; check the intended version and tag first`);
+// 2. A pre-release (`…-alpha|beta|rc.N`), or a deliberate 1.x+ stable release. A bare `0.x`
+//    is almost certainly a dropped pre-release suffix rather than an intentional stable line.
+const isPreRelease = /-(alpha|beta|rc)\./.test(version);
+const isStable = /^\d+\.\d+\.\d+$/.test(version) && Number(version.split('.')[0]) >= 1;
+if (!isPreRelease && !isStable) {
+  fail(`${version} is neither a pre-release nor a 1.x+ stable release; check the intended version and tag first`);
+}
+if (isStable) {
+  console.log(`\n  ${version} is a STABLE release (no pre-release suffix). Publishing to "${tag}".\n`);
 }
 
 // 3. The tree must be the tree that was tested.

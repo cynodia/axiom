@@ -29,10 +29,17 @@ function fail(message) {
 if (!requested) {
   fail('no version given.\n  node scripts/version-set.mjs <version> [--dry-run]');
 }
-// The same shape publish.mjs requires: this project has no stable line yet, and a bump that
-// drops the pre-release suffix by accident is one the publish script would refuse anyway.
-if (!/^\d+\.\d+\.\d+-(alpha|beta|rc)\.\d+$/.test(requested)) {
-  fail(`"${requested}" is not a pre-release version such as 0.16.0-alpha.4`);
+// A pre-release (`X.Y.Z-alpha|beta|rc.N`), or a deliberate 1.x+ stable release (`X.Y.Z`
+// with major >= 1). A bare `0.x` with no suffix is refused as an almost-certain dropped
+// pre-release tag rather than an intentional stable line — the same shape `publish.mjs`
+// enforces.
+const isPreRelease = /^\d+\.\d+\.\d+-(alpha|beta|rc)\.\d+$/.test(requested);
+const isStable11 = /^\d+\.\d+\.\d+$/.test(requested) && Number(requested.split('.')[0]) >= 1;
+if (!isPreRelease && !isStable11) {
+  fail(
+    `"${requested}" is neither a pre-release (e.g. 1.0.0-rc.2) nor a 1.x+ stable release ` +
+      `(e.g. 1.0.0). A 0.x version without a suffix is refused as a likely dropped pre-release tag.`,
+  );
 }
 if (requested === currentVersion) {
   console.log(`Already at ${currentVersion}; rewriting anyway to repair any drifted copy.`);
