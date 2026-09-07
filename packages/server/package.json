@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom-server",
-  "version": "0.17.0-alpha.1",
+  "version": "1.0.0-rc.1",
   "description": "Authoritative server runtime that executes an Axiom Server IR.",
   "license": "MIT",
   "author": "AskTech AS",
@@ -37,11 +37,14 @@
     "./schema/*": "./schema/*"
   },
   "dependencies": {
-    "@cynodia/axiom-core": "0.17.0-alpha.1",
-    "@cynodia/axiom-runtime": "0.17.0-alpha.1"
+    "@cynodia/axiom-core": "1.0.0-rc.1",
+    "@cynodia/axiom-runtime": "1.0.0-rc.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",
     "test": "AXIOM_WF_TRIALS=${AXIOM_WF_TRIALS:-3} AXIOM_WF_MIXED_TRIALS=${AXIOM_WF_MIXED_TRIALS:-2} AXIOM_AUTHZ_TRIALS=${AXIOM_AUTHZ_TRIALS:-3} node --test --test-concurrency=1 dist-test/**/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }

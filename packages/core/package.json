@@ -1,6 +1,6 @@
 {
   "name": "@cynodia/axiom-core",
-  "version": "0.17.0-alpha.1",
+  "version": "1.0.0-rc.1",
   "description": "Application Graph, semantic types, locations and validation for Axiom.",
   "license": "MIT",
   "author": "AskTech AS",
@@ -33,5 +33,8 @@
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.test.json",
     "test": "node --test dist-test/**/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }

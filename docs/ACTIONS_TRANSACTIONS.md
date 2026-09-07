@@ -1,6 +1,6 @@
 # Actions and transactions
 
-Axiom 0.17.0-alpha.1. An action is behavior expressed as data, executed as a transaction.
+Axiom 1.0.0-rc.1. An action is behavior expressed as data, executed as a transaction.
 
 ```ts
 {

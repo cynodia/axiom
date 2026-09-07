@@ -12,7 +12,7 @@
     "contract": "axiom.server.v1",
     "id": "normalization-conformance",
     "name": "Normalization Conformance",
-    "version": "0.17.0-alpha.1",
+    "version": "1.0.0-rc.1",
     "entities": [],
     "fields": {},
     "states": [

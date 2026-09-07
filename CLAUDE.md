@@ -731,6 +731,34 @@ turn it into a working browser application whose generated JavaScript nobody rea
     itself waits only on the independent Python runtime re-running the three new fixtures and
     reporting `MATCH` (§58). Report: `AXIOM_0_17_PRE_FREEZE_CORRECTION_REPORT.md`,
     `reports/phase-pre-freeze-correction-summary.json`, `reports/results/pre-freeze-*.md`.
+  * `specs/spec17.md` also carries the **1.0 Contract Freeze Hardening & Production
+    Release** campaign. This checkout produces **`1.0.0-rc.1`** — a release candidate on the
+    intended final package/export structure, **not** `1.0.0`. **No semantic expansion; no
+    `packages/*/src` change** — `semanticContractChanged == false`, Server IR `axiom.server.v9`,
+    authz `axiom.authz.v3`, `SEMANTIC_FINGERPRINT_VERSION` all unchanged; every change
+    classified PACKAGING or DOCUMENTATION (spec §6). Done this pass: `npm run version:set
+    1.0.0-rc.1` (148 files); `"engines": { "node": ">=22.0.0" }` added to all 8
+    published/facade manifests (was undeclared — finding PKG-1, fixed); **`docs/COMPATIBILITY.md`**
+    (NORMATIVE) — the canonical 1.0 entry: *Axiom 1.0 portable semantics ARE the frozen 0.17
+    contract*, a NORMATIVE/INFORMATIVE/OPERATIONAL/EXAMPLE artifact-authority table, the
+    portable-profile boundaries (`NativeOperation`, structured→text), `axiom.conformance.1.0`
+    as a permanent pointer to the shipped corpus (internal `v1..v11` **not** renamed, spec
+    §21), the patch/minor/major SemVer policy, semantic-bug handling stated
+    non-simplistically (contract frozen, implementation corrected toward it — spec §63),
+    diagnostic stability classes, and the 0.17→1.0 "publication not migration" statement;
+    linked from both README doc-maps. Public surface inventoried —
+    `reports/1.0-public-surface.json` (per package: version / engines / deps / export
+    subpaths / `files` / every exported symbol; ~1330 total) + `reports/1.0-public-surface-inventory.md`.
+    Alpha-era ambiguity sweep of `docs/` + READMEs + facade entry points — **clean** (no
+    load-bearing rule left provisional). Fast-tier suite green (1707 tests, 8 workspaces);
+    `conformance:run` 46/46. **`releaseReady: false`** — the RC is cut, but the dedicated
+    security / fuzz-soak / provider failure-injection / performance-baseline campaigns, the
+    soak-tier durability + distributed runs, RC-validation from packed artifacts, and the
+    cross-runtime + 4-way distributed regression `MATCH` with the independent Python runtime
+    (spec §78-§85, §92) all remain and gate `1.0.0`. Per-symbol API classification +
+    accidental-export removal also outstanding (spec §8-§9). Reports:
+    `AXIOM_1_0_RELEASE_HARDENING_REPORT.md`, `reports/axiom-1.0-release-summary.json`,
+    `reports/1.0-*.md`.
 
 Together, spec2–spec17 are the authority on design decisions — **except where the
 implementation already differs**. For portable semantic meaning the public contract is

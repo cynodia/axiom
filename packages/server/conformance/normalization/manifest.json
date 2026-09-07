@@ -2,7 +2,7 @@
   "conformance": "axiom.conformance.v11",
   "baseContract": "axiom.server.v1",
   "protocol": "axiom.protocol.v1",
-  "release": "0.17.0-alpha.1",
+  "release": "1.0.0-rc.1",
   "description": "Portable Server IR admission / normalization conformance fixtures (axiom.conformance.v11, spec17 §15-§19, §62, §80). Each file carries a serialized Server IR and the required admission outcome: admissible, or rejected before any semantic execution with a stable SERVER_IR_* code and zero mutation. A conforming runtime performs its own structural admission and compares. Running one needs nothing from this implementation; the reference runner is runNormalizationConformanceFixture in @cynodia/axiom-server.",
   "fixtures": [
     {

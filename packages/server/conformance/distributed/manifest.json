@@ -1,7 +1,7 @@
 {
   "conformance": "axiom.conformance.v6",
   "baseContract": "axiom.server.v7",
-  "release": "0.17.0-alpha.1",
+  "release": "1.0.0-rc.1",
   "description": "Portable distributed-authority conformance fixtures (spec12 §59, §85). Each is a deterministic step list against the memory reference providers with a fixed clock and token sequence. Server IR is retained at axiom.server.v7 — 0.12 adds no IR vocabulary (spec12 §58).",
   "covers": [
     "lease acquisition",

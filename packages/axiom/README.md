@@ -33,7 +33,7 @@ Shorter forms of the same routing: [`AGENTS.md`](AGENTS.md) and [`llms.txt`](llm
 at this package's root.
 
 **Status: experimental / alpha.** The API may change between alpha releases. The
-documentation in `docs/` describes this exact version, `0.17.0-alpha.1`.
+documentation in `docs/` describes this exact version, `1.0.0-rc.1`.
 
 ## Installation
 
@@ -47,7 +47,7 @@ Every release of this project is a pre-release and npm's `latest` tag points at 
 plain command above installs the current version. **There is no `alpha` dist-tag** — the tag
 was removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` now
 fails with a 404. Pin the exact version instead when one is needed:
-`npm install @cynodia/axiom@0.17.0-alpha.1`.
+`npm install @cynodia/axiom@1.0.0-rc.1`.
 
 These are ES modules compiled to ES2022; import them with `import`, not `require`.
 `@cynodia/axiom-cli` (`npm install -g @cynodia/axiom-cli`) publishes the `axiom` executable
@@ -173,6 +173,7 @@ focused document when the reference is not specific enough for the question at h
 | --- | --- |
 | **Compressed contract for authoring or modifying an app — start here** | [`docs/AGENT_REFERENCE.md`](docs/AGENT_REFERENCE.md) |
 | Exact runtime guarantees, stated formally | [`docs/SEMANTIC_CONTRACT.md`](docs/SEMANTIC_CONTRACT.md) |
+| What 1.0 guarantees, the SemVer policy, upgrading from 0.17 | [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) |
 | Mistakes that compile but are wrong | [`docs/ANTI_PATTERNS.md`](docs/ANTI_PATTERNS.md) |
 | Graph, node kinds, ids, types, entity value representation | [`docs/GRAPH_MODEL.md`](docs/GRAPH_MODEL.md) |
 | Every expression kind, builtin, scope, presence and null rule | [`docs/EXPRESSIONS.md`](docs/EXPRESSIONS.md) |

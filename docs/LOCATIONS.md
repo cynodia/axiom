@@ -1,6 +1,6 @@
 # Locations
 
-Axiom 0.17.0-alpha.1.
+Axiom 1.0.0-rc.1.
 
 ```text
 Expression = a value

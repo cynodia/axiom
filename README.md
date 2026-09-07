@@ -12,7 +12,7 @@ mutations and persists them. Neither is written by hand: there is no route, cont
 handler, SQL statement or line of client JavaScript in an Axiom application.
 
 **Status: experimental / alpha.** The API may change between alpha releases. This
-documentation describes 0.17.0-alpha.1.
+documentation describes 1.0.0-rc.1.
 
 ## AI agents: read this first
 
@@ -179,7 +179,7 @@ Every release of this project is a pre-release and npm's `latest` tag points at 
 plain commands above install the current version. **There is no `alpha` dist-tag** — it was
 removed once it stopped tracking releases, and `npm install @cynodia/axiom@alpha` fails with a
 404. Pin the exact version instead when one is needed:
-`npm install @cynodia/axiom@0.17.0-alpha.1`.
+`npm install @cynodia/axiom@1.0.0-rc.1`.
 
 The server package is separate rather than re-exported, because it imports `node:http` and
 `node:sqlite` and a browser bundle must not.
@@ -508,6 +508,7 @@ the published package — no repository access is needed to obtain the contract.
 | --- | --- |
 | Compressed reference for authoring or modifying an app | [`docs/AGENT_REFERENCE.md`](docs/AGENT_REFERENCE.md) |
 | Exact runtime guarantees, stated formally | [`docs/SEMANTIC_CONTRACT.md`](docs/SEMANTIC_CONTRACT.md) |
+| **What 1.0 guarantees, the SemVer policy, upgrading from 0.17** | [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) |
 | Graph, ids, types, entity value representation | [`docs/GRAPH_MODEL.md`](docs/GRAPH_MODEL.md) |
 | Every expression kind, builtin and scope rule | [`docs/EXPRESSIONS.md`](docs/EXPRESSIONS.md) |
 | Addressing writable positions | [`docs/LOCATIONS.md`](docs/LOCATIONS.md) |
